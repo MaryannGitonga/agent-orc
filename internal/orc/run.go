@@ -22,6 +22,9 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
+// fetchTimeout bounds resolving a task's source at launch.
+const fetchTimeout = 60 * time.Second
+
 // Dispatcher launches tasks; build one with [NewDispatcher].
 type Dispatcher struct {
 	layout paths.Layout
@@ -185,6 +188,11 @@ func (d *Dispatcher) resolvePrompt(ctx context.Context, t task.Task) (task.Task,
 	if resolver == nil {
 		resolver = source.NewResolver()
 	}
+	// The JIRA client has its own deadline, but `gh issue view` would otherwise
+	// hang the launch indefinitely. Bound the fetch, not the whole run: git
+	// work on a large repository is legitimately slow.
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
 	fetched, err := resolver.Resolve(ctx, ref)
 	if err != nil {
 		return t, fmt.Errorf("task %q: %w", t.ID, err)

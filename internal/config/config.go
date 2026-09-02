@@ -129,12 +129,17 @@ func (f *File) validate() error {
 
 		// Two tasks on one branch would fight over the same worktree; the
 		// isolation the whole design rests on only holds if branches differ.
-		if t.Branch != "" {
-			if prev, dup := seenBranch[t.Branch]; dup {
-				errs = append(errs, fmt.Errorf("%s: branch %q is already used by tasks[%d]", where, t.Branch, prev))
-			}
-			seenBranch[t.Branch] = i
+		// Compare the branch each task will actually get rather than only the
+		// explicit ones, so ids that differ just in case are caught here and
+		// not by git after the first task has already launched.
+		branch := t.Branch
+		if branch == "" {
+			branch = task.DefaultBranch(t.ID)
 		}
+		if prev, dup := seenBranch[branch]; dup {
+			errs = append(errs, fmt.Errorf("%s: branch %q is already used by tasks[%d]", where, branch, prev))
+		}
+		seenBranch[branch] = i
 		if t.CLI != "" && !t.CLI.Known() {
 			errs = append(errs, fmt.Errorf("%s: unsupported cli %q, want one of %v", where, t.CLI, task.KnownCLIs))
 		}

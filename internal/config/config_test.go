@@ -118,3 +118,23 @@ func TestLoadReportsAMissingFile(t *testing.T) {
 		t.Error("Load() on a missing file = nil, want an error")
 	}
 }
+
+// TestParseRejectsACaseFoldedDefaultBranchCollision catches ids that differ
+// only in case before anything launches: both lowercase to one default branch.
+func TestParseRejectsACaseFoldedDefaultBranchCollision(t *testing.T) {
+	_, err := Parse([]byte("defaults:\n  cli: claude\ntasks:\n  - id: Foo\n    prompt: x\n  - id: foo\n    prompt: y\n"))
+	if err == nil {
+		t.Fatal("Parse() = nil, want a branch collision error")
+	}
+	if !strings.Contains(err.Error(), "already used") {
+		t.Errorf("Parse() = %q, want it to report the branch collision", err)
+	}
+}
+
+// TestParseAllowsDistinctDefaultBranches keeps the stricter check from firing
+// on ordinary batches where every id maps to its own branch.
+func TestParseAllowsDistinctDefaultBranches(t *testing.T) {
+	if _, err := Parse([]byte("defaults:\n  cli: claude\ntasks:\n  - id: A\n    prompt: x\n  - id: B\n    prompt: y\n")); err != nil {
+		t.Errorf("Parse() = %v, want nil", err)
+	}
+}

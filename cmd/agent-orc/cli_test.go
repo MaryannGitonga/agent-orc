@@ -95,3 +95,26 @@ func TestCLINamesCoversEveryKnownCLI(t *testing.T) {
 		}
 	}
 }
+
+// TestRunRejectsFlagsAlongsideABatchFile keeps batch settings coming from the
+// file: a flag passed with it would otherwise be dropped without a word.
+func TestRunRejectsFlagsAlongsideABatchFile(t *testing.T) {
+	for _, flags := range [][]string{
+		{"--cli", "claude"},
+		{"--model", "opus-4-6"},
+		{"--branch", "b"},
+		{"--base-branch", "main"},
+		{"--id", "X"},
+	} {
+		var out bytes.Buffer
+		argv := append(append([]string{"run"}, flags...), "tasks.yaml")
+		err := dispatch(argv, &out)
+		if err == nil {
+			t.Errorf("dispatch(%v) = nil, want a refusal", argv)
+			continue
+		}
+		if !strings.Contains(err.Error(), flags[0]) {
+			t.Errorf("dispatch(%v) = %q, want it to name %s", argv, err, flags[0])
+		}
+	}
+}

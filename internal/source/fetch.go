@@ -209,7 +209,11 @@ func collectText(node any, b *strings.Builder) {
 		if kids, ok := n["content"].([]any); ok {
 			collectText(kids, b)
 		}
-		if n["type"] == "paragraph" {
+		// A listItem is not listed: its inner paragraph already breaks. These
+		// hold their text directly, so without a break they run into whatever
+		// follows them.
+		switch n["type"] {
+		case "paragraph", "heading", "codeBlock", "blockquote":
 			b.WriteString("\n\n")
 		}
 	case []any:

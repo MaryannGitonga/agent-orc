@@ -87,8 +87,13 @@ func runCmd(argv []string, out io.Writer) error {
 	}
 
 	if path := fs.Arg(0); path != "" {
-		if *id != "" || *prompt != "" || *src != "" {
-			return errors.New("pass either a batch file or the single-task flags, not both")
+		// A batch file carries every setting itself, so any flag given
+		// alongside it would be silently dropped. Visit reports only the flags
+		// actually passed, so a default like --repo does not trip this.
+		var given []string
+		fs.Visit(func(f *flag.Flag) { given = append(given, "--"+f.Name) })
+		if len(given) > 0 {
+			return fmt.Errorf("a batch file takes its settings from the file; drop %s", strings.Join(given, ", "))
 		}
 		return runBatch(ctx, d, path)
 	}

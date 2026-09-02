@@ -171,3 +171,25 @@ func TestJIRAFetcherHonoursTheAPIVersionOverride(t *testing.T) {
 		t.Fatalf("Fetch() = %v", err)
 	}
 }
+
+// TestJIRAFetcherSeparatesHeadingsFromBodyText covers blocks that hold their
+// text directly: without a break a heading runs into the next paragraph.
+func TestJIRAFetcherSeparatesHeadingsFromBodyText(t *testing.T) {
+	adf := `{"fields":{"summary":"T","description":{"type":"doc","content":[
+		{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Steps"}]},
+		{"type":"paragraph","content":[{"type":"text","text":"do the thing"}]}]}}}`
+	srv := jiraServer(t, adf)
+	defer srv.Close()
+
+	f := &JIRAFetcher{BaseURL: srv.URL, Token: "tok"}
+	got, err := f.Fetch(context.Background(), Ref{Kind: KindJIRA, Key: "PROJ-1"})
+	if err != nil {
+		t.Fatalf("Fetch() = %v", err)
+	}
+	if strings.Contains(got.Body, "Stepsdo the thing") {
+		t.Errorf("heading ran into the body text: %q", got.Body)
+	}
+	if !strings.Contains(got.Body, "Steps") || !strings.Contains(got.Body, "do the thing") {
+		t.Errorf("Body = %q, want both the heading and the paragraph", got.Body)
+	}
+}
