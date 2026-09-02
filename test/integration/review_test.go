@@ -255,3 +255,34 @@ func TestReviewRefusesAWorkerThatCannotBeResumed(t *testing.T) {
 		t.Errorf("error = %q, want it to explain codex cannot be resumed", out)
 	}
 }
+
+// TestReviewRecoversFromAKilledPreviousRound covers the state a review left
+// behind when it was killed: the checkout is gone but git still has a record of
+// it. Clearing only the directory makes every later review fail with "missing
+// but already registered", so the run must prune that record first.
+func TestReviewRecoversFromAKilledPreviousRound(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "worker"), workerCommit)
+	stubInto(t, stub, "copilot", filepath.Join(t.TempDir(), "reviewer"), `printf 'LGTM\n'`)
+
+	runWorker(t, home, stub, repo, "KILLED-1")
+
+	// Exactly what a killed review leaves: registered with git, gone from disk.
+	stale := filepath.Join(home, "reviews", "KILLED-1")
+	git(t, repo, "worktree", "add", "--detach", stale, "agent-orc/killed-1")
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+	if out := git(t, repo, "worktree", "list"); !strings.Contains(out, "KILLED-1") {
+		t.Fatalf("the stale record was not created, so this is not the case under test:\n%s", out)
+	}
+
+	out, err := orcRun(t, home, stub, "review", "KILLED-1")
+	if err != nil {
+		t.Fatalf("review after a killed round = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "approved") {
+		t.Errorf("review output = %q, want the approval reported", out)
+	}
+}

@@ -123,6 +123,13 @@ func (r *Reviewer) runReviewer(record state.Task) (string, error) {
 	if err := os.RemoveAll(dir); err != nil {
 		return "", fmt.Errorf("clearing the previous review worktree: %w", err)
 	}
+	// Removing the directory does not remove git's record of it. A review that
+	// was killed before its cleanup ran leaves that record behind, and every
+	// later review then fails with "missing but already registered". Pruning
+	// clears exactly those orphaned records and leaves live worktrees alone.
+	if out, err := runGit(repo.Dir, "worktree", "prune"); err != nil {
+		return "", fmt.Errorf("pruning stale worktree records: %w: %s", err, out)
+	}
 	if err := os.MkdirAll(r.layout.Reviews, 0o755); err != nil {
 		return "", fmt.Errorf("creating %s: %w", r.layout.Reviews, err)
 	}
