@@ -94,7 +94,7 @@ func (b *buildFailure) Unwrap() error { return b.err }
 func stubInto(t *testing.T, dir, name, receipt, body string) {
 	t.Helper()
 	script := "#!/usr/bin/env bash\nset -euo pipefail\n" +
-		"{ printf 'cwd=%s\\n' \"$PWD\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; } >> " + receipt + "\n" +
+		"{ printf 'cwd=%s\\n' \"$PWD\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; } >> '" + receipt + "'\n" +
 		body + "\n"
 	write(t, filepath.Join(dir, name), script)
 	if err := os.Chmod(filepath.Join(dir, name), 0o755); err != nil {

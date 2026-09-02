@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -171,7 +172,9 @@ func (d *Dispatcher) startSupervisor(id string) error {
 // This happens before anything is created on disk: a failed fetch must be a
 // clean launch-time error, not a half-set-up task with an orphaned worktree.
 func (d *Dispatcher) resolvePrompt(ctx context.Context, t task.Task) (task.Task, error) {
-	if t.Source == "" {
+	// Trimmed, to agree with ValidateSpec: it already counts a blank source as
+	// absent, so treating one as fetchable here fails a task it just accepted.
+	if strings.TrimSpace(t.Source) == "" {
 		return t, nil
 	}
 	ref, err := source.Parse(t.Source)

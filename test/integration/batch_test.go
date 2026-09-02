@@ -174,3 +174,47 @@ func TestRunFailsFastOnABadSourceFetch(t *testing.T) {
 		t.Error("state was written for a task that never launched")
 	}
 }
+
+// TestRunTreatsABlankSourceAsAbsent covers the agreement between ValidateSpec
+// and the launch-time fetch: a task ValidateSpec accepts on its prompt alone
+// must not then fail because its source is whitespace.
+func TestRunTreatsABlankSourceAsAbsent(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	receipt := filepath.Join(t.TempDir(), "receipt")
+	stub := stubAgent(t, "claude", receipt, "true")
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "WS-1", "--repo", repo, "--cli", "claude",
+		"--prompt", "do the thing", "--source", "   ")
+	if err != nil {
+		t.Fatalf("run with a blank source = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "WS-1", "done", "failed")
+	if r := readFile(t, receipt); !strings.Contains(r, "do the thing") {
+		t.Errorf("the agent did not get the prompt:\n%s", r)
+	}
+}
+
+// TestStubReceiptPathWithSpaces guards the stub helper itself: an argv receipt
+// written to a path containing a space must still be captured, so a TMPDIR with
+// spaces cannot silently break every assertion built on receipts.
+func TestStubReceiptPathWithSpaces(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "a dir with spaces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	receipt := filepath.Join(dir, "re ceipt")
+	stub := stubAgent(t, "claude", receipt, "true")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "SP-1", "--repo", repo, "--cli", "claude", "--prompt", "spaced"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "SP-1", "done", "failed")
+	if r := readFile(t, receipt); !strings.Contains(r, "arg=") {
+		t.Errorf("nothing was written to a receipt path containing spaces:\n%q", r)
+	}
+}
