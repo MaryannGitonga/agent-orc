@@ -23,6 +23,16 @@ type record struct {
 	Error    string `json:"error"`
 }
 
+// orcRunWithPath runs agent-orc with PATH set to exactly pathDir.
+func orcRunWithPath(t *testing.T, home, pathDir string, args ...string) (string, error) {
+	t.Helper()
+	cmd := exec.Command(buildBinary(t), args...)
+	cmd.Env = append(os.Environ(), gitEnv...)
+	cmd.Env = append(cmd.Env, "AGENT_ORC_HOME="+home, "PATH="+pathDir)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 // orcRun runs the agent-orc binary with a stub CLI on PATH and an isolated
 // AGENT_ORC_HOME, and returns its combined output.
 func orcRun(t *testing.T, home, stubDir string, args ...string) (string, error) {
@@ -72,7 +82,7 @@ func TestRunDispatchesATaskEndToEnd(t *testing.T) {
 			"git add . && git commit --no-gpg-sign -m 'fix: stub work' >/dev/null")
 
 	out, err := orcRun(t, home, stub, "run",
-		"--id", "PROJ-1", "--repo", repo,
+		"--id", "PROJ-1", "--repo", repo, "--cli", "claude",
 		"--prompt", "fix the retry handler", "--model", "opus-4-6")
 	if err != nil {
 		t.Fatalf("agent-orc run = %v\n%s", err, out)
@@ -134,7 +144,7 @@ func TestRunRecordsAFailingAgent(t *testing.T) {
 	stub := stubAgent(t, "claude", receipt, "echo 'boom' >&2\nexit 3")
 
 	if out, err := orcRun(t, home, stub, "run",
-		"--id", "PROJ-2", "--repo", repo, "--prompt", "break things"); err != nil {
+		"--id", "PROJ-2", "--repo", repo, "--cli", "claude", "--prompt", "break things"); err != nil {
 		t.Fatalf("agent-orc run = %v\n%s", err, out)
 	}
 
@@ -158,13 +168,13 @@ func TestRunRejectsADuplicateTaskID(t *testing.T) {
 	stub := stubAgent(t, "claude", receipt, "true")
 
 	if out, err := orcRun(t, home, stub, "run",
-		"--id", "PROJ-3", "--repo", repo, "--prompt", "first"); err != nil {
+		"--id", "PROJ-3", "--repo", repo, "--cli", "claude", "--prompt", "first"); err != nil {
 		t.Fatalf("first run = %v\n%s", err, out)
 	}
 	waitForStatus(t, home, "PROJ-3", "done", "failed")
 
 	out, err := orcRun(t, home, stub, "run",
-		"--id", "PROJ-3", "--repo", repo, "--prompt", "second")
+		"--id", "PROJ-3", "--repo", repo, "--cli", "claude", "--prompt", "second")
 	if err == nil {
 		t.Fatalf("second run with the same id succeeded, want an error\n%s", out)
 	}
@@ -181,7 +191,7 @@ func TestRunRejectsAnUnknownBaseBranch(t *testing.T) {
 	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
 
 	out, err := orcRun(t, home, stub, "run",
-		"--id", "PROJ-4", "--repo", repo, "--prompt", "x", "--base-branch", "release/9.9")
+		"--id", "PROJ-4", "--repo", repo, "--cli", "claude", "--prompt", "x", "--base-branch", "release/9.9")
 	if err == nil {
 		t.Fatalf("run with a missing base branch succeeded, want an error\n%s", out)
 	}
@@ -190,5 +200,46 @@ func TestRunRejectsAnUnknownBaseBranch(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(home, "worktrees", "PROJ-4")); !os.IsNotExist(statErr) {
 		t.Error("a worktree was created for a task that never launched")
+	}
+}
+
+// TestRunRejectsAMissingCLIBinary fails at launch when the agent's own CLI is
+// not installed, rather than leaving a worktree and branch behind for a task
+// that could never have run.
+func TestRunRejectsAMissingCLIBinary(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+
+	out, err := orcRunWithPath(t, home, systemPath(t, "git"), "run",
+		"--id", "PROJ-5", "--repo", repo, "--prompt", "x", "--cli", "claude")
+	if err == nil {
+		t.Fatalf("run without the CLI installed succeeded, want an error\n%s", out)
+	}
+	if !strings.Contains(out, "claude") {
+		t.Errorf("error = %q, want it to name the missing CLI", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "worktrees", "PROJ-5")); !os.IsNotExist(statErr) {
+		t.Error("a worktree was created for a task that never launched")
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "state", "PROJ-5.json")); !os.IsNotExist(statErr) {
+		t.Error("a state file was written for a task that never launched")
+	}
+	if branches := strings.TrimSpace(git(t, repo, "branch", "--list", "agent-orc/proj-5")); branches != "" {
+		t.Errorf("branch %q was created for a task that never launched", branches)
+	}
+}
+
+// TestRunRequiresTheCLIFlag refuses to guess which agentic CLI is installed.
+func TestRunRequiresTheCLIFlag(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	out, err := orcRun(t, home, stub, "run", "--id", "PROJ-6", "--repo", repo, "--prompt", "x")
+	if err == nil {
+		t.Fatalf("run without --cli succeeded, want an error\n%s", out)
+	}
+	if !strings.Contains(out, "--cli") {
+		t.Errorf("error = %q, want it to name the missing flag", out)
 	}
 }

@@ -48,6 +48,17 @@ func (d *Dispatcher) Run(t task.Task) error {
 		return fmt.Errorf("task %q already exists; pick another --id or run 'agent-orc cleanup %s'", t.ID, t.ID)
 	}
 
+	// Check the agent's binary before touching the repository. The supervisor
+	// would otherwise fail on exec, after a worktree, a branch and a state file
+	// already exist for a task that never had a chance to run.
+	argv, err := buildCommand(t)
+	if err != nil {
+		return err
+	}
+	if _, err := exec.LookPath(argv[0]); err != nil {
+		return fmt.Errorf("task %q needs %s, but %q is not on PATH: %w", t.ID, t.CLI, argv[0], err)
+	}
+
 	repo, err := gitx.Open(t.Repo)
 	if err != nil {
 		return err

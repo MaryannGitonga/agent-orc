@@ -25,7 +25,7 @@ Early. Built in phases:
 ## Usage
 
 ```sh
-agent-orc run --id PROJ-1234 --repo . \
+agent-orc run --id PROJ-1234 --repo . --cli claude \
   --prompt "Fix the null-pointer in the FX sync retry handler" \
   --branch fix/proj-1234 --base-branch main --model opus-4-6
 ```
@@ -42,9 +42,11 @@ under `~/.agent-orc` (override with `AGENT_ORC_HOME`):
   worktrees/PROJ-1234/          the isolated checkout
 ```
 
-Only `--id` and `--prompt` are required. `--repo` defaults to the current
-directory, `--base-branch` to the repository's default branch, and `--branch`
-to `agent-orc/<id>`.
+`--id`, `--prompt` and `--cli` are required. There is no default CLI: the
+tool dispatches to whichever agent you actually have installed, and it checks
+that the binary is on PATH before creating a worktree or a branch. `--repo`
+defaults to the current directory, `--base-branch` to the repository's default
+branch, and `--branch` to `agent-orc/<id>`.
 
 ## Development
 

@@ -104,6 +104,23 @@ func stubAgent(t *testing.T, name, receipt, body string) string {
 	return dir
 }
 
+// systemPath returns a directory holding symlinks to the named binaries and
+// nothing else, so a test can control exactly what is on PATH.
+func systemPath(t *testing.T, names ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range names {
+		src, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s is not installed", name)
+		}
+		if err := os.Symlink(src, filepath.Join(dir, name)); err != nil {
+			t.Fatalf("linking %s: %v", name, err)
+		}
+	}
+	return dir
+}
+
 // readFile returns a file's contents, or "" if it does not exist yet.
 func readFile(t *testing.T, path string) string {
 	t.Helper()

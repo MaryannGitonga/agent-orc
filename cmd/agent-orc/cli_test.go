@@ -50,6 +50,10 @@ func TestBuildTaskRequiresIDAndPrompt(t *testing.T) {
 		!strings.Contains(err.Error(), "--prompt") {
 		t.Errorf("buildTask() without a prompt = %v, want an error naming --prompt", err)
 	}
+	if _, err := buildTask("X", "p", ".", "", "", "", ""); err == nil ||
+		!strings.Contains(err.Error(), "--cli") {
+		t.Errorf("buildTask() without a cli = %v, want an error naming --cli", err)
+	}
 }
 
 func TestBuildTaskRejectsANonRepository(t *testing.T) {

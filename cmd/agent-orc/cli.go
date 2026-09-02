@@ -55,11 +55,11 @@ func runCmd(argv []string, out io.Writer) error {
 		repo    = fs.String("repo", ".", "path to the repository to work in")
 		branch  = fs.String("branch", "", "branch to create (default agent-orc/<id>)")
 		base    = fs.String("base-branch", "", "branch to cut from (default: the repo's default branch)")
-		cliName = fs.String("cli", string(task.CLIClaude), "agentic CLI to dispatch to")
+		cliName = fs.String("cli", "", "agentic CLI to dispatch to (required)")
 		model   = fs.String("model", "", "model for that CLI (default: the CLI's own default)")
 	)
 	fs.Usage = func() {
-		fmt.Fprintln(out, "Usage: agent-orc run --id <id> --prompt <text> [flags]")
+		fmt.Fprintln(out, "Usage: agent-orc run --id <id> --prompt <text> --cli <name> [flags]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(argv); err != nil {
@@ -89,6 +89,12 @@ func buildTask(id, prompt, repo, branch, base, cliName, model string) (task.Task
 	}
 	if strings.TrimSpace(prompt) == "" {
 		return task.Task{}, errors.New("--prompt is required")
+	}
+	// No default CLI: agent-orc dispatches to whichever tool the user actually
+	// has, and guessing one produces a task that fails after its worktree and
+	// branch already exist.
+	if strings.TrimSpace(cliName) == "" {
+		return task.Task{}, errors.New("--cli is required")
 	}
 
 	absRepo, err := filepath.Abs(repo)
