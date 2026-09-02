@@ -22,6 +22,8 @@ const usage = `agent-orc: dispatch agentic CLI runs across isolated git worktree
 Usage:
   agent-orc run [flags]         dispatch a single task
   agent-orc run <tasks.yaml>    dispatch every task in a batch file
+  agent-orc status              show every task as a table
+  agent-orc stop <task-id>      kill a running task
   agent-orc version             print the version
 
 Run 'agent-orc run -h' for the run flags.`
@@ -35,6 +37,10 @@ func dispatch(argv []string, out io.Writer) error {
 	switch argv[0] {
 	case "run":
 		return runCmd(argv[1:], out)
+	case "status":
+		return statusCmd(argv[1:], out)
+	case "stop":
+		return stopCmd(argv[1:], out)
 	case "supervise":
 		return superviseCmd(argv[1:], out)
 	case "version", "--version", "-v":
@@ -61,6 +67,9 @@ func runCmd(argv []string, out io.Writer) error {
 		base    = fs.String("base-branch", "", "branch to cut from (default: the repo's default branch)")
 		cliName = fs.String("cli", "", "agentic CLI to dispatch to: "+strings.Join(cliNames(), ", ")+" (required)")
 		model   = fs.String("model", "", "model for that CLI (default: the CLI's own default)")
+		subs    = fs.Bool("subagents", false, "seed the CLI's subagent definitions into the worktree")
+		usd     = fs.Float64("budget-usd", 0, "cap spend in dollars, where the CLI supports it")
+		credits = fs.Float64("budget-credits", 0, "cap spend in the CLI's own credit unit, where it supports it")
 	)
 	fs.Usage = func() {
 		fmt.Fprintln(out, "Usage: agent-orc run --id <id> --cli <name> [--prompt <text>] [--source <ref>] [flags]")
@@ -98,7 +107,11 @@ func runCmd(argv []string, out io.Writer) error {
 		return runBatch(ctx, d, path)
 	}
 
-	t, err := buildTask(*id, *src, *prompt, *repo, *branch, *base, *cliName, *model)
+	t, err := buildTask(flags{
+		id: *id, source: *src, prompt: *prompt, repo: *repo,
+		branch: *branch, base: *base, cli: *cliName, model: *model,
+		subagents: *subs, budgetUSD: *usd, budgetCredits: *credits,
+	})
 	if err != nil {
 		return err
 	}
@@ -114,28 +127,72 @@ func runBatch(ctx context.Context, d *orc.Dispatcher, path string) error {
 	return d.RunBatch(ctx, f, resolveGitDefaults)
 }
 
+// flags carries the single-task run flags as parsed.
+type flags struct {
+	id, source, prompt, repo, branch, base, cli, model string
+	subagents                                          bool
+	budgetUSD, budgetCredits                           float64
+}
+
 // buildTask applies the defaults for a single command-line task.
-func buildTask(id, src, prompt, repo, branch, base, cliName, model string) (task.Task, error) {
-	if strings.TrimSpace(id) == "" {
+func buildTask(f flags) (task.Task, error) {
+	if strings.TrimSpace(f.id) == "" {
 		return task.Task{}, errors.New("--id is required")
 	}
-	if strings.TrimSpace(prompt) == "" && strings.TrimSpace(src) == "" {
+	if strings.TrimSpace(f.prompt) == "" && strings.TrimSpace(f.source) == "" {
 		return task.Task{}, errors.New("one of --prompt or --source is required")
 	}
 
-	if strings.TrimSpace(cliName) == "" {
+	if strings.TrimSpace(f.cli) == "" {
 		return task.Task{}, errors.New("--cli is required")
 	}
+
+	// A zero budget means "not set" rather than "cap at nothing", so the flag
+	// only becomes a budget once it is given a value.
+	var budget task.Budget
+	if f.budgetUSD != 0 {
+		budget.USD = &f.budgetUSD
+	}
+	if f.budgetCredits != 0 {
+		budget.Credits = &f.budgetCredits
+	}
+
 	return resolveGitDefaults(task.Task{
-		ID:         id,
-		Source:     src,
-		Prompt:     prompt,
-		Repo:       repo,
-		Branch:     branch,
-		BaseBranch: base,
-		CLI:        task.CLI(cliName),
-		Model:      model,
+		ID:         f.id,
+		Source:     f.source,
+		Prompt:     f.prompt,
+		Repo:       f.repo,
+		Branch:     f.branch,
+		BaseBranch: f.base,
+		CLI:        task.CLI(f.cli),
+		Model:      f.model,
+		Subagents:  f.subagents,
+		Budget:     budget,
 	})
+}
+
+// statusCmd prints the task table.
+func statusCmd(argv []string, out io.Writer) error {
+	if len(argv) != 0 {
+		return errors.New("usage: agent-orc status")
+	}
+	layout, err := paths.Resolve()
+	if err != nil {
+		return err
+	}
+	return orc.NewReporter(layout.State, out).Status()
+}
+
+// stopCmd kills a running task.
+func stopCmd(argv []string, out io.Writer) error {
+	if len(argv) != 1 {
+		return errors.New("usage: agent-orc stop <task-id>")
+	}
+	layout, err := paths.Resolve()
+	if err != nil {
+		return err
+	}
+	return orc.NewReporter(layout.State, out).Stop(argv[0])
 }
 
 // resolveGitDefaults fills in the fields that need git or the filesystem to

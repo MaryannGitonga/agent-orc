@@ -56,15 +56,15 @@ func TestRunHelpIsNotAnError(t *testing.T) {
 }
 
 func TestBuildTaskRequiresIDAndSomethingToDo(t *testing.T) {
-	if _, err := buildTask("", "", "p", ".", "", "", "claude", ""); err == nil ||
+	if _, err := buildTask(flags{prompt: "p", repo: "."}); err == nil ||
 		!strings.Contains(err.Error(), "--id") {
 		t.Errorf("buildTask() without an id = %v, want an error naming --id", err)
 	}
-	if _, err := buildTask("X", "", "  ", ".", "", "", "claude", ""); err == nil ||
+	if _, err := buildTask(flags{id: "X", prompt: "  ", repo: "."}); err == nil ||
 		!strings.Contains(err.Error(), "--source") {
 		t.Errorf("buildTask() with neither prompt nor source = %v, want an error naming both", err)
 	}
-	if _, err := buildTask("X", "", "p", ".", "", "", "", ""); err == nil ||
+	if _, err := buildTask(flags{id: "X", prompt: "p", repo: "."}); err == nil ||
 		!strings.Contains(err.Error(), "--cli") {
 		t.Errorf("buildTask() without a cli = %v, want an error naming --cli", err)
 	}
@@ -73,15 +73,35 @@ func TestBuildTaskRequiresIDAndSomethingToDo(t *testing.T) {
 func TestBuildTaskAcceptsASourceWithNoPrompt(t *testing.T) {
 	// The prompt is filled in from the ticket at launch, so a task with only
 	// a source must get past flag validation.
-	_, err := buildTask("X", "github://o/r#1", "", t.TempDir(), "", "main", "claude", "")
+	_, err := buildTask(flags{id: "X", source: "github://o/r#1", repo: t.TempDir(), base: "main", cli: "claude"})
 	if err == nil || !strings.Contains(err.Error(), "git repository") {
 		t.Errorf("buildTask() = %v, want it to fail only on the missing repository", err)
 	}
 }
 
 func TestBuildTaskRejectsANonRepository(t *testing.T) {
-	if _, err := buildTask("X", "", "p", t.TempDir(), "", "main", "claude", ""); err == nil {
+	if _, err := buildTask(flags{id: "X", prompt: "p", repo: t.TempDir(), base: "main", cli: "claude"}); err == nil {
 		t.Error("buildTask() outside a git repository = nil, want an error")
+	}
+}
+
+func TestBuildTaskTreatsAZeroBudgetAsUnset(t *testing.T) {
+	// A zero on the command line means the flag was not given, not "cap this
+	// run at nothing".
+	got, err := buildTask(flags{id: "X", prompt: "p", repo: ".", base: "main", cli: "claude"})
+	if err != nil {
+		t.Fatalf("buildTask() = %v", err)
+	}
+	if !got.Budget.IsZero() {
+		t.Errorf("Budget = %+v, want no budget set", got.Budget)
+	}
+
+	got, err = buildTask(flags{id: "X", prompt: "p", repo: ".", base: "main", cli: "claude", budgetUSD: 2.5})
+	if err != nil {
+		t.Fatalf("buildTask() = %v", err)
+	}
+	if got.Budget.USD == nil || *got.Budget.USD != 2.5 {
+		t.Errorf("Budget.USD = %v, want 2.5", got.Budget.USD)
 	}
 }
 

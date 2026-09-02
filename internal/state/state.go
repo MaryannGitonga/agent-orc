@@ -20,13 +20,18 @@ import (
 type Status string
 
 // The statuses a task moves through. Pending means the supervisor has not
-// started the agent yet; failed also covers an agent that never launched.
+// started the agent yet, failed also covers an agent that never launched, and
+// stopped means a human killed the run with `agent-orc stop`.
 const (
 	StatusPending Status = "pending"
 	StatusRunning Status = "running"
 	StatusDone    Status = "done"
 	StatusFailed  Status = "failed"
+	StatusStopped Status = "stopped"
 )
+
+// Active reports whether the task still has a process behind it.
+func (s Status) Active() bool { return s == StatusPending || s == StatusRunning }
 
 // Task is the persisted record of one dispatched task.
 type Task struct {
@@ -40,6 +45,16 @@ type Task struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	ExitCode   *int       `json:"exit_code,omitempty"`
 	Error      string     `json:"error,omitempty"`
+
+	// SpentUSD and Tokens are what the run actually cost, read out of the
+	// CLI's own output after it exits. Nil means the CLI reported nothing.
+	SpentUSD *float64 `json:"spent_usd,omitempty"`
+	Tokens   *int     `json:"tokens,omitempty"`
+	// BudgetNote records any part of the budget the CLI could not enforce,
+	// so `status` can say so rather than implying a cap that is not there.
+	BudgetNote string `json:"budget_note,omitempty"`
+	// SeededAgents lists the subagent definitions copied into the worktree.
+	SeededAgents []string `json:"seeded_agents,omitempty"`
 }
 
 // ErrNotFound is returned when no state file exists for a task ID.

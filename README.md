@@ -18,7 +18,7 @@ Early. Built in phases:
 | ----- | ----- | ----- |
 | 0 | `run` for a single task; worktree lifecycle; Claude adapter | done |
 | 1 | Multi-CLI adapters, YAML batch config, JIRA/GitHub source fetching | done |
-| 2 | Subagent seeding, budget caps, `status` | planned |
+| 2 | Subagent seeding, budget caps, `status` | done |
 | 3 | Draft PR chain, commit sanitization, `cleanup`, `logs` | planned |
 | 4 | Agentic review with a capped worker↔reviewer loop | planned |
 
@@ -52,6 +52,39 @@ agent-orc run tasks.yaml
 Tasks in a batch are independent: each gets its own branch, worktree and
 process, so one that cannot launch does not stop the others.
 
+`agent-orc status` prints one row per task, and `agent-orc stop <id>` kills a
+running one (leaving its worktree for you to look at):
+
+```
+ID       CLI      MODEL      STATUS   SPEND          BRANCH          ELAPSED
+PROJ-1   claude   opus-4-6   done     $0.42 / $2.00  fix/proj-1234   1m30s
+PROJ-2   copilot  gpt-5.1    running  —              chore/proj-1240 12s
+```
+
+### Budgets
+
+Each CLI meters in its own unit, and agent-orc does not invent an exchange rate
+between them. Set the budget in the unit your CLI understands and it is applied
+as that CLI's own native cap at launch:
+
+| CLI | Field | Native cap |
+| --- | --- | --- |
+| claude | `budget_usd` | `--max-budget-usd` |
+| copilot | `budget_credits` | `--max-ai-credits` |
+| codex | — | none; the budget is reported, not enforced |
+
+A budget in a unit the CLI cannot enforce is not silently dropped — it is
+warned about at launch and noted under `agent-orc status`. Actual spend is read
+back out of the CLI's own output after the run, where it reports one.
+
+### Subagents
+
+`subagents: true` copies subagent definitions into the worktree before launch,
+into the directory that CLI already reads (`.claude/agents` for Claude Code,
+`.github/agents` for Copilot). Definitions come from `~/.agent-orc/agents/<cli>/`,
+falling back to whatever the repository already ships. They are ignored inside
+the worktree so the agent does not commit them.
+
 `run` returns as soon as the task is dispatched. It creates a worktree, starts
 a detached supervisor that drives the agent inside it, and records everything
 under `~/.agent-orc` (override with `AGENT_ORC_HOME`):
@@ -62,6 +95,7 @@ under `~/.agent-orc` (override with `AGENT_ORC_HOME`):
   logs/PROJ-1234.log            the agent's own output
   logs/PROJ-1234.supervisor.log what agent-orc did around it
   worktrees/PROJ-1234/          the isolated checkout
+  agents/claude/*.md            your subagent definitions, seeded on request
 ```
 
 `--id`, `--cli` and one of `--prompt`/`--source` are required. There is no

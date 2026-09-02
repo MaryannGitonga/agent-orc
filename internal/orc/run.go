@@ -14,9 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MaryannGitonga/agent-orc/internal/adapter"
 	"github.com/MaryannGitonga/agent-orc/internal/config"
 	"github.com/MaryannGitonga/agent-orc/internal/gitx"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
+	"github.com/MaryannGitonga/agent-orc/internal/seed"
 	"github.com/MaryannGitonga/agent-orc/internal/source"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
@@ -103,16 +105,32 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	if _, err := os.Stat(worktree); err == nil {
 		return fmt.Errorf("worktree %s already exists; run 'agent-orc cleanup %s' first", worktree, t.ID)
 	}
+	a, err := adapter.For(t.CLI)
+	if err != nil {
+		return err
+	}
 	if err := repo.AddWorktree(worktree, t.Branch, t.BaseBranch); err != nil {
 		return err
 	}
 
+	seeded, err := d.seedSubagents(t, a, worktree)
+	if err != nil {
+		// Nothing is running yet. A task that asked for subagents and did not
+		// get them would run differently from what was asked for, so undo the
+		// worktree and fail rather than launching it anyway.
+		_ = repo.RemoveWorktree(worktree, true)
+		return err
+	}
+
+	_, budgetNote := a.BudgetArgs(t.Budget)
 	record := state.Task{
-		Task:      t,
-		Status:    state.StatusPending,
-		Worktree:  worktree,
-		LogPath:   d.layout.LogFile(t.ID),
-		StartedAt: time.Now().UTC(),
+		Task:         t,
+		Status:       state.StatusPending,
+		Worktree:     worktree,
+		LogPath:      d.layout.LogFile(t.ID),
+		StartedAt:    time.Now().UTC(),
+		BudgetNote:   budgetNote,
+		SeededAgents: seeded,
 	}
 	if err := d.store.Save(record); err != nil {
 		// Nothing is running yet, so undo both halves of what AddWorktree did.
@@ -135,7 +153,38 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	fmt.Fprintf(d.out, "  branch    %s (from %s)\n", t.Branch, t.BaseBranch)
 	fmt.Fprintf(d.out, "  worktree  %s\n", worktree)
 	fmt.Fprintf(d.out, "  log       %s\n", record.LogPath)
+	if len(seeded) > 0 {
+		fmt.Fprintf(d.out, "  subagents %s\n", strings.Join(seeded, ", "))
+	}
+	if budgetNote != "" {
+		fmt.Fprintf(d.out, "  warning   %s\n", budgetNote)
+	}
 	return nil
+}
+
+// seedSubagents copies the CLI's subagent definitions into the worktree when
+// the task asked for them, and returns what it copied.
+func (d *Dispatcher) seedSubagents(t task.Task, a adapter.Adapter, worktree string) ([]string, error) {
+	if !t.Subagents {
+		return nil, nil
+	}
+	dir := a.SubagentDir()
+	if dir == "" {
+		return nil, fmt.Errorf("task %q asks for subagents but %s has no subagent mechanism to seed", t.ID, t.CLI)
+	}
+	lib := seed.Library{Root: filepath.Join(d.layout.Root, "agents")}
+	src, err := lib.Source(string(t.CLI), t.Repo, dir)
+	if err != nil {
+		return nil, fmt.Errorf("task %q: %w", t.ID, err)
+	}
+	copied, err := seed.Into(worktree, dir, src)
+	if err != nil {
+		return nil, fmt.Errorf("task %q: %w", t.ID, err)
+	}
+	if err := seed.Ignore(worktree, dir); err != nil {
+		return nil, fmt.Errorf("task %q: %w", t.ID, err)
+	}
+	return copied, nil
 }
 
 // startSupervisor re-execs agent-orc as a detached supervisor. Its own session

@@ -122,3 +122,79 @@ func TestCodexRunsNonInteractivelyInASandbox(t *testing.T) {
 		t.Errorf("argv = %q, want the prompt as the final positional argument", argv)
 	}
 }
+
+func f64(v float64) *float64 { return &v }
+
+func TestClaudeCapsSpendInDollars(t *testing.T) {
+	args, note := Claude{}.BudgetArgs(task.Budget{USD: f64(2)})
+	if argAfter(args, "--max-budget-usd") != "2" {
+		t.Errorf("args = %v, want --max-budget-usd 2", args)
+	}
+	if note != "" {
+		t.Errorf("note = %q, want none; the dollar budget is enforced natively", note)
+	}
+}
+
+func TestClaudeSaysSoWhenItCannotEnforceCredits(t *testing.T) {
+	_, note := Claude{}.BudgetArgs(task.Budget{Credits: f64(50)})
+	if !strings.Contains(note, "budget_credits") {
+		t.Errorf("note = %q, want it to say credits are not enforced", note)
+	}
+}
+
+func TestCopilotCapsSpendInCredits(t *testing.T) {
+	args, note := Copilot{}.BudgetArgs(task.Budget{Credits: f64(50)})
+	if argAfter(args, "--max-ai-credits") != "50" {
+		t.Errorf("args = %v, want --max-ai-credits 50", args)
+	}
+	if note != "" {
+		t.Errorf("note = %q, want none", note)
+	}
+}
+
+func TestCopilotSaysSoWhenGivenADollarBudget(t *testing.T) {
+	// Converting dollars to credits would be a guess, so agent-orc refuses to
+	// make one and says the budget is unenforced instead.
+	args, note := Copilot{}.BudgetArgs(task.Budget{USD: f64(2)})
+	if len(args) != 0 {
+		t.Errorf("args = %v, want none; copilot has no dollar cap", args)
+	}
+	if !strings.Contains(note, "credits") {
+		t.Errorf("note = %q, want it to point at budget_credits", note)
+	}
+}
+
+func TestCodexReportsThatItEnforcesNothing(t *testing.T) {
+	if args, note := (Codex{}).BudgetArgs(task.Budget{}); len(args) != 0 || note != "" {
+		t.Errorf("BudgetArgs(no budget) = %v, %q, want nothing to report", args, note)
+	}
+	_, note := Codex{}.BudgetArgs(task.Budget{USD: f64(2)})
+	if !strings.Contains(note, "not enforced") {
+		t.Errorf("note = %q, want it to say the budget is not enforced", note)
+	}
+}
+
+func TestBudgetArgsReachTheCommandLine(t *testing.T) {
+	claude := Claude{}.BuildCommand(task.Task{Prompt: "x", Budget: task.Budget{USD: f64(1.5)}})
+	if argAfter(claude, "--max-budget-usd") != "1.5" {
+		t.Errorf("claude argv = %v, want the budget flag", claude)
+	}
+	copilot := Copilot{}.BuildCommand(task.Task{Prompt: "x", Budget: task.Budget{Credits: f64(20)}})
+	if argAfter(copilot, "--max-ai-credits") != "20" {
+		t.Errorf("copilot argv = %v, want the credits flag", copilot)
+	}
+}
+
+func TestSubagentDirs(t *testing.T) {
+	if got := (Claude{}).SubagentDir(); got != ".claude/agents" {
+		t.Errorf("claude SubagentDir() = %q, want %q", got, ".claude/agents")
+	}
+	if got := (Copilot{}).SubagentDir(); got != ".github/agents" {
+		t.Errorf("copilot SubagentDir() = %q, want %q", got, ".github/agents")
+	}
+	// Codex has no subagent mechanism; an empty string is how that is said,
+	// so the dispatcher can fail loudly instead of seeding nothing silently.
+	if got := (Codex{}).SubagentDir(); got != "" {
+		t.Errorf("codex SubagentDir() = %q, want it empty", got)
+	}
+}
