@@ -90,7 +90,7 @@ done
 
 if [ "$fail" -ne 0 ]; then
 	echo
-	echo "commit policy violations found — see .claude/CLAUDE.md" >&2
+	echo "commit policy violations found — see the commit policy in README.md" >&2
 	exit 1
 fi
 

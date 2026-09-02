@@ -26,17 +26,28 @@ Early. Built in phases:
 
 ```sh
 make help    # list targets
-make ci      # everything GitHub Actions runs — do this before pushing
+make ci      # the CI checks that run locally — do this before pushing
 make build   # compile to bin/agent-orc
 ```
 
 Requires Go 1.22+ and `golangci-lint` (`make lint-install` fetches the pinned
 version).
 
-Commits must be GPG signed, DCO signed off (`git commit -s`), carry a one-line
-conventional subject, and contain no AI-attribution trailers. `make
-commit-check` enforces all four locally; the `commit-policy` workflow enforces
-them again on every PR.
+### Commit policy
+
+Every commit must:
+
+- carry a **one-line conventional subject** (`feat:`, `fix:`, `ci:`, `docs:`,
+  `test:`, `refactor:`, `chore:`, `perf:`, `build:`, `revert:`), at most 72
+  characters, with no prose body — only trailers below it;
+- be **DCO signed off** (`git commit -s`);
+- be **GPG signed** with a key registered on GitHub;
+- contain **no AI-attribution trailers** — no `Co-authored-by:` naming an
+  agent or a `[bot]`, no `Claude-Session:`, no "Generated with" footer.
+
+`make commit-check` enforces all of this locally over `origin/main..HEAD`; the
+`commit-policy` workflow enforces it again on every PR, and additionally asks
+the GitHub API whether each signature is trusted.
 
 ## License
 

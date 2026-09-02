@@ -23,8 +23,10 @@ func git(t *testing.T, dir string, args ...string) string {
 		"GIT_AUTHOR_EMAIL=test@example.invalid",
 		"GIT_COMMITTER_NAME=agent-orc test",
 		"GIT_COMMITTER_EMAIL=test@example.invalid",
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_SYSTEM=/dev/null",
+		// os.DevNull rather than a literal, so the isolation works wherever
+		// the tests are run from.
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_SYSTEM="+os.DevNull,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

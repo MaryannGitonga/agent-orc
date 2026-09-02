@@ -1,5 +1,9 @@
 # agent-orc — developer tasks.
-# `make ci` runs exactly what GitHub Actions runs; keep the two in sync.
+#
+# `make ci` runs the checks from both the ci and commit-policy workflows that
+# can run on a working copy. Two of them cannot: `verify-clean` needs a
+# committed tree, and signature verification asks the GitHub API whether the
+# key is trusted. Keep this file and .github/workflows in sync.
 
 GO             ?= go
 BIN_DIR        ?= bin
@@ -77,7 +81,7 @@ clean:
 commit-check:
 	@./scripts/check-commits.sh $(RANGE)
 
-## ci: everything CI runs — do this before pushing
+## ci: the ci and commit-policy checks that run locally — do this before pushing
 ci: fmt-check vet lint build test test-integration commit-check
 
 .PHONY: help fmt fmt-check vet lint lint-install build test test-integration tidy verify-clean clean commit-check ci
