@@ -63,6 +63,11 @@ func runCmd(argv []string, out io.Writer) error {
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(argv); err != nil {
+		// -h and --help ask for the usage the flag package has just printed;
+		// that is the command doing its job, not a usage error.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 

@@ -3,6 +3,7 @@
 package orc
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,8 +45,14 @@ func (d *Dispatcher) Run(t task.Task) error {
 	if err := d.layout.Ensure(); err != nil {
 		return err
 	}
-	if _, err := d.store.Load(t.ID); err == nil {
+	// Only a missing record means the id is free. Any other load failure is a
+	// record that exists but cannot be read, and overwriting it would destroy
+	// whatever it was tracking.
+	switch _, err := d.store.Load(t.ID); {
+	case err == nil:
 		return fmt.Errorf("task %q already exists; pick another --id or run 'agent-orc cleanup %s'", t.ID, t.ID)
+	case !errors.Is(err, state.ErrNotFound):
+		return fmt.Errorf("checking for an existing task %q: %w", t.ID, err)
 	}
 
 	// Check the agent's binary before touching the repository. The supervisor

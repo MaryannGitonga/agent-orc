@@ -243,3 +243,30 @@ func TestRunRequiresTheCLIFlag(t *testing.T) {
 		t.Errorf("error = %q, want it to name the missing flag", out)
 	}
 }
+
+// TestRunRefusesAnUnreadableStateFile stops rather than overwriting a record it
+// cannot parse, which would throw away whatever that task was tracking.
+func TestRunRefusesAnUnreadableStateFile(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	const corruptJSON = `{"status": "run`
+	if err := os.MkdirAll(filepath.Join(home, "state"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := filepath.Join(home, "state", "PROJ-7.json")
+	write(t, corrupt, corruptJSON)
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "PROJ-7", "--repo", repo, "--cli", "claude", "--prompt", "x")
+	if err == nil {
+		t.Fatalf("run over an unreadable state file succeeded, want an error\n%s", out)
+	}
+	if got := readFile(t, corrupt); got != corruptJSON {
+		t.Errorf("the unreadable state file was overwritten: %q", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "worktrees", "PROJ-7")); !os.IsNotExist(statErr) {
+		t.Error("a worktree was created for a task that never launched")
+	}
+}

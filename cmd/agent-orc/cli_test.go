@@ -41,6 +41,20 @@ func TestDispatchUnknownCommand(t *testing.T) {
 	}
 }
 
+// TestRunHelpIsNotAnError covers the flow the usage text recommends: `run -h`
+// prints the flags and exits successfully.
+func TestRunHelpIsNotAnError(t *testing.T) {
+	for _, arg := range []string{"-h", "--help"} {
+		var out bytes.Buffer
+		if err := dispatch([]string{"run", arg}, &out); err != nil {
+			t.Errorf("dispatch(run %s) = %v, want nil", arg, err)
+		}
+		if !strings.Contains(out.String(), "Usage: agent-orc run") {
+			t.Errorf("run %s printed %q, want the run usage", arg, out.String())
+		}
+	}
+}
+
 func TestBuildTaskRequiresIDAndPrompt(t *testing.T) {
 	if _, err := buildTask("", "p", ".", "", "", "claude", ""); err == nil ||
 		!strings.Contains(err.Error(), "--id") {
