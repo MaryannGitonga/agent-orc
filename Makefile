@@ -1,9 +1,8 @@
 # agent-orc developer tasks.
 #
-# `make ci` runs the checks from both the ci and commit-policy workflows that
-# can run on a working copy. Two of them cannot: `verify-clean` needs a
-# committed tree, and signature verification asks the GitHub API whether the
-# key is trusted. Keep this file and .github/workflows in sync.
+# `make ci` runs the workflow checks that work on a working copy. Two do not:
+# verify-clean needs a committed tree, and signature verification needs the
+# GitHub API. Keep this file and .github/workflows in sync.
 
 GO             ?= go
 BIN_DIR        ?= bin
