@@ -24,10 +24,11 @@ func (r *Reporter) Stop(id string) error {
 	if t.PID == 0 {
 		return fmt.Errorf("task %q has no recorded process; it may not have started yet", id)
 	}
-	if err := syscall.Kill(t.PID, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("stopping task %q (pid %d): %w", id, t.PID, err)
-	}
-
+	// Record the stop before signalling, not after. The supervisor sits in
+	// cmd.Wait() until the agent dies, so it cannot start its own state write
+	// until the signal lands; writing first is what guarantees it observes
+	// "stopped" and leaves it alone. Signalling first races its write against
+	// this one, and when it loses the task is reported as a failure.
 	now := time.Now().UTC()
 	if err := r.store.Update(id, func(k *state.Task) {
 		k.Status = state.StatusStopped
@@ -35,6 +36,15 @@ func (r *Reporter) Stop(id string) error {
 		k.Error = "stopped by agent-orc stop"
 	}); err != nil {
 		return err
+	}
+	if err := syscall.Kill(t.PID, syscall.SIGTERM); err != nil {
+		// Nothing was signalled, so do not leave the task claiming otherwise.
+		_ = r.store.Update(id, func(k *state.Task) {
+			k.Status = t.Status
+			k.FinishedAt = t.FinishedAt
+			k.Error = t.Error
+		})
+		return fmt.Errorf("stopping task %q (pid %d): %w", id, t.PID, err)
 	}
 	fmt.Fprintf(r.out, "%s  stopped (pid %d); worktree %s left in place\n", id, t.PID, t.Worktree)
 	return nil
