@@ -12,6 +12,9 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 )
 
+// unknown is what a table cell shows when there is no value to show.
+const unknown = "-"
+
 // Reporter prints what agent-orc knows about the tasks it has dispatched.
 type Reporter struct {
 	store *state.Store
@@ -24,7 +27,7 @@ func NewReporter(stateDir string, out io.Writer) *Reporter {
 }
 
 // Status prints one row per task. A plain table is deliberately the whole of
-// the reporting surface — anything richer is a dashboard, and there is nothing
+// the reporting surface: anything richer is a dashboard, and there is nothing
 // yet to justify one.
 func (r *Reporter) Status() error {
 	tasks, err := r.store.List()
@@ -42,7 +45,7 @@ func (r *Reporter) Status() error {
 	for _, t := range tasks {
 		t = reconcile(r.store, t)
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			t.ID, t.CLI, orDash(t.Model), t.Status, spend(t), t.Branch, elapsed(t))
+			t.ID, t.CLI, orUnknown(t.Model), t.Status, spend(t), t.Branch, elapsed(t))
 		if t.BudgetNote != "" {
 			notes = append(notes, fmt.Sprintf("%s: %s", t.ID, t.BudgetNote))
 		}
@@ -57,7 +60,7 @@ func (r *Reporter) Status() error {
 }
 
 // reconcile corrects a record that claims to be running behind a process that
-// is gone — a machine reboot, or a supervisor killed outright. Without this,
+// is gone after a machine reboot, or a supervisor killed outright. Without it,
 // `status` would report a task as running forever.
 func reconcile(store *state.Store, t state.Task) state.Task {
 	if !t.Status.Active() || t.PID == 0 || processAlive(t.PID) {
@@ -84,7 +87,7 @@ func processAlive(pid int) bool {
 
 // spend renders "$spent / $budget" in whichever units are known.
 func spend(t state.Task) string {
-	spent := "—"
+	spent := unknown
 	if t.SpentUSD != nil {
 		spent = "$" + strconv.FormatFloat(*t.SpentUSD, 'f', 2, 64)
 	} else if t.Tokens != nil {
@@ -103,7 +106,7 @@ func spend(t state.Task) string {
 // elapsed renders how long a task ran, or has been running.
 func elapsed(t state.Task) string {
 	if t.StartedAt.IsZero() {
-		return "—"
+		return unknown
 	}
 	end := time.Now().UTC()
 	if t.FinishedAt != nil {
@@ -111,14 +114,15 @@ func elapsed(t state.Task) string {
 	}
 	d := end.Sub(t.StartedAt).Round(time.Second)
 	if d < 0 {
-		return "—"
+		return unknown
 	}
 	return strings.TrimSuffix(d.String(), "0s0ms")
 }
 
-func orDash(s string) string {
+// orUnknown renders an empty value as the table's placeholder.
+func orUnknown(s string) string {
 	if s == "" {
-		return "—"
+		return unknown
 	}
 	return s
 }

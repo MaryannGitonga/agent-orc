@@ -109,7 +109,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 }
 
 // readUsage asks the adapter what the run cost. A CLI that reports nothing is
-// normal, not an error — the number is simply left unset.
+// normal, not an error; the number is simply left unset.
 func (s *Supervisor) readUsage(record state.Task) *adapter.Usage {
 	a, err := adapter.For(record.CLI)
 	if err != nil {

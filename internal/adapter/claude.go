@@ -25,7 +25,7 @@ func (c Claude) BuildCommand(t task.Task) []string {
 }
 
 // BudgetArgs caps the run with Claude Code's own dollar limit, which stops the
-// session once spend crosses the figure — no polling needed on our side.
+// session once spend crosses the figure, so no polling is needed on our side.
 func (Claude) BudgetArgs(b task.Budget) ([]string, string) {
 	var args []string
 	if b.USD != nil {

@@ -29,8 +29,8 @@ type Adapter interface {
 	// mechanism agent-orc can seed.
 	SubagentDir() string
 	// ParseUsage reads what the run actually cost out of its log. It returns
-	// nil when the CLI reports nothing usable — inventing a number would be
-	// worse than admitting there isn't one.
+	// nil when the CLI reports nothing usable, because inventing a number
+	// would be worse than admitting there isn't one.
 	ParseUsage(logPath string) (*Usage, error)
 }
 

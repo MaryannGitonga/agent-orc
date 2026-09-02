@@ -120,9 +120,9 @@ func TestSpendRendering(t *testing.T) {
 		},
 		"credits budget": {
 			state.Task{Task: task.Task{Budget: task.Budget{Credits: f64(50)}}},
-			"— / 50 cr",
+			"- / 50 cr",
 		},
-		"nothing known": {state.Task{}, "—"},
+		"nothing known": {state.Task{}, "-"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -1,7 +1,7 @@
 // Package seed copies subagent definitions into a task's worktree before the
 // agent launches.
 //
-// agent-orc deliberately invents no abstraction over "what a subagent is" — it
+// agent-orc deliberately invents no abstraction over "what a subagent is". It
 // copies the files each CLI already knows how to read, into the directory that
 // CLI already looks in. Turning subagents off means not copying them: absence
 // is the off state, so there is no flag to pass the CLI itself.
@@ -132,7 +132,7 @@ func copyFile(src, dst string) error {
 // Ignore keeps the seeded definitions out of the agent's commits by writing a
 // .gitignore into the seeded directory itself.
 //
-// The obvious alternative — the repository's info/exclude — is not usable
+// The obvious alternative, the repository's info/exclude, is not usable
 // here: git reads that from the *common* git directory, which every worktree
 // and the user's own checkout share, so a per-task exclusion would leak out of
 // the task. A .gitignore inside the seeded directory stays entirely within the

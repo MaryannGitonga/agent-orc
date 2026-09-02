@@ -58,7 +58,7 @@ running one (leaving its worktree for you to look at):
 ```
 ID       CLI      MODEL      STATUS   SPEND          BRANCH          ELAPSED
 PROJ-1   claude   opus-4-6   done     $0.42 / $2.00  fix/proj-1234   1m30s
-PROJ-2   copilot  gpt-5.1    running  —              chore/proj-1240 12s
+PROJ-2   copilot  gpt-5.1    running  -              chore/proj-1240 12s
 ```
 
 ### Budgets
@@ -71,9 +71,9 @@ as that CLI's own native cap at launch:
 | --- | --- | --- |
 | claude | `budget_usd` | `--max-budget-usd` |
 | copilot | `budget_credits` | `--max-ai-credits` |
-| codex | — | none; the budget is reported, not enforced |
+| codex | none | none; the budget is reported, not enforced |
 
-A budget in a unit the CLI cannot enforce is not silently dropped — it is
+A budget in a unit the CLI cannot enforce is not silently dropped. It is
 warned about at launch and noted under `agent-orc status`. Actual spend is read
 back out of the CLI's own output after the run, where it reports one.
 

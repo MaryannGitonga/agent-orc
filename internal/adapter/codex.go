@@ -20,7 +20,7 @@ func (Codex) BuildCommand(t task.Task) []string {
 }
 
 // BudgetArgs enforces nothing: Codex exposes no pre-set spend or turn cap for
-// a non-interactive run. Saying so at launch is the honest answer — pretending
+// a non-interactive run. Saying so at launch is the honest answer: pretending
 // to cap a run that is not capped would be worse than the warning.
 func (Codex) BudgetArgs(b task.Budget) ([]string, string) {
 	if b.IsZero() {

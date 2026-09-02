@@ -55,8 +55,8 @@ type Entry struct {
 	CLI        task.CLI `yaml:"cli"`
 	Model      string   `yaml:"model"`
 	// Subagents and the budget fields are pointers so "unset" is
-	// distinguishable from "explicitly false or zero" — a task can turn a
-	// batch default off, not only leave it alone.
+	// distinguishable from "explicitly false or zero", so a task can turn a
+	// batch default off rather than only leave it alone.
 	Subagents     *bool    `yaml:"subagents"`
 	BudgetUSD     *float64 `yaml:"budget_usd"`
 	BudgetCredits *float64 `yaml:"budget_credits"`
