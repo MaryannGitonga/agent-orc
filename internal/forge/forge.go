@@ -103,6 +103,22 @@ func (o *Opener) RemoteURL(worktree, remote string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// HasRemote reports whether the named remote is configured. Listing is asked
+// separately from reading the URL so that "there is no remote" stays
+// distinguishable from "git failed", which callers treat very differently.
+func (o *Opener) HasRemote(worktree, remote string) (bool, error) {
+	out, err := o.Runner.Run(worktree, "git", "remote")
+	if err != nil {
+		return false, fmt.Errorf("listing remotes: %w: %s", err, out)
+	}
+	for _, name := range strings.Fields(out) {
+		if name == remote {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Push publishes the branch.
 func (o *Opener) Push(r Request) error {
 	if out, err := o.Runner.Run(r.Worktree, "git", "push", "-u", r.Remote, r.Branch); err != nil {

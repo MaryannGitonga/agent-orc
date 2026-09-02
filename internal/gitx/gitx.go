@@ -66,6 +66,16 @@ func (r *Repo) TrackedUnder(path string) ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
+// HasUncommittedChanges reports whether the checkout at dir has anything
+// uncommitted, tracked or not.
+func HasUncommittedChanges(dir string) (bool, error) {
+	out, err := run(dir, "status", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("checking for uncommitted changes in %q: %w", dir, err)
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
 // AddWorktree checks branch out at dir, creating the branch from base.
 func (r *Repo) AddWorktree(dir, branch, base string) error {
 	if _, err := run(r.Dir, "worktree", "add", dir, "-b", branch, base); err != nil {

@@ -58,7 +58,10 @@ func (r Rewriter) Run() (int, error) {
 		return 0, nil
 	}
 
-	cmd := exec.Command("git", "rebase", "--force-rebase",
+	// --rebase-merges because this pass rewrites commit messages, not history
+	// shape: a plain rebase would flatten any merge the branch contains and
+	// silently change the topology it was asked only to clean up.
+	cmd := exec.Command("git", "rebase", "--force-rebase", "--rebase-merges",
 		"--exec", quoteForExec(r.Self)+" sanitize-commit", r.Base)
 	cmd.Dir = r.Worktree
 	cmd.Env = append(os.Environ(),

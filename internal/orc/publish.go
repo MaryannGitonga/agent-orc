@@ -66,9 +66,19 @@ func (p *Publisher) Publish(id string) error {
 			record.Worktree, err)
 	}
 
+	// A missing remote is local-only work, which is a legitimate way to run and
+	// ends as done. Any other git failure is a real problem and must surface as
+	// publish_failed rather than being reported as success.
+	hasRemote, err := p.opener.HasRemote(record.Worktree, defaultRemote)
+	if err != nil {
+		return err
+	}
+	if !hasRemote {
+		return ErrNoRemote
+	}
 	remoteURL, err := p.opener.RemoteURL(record.Worktree, defaultRemote)
 	if err != nil {
-		return ErrNoRemote
+		return err
 	}
 	if err := p.checkAgentDidNotPublish(&record); err != nil {
 		return err

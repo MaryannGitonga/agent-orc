@@ -147,3 +147,43 @@ func TestLastURLPicksTheURLOutOfNoisyOutput(t *testing.T) {
 		t.Errorf("lastURL() = %q, want the raw output when there is no URL", got)
 	}
 }
+
+// TestHasRemote separates "there is no remote" from "git failed", because the
+// publisher treats the first as legitimate local-only work and the second as a
+// failure that must not be reported as success.
+func TestHasRemote(t *testing.T) {
+	t.Run("present", func(t *testing.T) {
+		r := &fakeRunner{results: map[string]string{"git remote": "origin\nupstream\n"}}
+		got, err := (&Opener{Runner: r}).HasRemote("/wt", "origin")
+		if err != nil || !got {
+			t.Errorf("HasRemote() = %v, %v; want true, nil", got, err)
+		}
+	})
+	t.Run("absent", func(t *testing.T) {
+		r := &fakeRunner{results: map[string]string{"git remote": "upstream\n"}}
+		got, err := (&Opener{Runner: r}).HasRemote("/wt", "origin")
+		if err != nil || got {
+			t.Errorf("HasRemote() = %v, %v; want false, nil", got, err)
+		}
+	})
+	t.Run("no remotes at all", func(t *testing.T) {
+		r := &fakeRunner{results: map[string]string{"git remote": ""}}
+		got, err := (&Opener{Runner: r}).HasRemote("/wt", "origin")
+		if err != nil || got {
+			t.Errorf("HasRemote() = %v, %v; want false, nil", got, err)
+		}
+	})
+	t.Run("git failed", func(t *testing.T) {
+		r := &fakeRunner{
+			results: map[string]string{"git remote": "fatal: not a git repository"},
+			errs:    map[string]error{"git remote": errors.New("exit status 128")},
+		}
+		got, err := (&Opener{Runner: r}).HasRemote("/wt", "origin")
+		if err == nil {
+			t.Error("HasRemote() = nil error on a git failure; it must not read as an absent remote")
+		}
+		if got {
+			t.Error("HasRemote() = true on a git failure")
+		}
+	})
+}

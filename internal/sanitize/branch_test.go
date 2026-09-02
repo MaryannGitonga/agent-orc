@@ -170,3 +170,52 @@ func TestRewriterOnABranchWithNoCommits(t *testing.T) {
 		t.Errorf("Run() = %d, want 0", n)
 	}
 }
+
+// TestRunPreservesMergeCommits pins the topology guarantee: this pass rewrites
+// commit messages, so a merge on the task branch must survive it. A plain
+// rebase flattens the branch, silently changing what the agent produced.
+func TestRunPreservesMergeCommits(t *testing.T) {
+	self, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no true binary to stand in for the per-commit pass")
+	}
+	dir := repoWith(t, "feat: task work\n\nCo-authored-by: Claude <noreply@anthropic.com>\n")
+
+	// main moves on and the task branch merges it: the shape a message
+	// rewrite must leave alone.
+	run(t, dir, "checkout", "-q", "main")
+	if err := os.WriteFile(filepath.Join(dir, "main.txt"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, dir, "add", ".")
+	run(t, dir, "commit", "--no-gpg-sign", "-m", "feat: main moves on")
+	run(t, dir, "checkout", "-q", "feat/x")
+	run(t, dir, "merge", "-q", "--no-ff", "--no-gpg-sign", "main", "-m", "chore: merge main")
+
+	if before := mergeCount(t, dir); before != 1 {
+		t.Fatalf("set up %d merges, want 1", before)
+	}
+
+	policy, err := NewPolicy(DefaultPatterns, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// self stands in for the per-commit pass; this test is about topology, and
+	// stripping is covered by the tests above.
+	if _, err := (Rewriter{Worktree: dir, Base: "main", Policy: policy, Patterns: DefaultPatterns, Self: self}).Run(); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if after := mergeCount(t, dir); after != 1 {
+		t.Errorf("merges on the branch = %d after the rewrite, want 1", after)
+	}
+}
+
+// mergeCount counts merge commits the task branch has ahead of main.
+func mergeCount(t *testing.T, dir string) int {
+	t.Helper()
+	out := strings.TrimSpace(run(t, dir, "log", "--oneline", "--merges", "main..feat/x"))
+	if out == "" {
+		return 0
+	}
+	return len(strings.Split(out, "\n"))
+}

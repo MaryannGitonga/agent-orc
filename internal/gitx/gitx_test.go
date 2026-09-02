@@ -219,3 +219,19 @@ func TestTrackedUnder(t *testing.T) {
 		t.Errorf("TrackedUnder() = %v, want [.claude/agents/reviewer.md]", got)
 	}
 }
+
+func TestHasUncommittedChanges(t *testing.T) {
+	dir := newRepo(t)
+	if dirty, err := HasUncommittedChanges(dir); err != nil || dirty {
+		t.Errorf("HasUncommittedChanges on a clean repo = %v, %v; want false, nil", dirty, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, err := HasUncommittedChanges(dir); err != nil || !dirty {
+		t.Errorf("HasUncommittedChanges with an untracked file = %v, %v; want true, nil", dirty, err)
+	}
+	if _, err := HasUncommittedChanges(t.TempDir()); err == nil {
+		t.Error("HasUncommittedChanges outside a repository = nil, want an error")
+	}
+}

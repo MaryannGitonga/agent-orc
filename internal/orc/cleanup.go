@@ -43,7 +43,13 @@ func (c *Cleaner) Clean(id string, force bool) error {
 			return err
 		}
 		if err := repo.RemoveWorktree(record.Worktree, force); err != nil {
-			return fmt.Errorf("%w\nthe worktree has uncommitted changes; pass --force to discard them", err)
+			// Only offer --force when uncommitted work is what is actually in
+			// the way. git refuses for plenty of other reasons, and naming the
+			// wrong one sends people down a dead end.
+			if dirty, dirtyErr := gitx.HasUncommittedChanges(record.Worktree); dirtyErr == nil && dirty {
+				return fmt.Errorf("%w\nthe worktree has uncommitted changes; pass --force to discard them", err)
+			}
+			return err
 		}
 	}
 
