@@ -1,6 +1,10 @@
 package adapter
 
-import "github.com/MaryannGitonga/agent-orc/internal/task"
+import (
+	"strconv"
+
+	"github.com/MaryannGitonga/agent-orc/internal/task"
+)
 
 // Copilot drives the GitHub Copilot CLI.
 type Copilot struct{}
@@ -8,16 +12,39 @@ type Copilot struct{}
 // Name identifies the CLI.
 func (Copilot) Name() task.CLI { return task.CLICopilot }
 
-// BuildCommand runs the task through Copilot's programmatic mode.
+// BuildCommand runs the task through Copilot's non-interactive mode.
 //
-// --allow-all-tools is what makes an unattended run possible at all: without
-// it the CLI stops to ask for approval on every tool call, and there is no
-// terminal attached to answer. The isolation that makes this acceptable is the
-// worktree: the agent has its own checkout and its own branch.
-func (Copilot) BuildCommand(t task.Task) []string {
+// --allow-all-tools is what makes an unattended run possible at all: the CLI
+// documents it as required for non-interactive use, because otherwise it stops
+// to ask for approval on every tool call and there is no terminal to answer.
+// The isolation that makes this acceptable is the worktree: the agent has its
+// own checkout and its own branch.
+func (c Copilot) BuildCommand(t task.Task) []string {
 	argv := []string{"copilot", "-p", t.Render(), "--allow-all-tools"}
 	if t.Model != "" {
 		argv = append(argv, "--model", t.Model)
 	}
-	return argv
+	budget, _ := c.BudgetArgs(t.Budget)
+	return append(argv, budget...)
 }
+
+// BudgetArgs caps the run with Copilot's AI-credit limit. Copilot meters in
+// credits rather than dollars, and agent-orc does not guess an exchange rate:
+// a dollar budget is reported as unenforced for this CLI instead.
+func (Copilot) BudgetArgs(b task.Budget) ([]string, string) {
+	var args []string
+	if b.Credits != nil {
+		args = append(args, "--max-ai-credits", strconv.FormatFloat(*b.Credits, 'f', -1, 64))
+	}
+	if b.USD != nil {
+		return args, "copilot caps spend in AI credits, not dollars; set budget_credits to cap this task"
+	}
+	return args, ""
+}
+
+// SubagentDir is where the Copilot CLI reads custom agent definitions from.
+func (Copilot) SubagentDir() string { return ".github/agents" }
+
+// ParseUsage reports nothing: the Copilot CLI does not write a machine-readable
+// cost to its output, and a made-up number would be worse than none.
+func (Copilot) ParseUsage(string) (*Usage, error) { return nil, ErrNoUsage }

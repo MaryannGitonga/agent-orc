@@ -18,8 +18,29 @@ type Adapter interface {
 	// Name is the CLI this adapter drives.
 	Name() task.CLI
 	// BuildCommand returns the argv that runs the task to completion
-	// non-interactively.
+	// non-interactively, including any native budget cap.
 	BuildCommand(t task.Task) []string
+	// BudgetArgs returns the flags that cap the run, plus a note naming any
+	// part of the budget this CLI cannot enforce. An empty note means the
+	// whole budget is enforced natively.
+	BudgetArgs(b task.Budget) (args []string, unenforced string)
+	// SubagentDir is where this CLI reads subagent definitions from, relative
+	// to the worktree root. An empty string means the CLI has no subagent
+	// mechanism agent-orc can seed.
+	SubagentDir() string
+	// ParseUsage reads what the run actually cost out of its log. It returns
+	// nil when the CLI reports nothing usable, because inventing a number
+	// would be worse than admitting there isn't one.
+	ParseUsage(logPath string) (*Usage, error)
+}
+
+// Usage is what a run actually consumed, in whichever units the CLI reports.
+// Every field is optional: a nil field means "this CLI did not say".
+type Usage struct {
+	// CostUSD is the run's cost in dollars.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
+	// Tokens is the total tokens consumed.
+	Tokens *int `json:"tokens,omitempty"`
 }
 
 // registry holds one adapter per supported CLI.

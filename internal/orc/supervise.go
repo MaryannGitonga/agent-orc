@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
@@ -51,6 +52,10 @@ func (s *Supervisor) Supervise(id string) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = os.Environ()
+	// Its own process group, so `agent-orc stop` can signal the agent and
+	// everything it spawned. Without this the agent shares the supervisor's
+	// group and a group signal would take the supervisor down with it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return s.fail(id, fmt.Errorf("starting %s: %w", argv[0], err))
@@ -65,11 +70,12 @@ func (s *Supervisor) Supervise(id string) error {
 	s.logf("agent running as pid %d", cmd.Process.Pid)
 
 	runErr := cmd.Wait()
-	return s.finish(id, cmd, runErr)
+	return s.finish(id, record, cmd, runErr)
 }
 
-// finish records the outcome of a completed agent process.
-func (s *Supervisor) finish(id string, cmd *exec.Cmd, runErr error) error {
+// finish records the outcome of a completed agent process, including what the
+// run actually cost.
+func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr error) error {
 	now := time.Now().UTC()
 	code := cmd.ProcessState.ExitCode()
 
@@ -80,12 +86,22 @@ func (s *Supervisor) finish(id string, cmd *exec.Cmd, runErr error) error {
 		message = runErr.Error()
 	}
 
+	usage := s.readUsage(record)
+
 	if err := s.store.Update(id, func(k *state.Task) {
-		k.Status = status
+		// A task a human stopped stays stopped; the non-zero exit that came
+		// from the signal is not a failure of the agent's own making.
+		if k.Status != state.StatusStopped {
+			k.Status = status
+			k.Error = message
+		}
 		k.PID = 0
 		k.FinishedAt = &now
 		k.ExitCode = &code
-		k.Error = message
+		if usage != nil {
+			k.SpentUSD = usage.CostUSD
+			k.Tokens = usage.Tokens
+		}
 	}); err != nil {
 		return err
 	}
@@ -95,6 +111,23 @@ func (s *Supervisor) finish(id string, cmd *exec.Cmd, runErr error) error {
 		return fmt.Errorf("task %s failed: %w", id, runErr)
 	}
 	return nil
+}
+
+// readUsage asks the adapter what the run cost. A CLI that reports nothing is
+// normal, not an error; the number is simply left unset.
+func (s *Supervisor) readUsage(record state.Task) *adapter.Usage {
+	a, err := adapter.For(record.CLI)
+	if err != nil {
+		return nil
+	}
+	usage, err := a.ParseUsage(record.LogPath)
+	if err != nil {
+		if !errors.Is(err, adapter.ErrNoUsage) {
+			s.logf("warning: could not read usage: %v", err)
+		}
+		return nil
+	}
+	return usage
 }
 
 // fail records a task that could not be run at all.

@@ -53,6 +53,19 @@ func (r *Repo) BranchExists(branch string) bool {
 	return err == nil
 }
 
+// TrackedUnder lists the files git already tracks under path, relative to the
+// repository root. A path git knows nothing about yields nothing.
+func (r *Repo) TrackedUnder(path string) ([]string, error) {
+	out, err := run(r.Dir, "ls-files", "--", path)
+	if err != nil {
+		return nil, fmt.Errorf("listing tracked files under %q: %w", path, err)
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // AddWorktree checks branch out at dir, creating the branch from base.
 func (r *Repo) AddWorktree(dir, branch, base string) error {
 	if _, err := run(r.Dir, "worktree", "add", dir, "-b", branch, base); err != nil {

@@ -46,6 +46,33 @@ type Task struct {
 	BaseBranch string `yaml:"base_branch" json:"base_branch"`
 	CLI        CLI    `yaml:"cli" json:"cli"`
 	Model      string `yaml:"model" json:"model"` // empty means the CLI's default
+	// Subagents seeds the CLI's subagent definitions into the worktree. Absence
+	// of the files is the "off" state, so no flag is passed to the CLI itself.
+	Subagents bool   `yaml:"subagents" json:"subagents,omitempty"`
+	Budget    Budget `yaml:",inline" json:"budget"` // omitempty does nothing on a struct
+}
+
+// Budget caps a task's spend. Each CLI caps cost in its own unit and agent-orc
+// does not convert between them: a budget in a unit the CLI does not
+// understand is reported as unenforced rather than quietly approximated.
+type Budget struct {
+	USD     *float64 `yaml:"budget_usd" json:"usd,omitempty"`
+	Credits *float64 `yaml:"budget_credits" json:"credits,omitempty"`
+}
+
+// IsZero reports whether no budget was set at all.
+func (b Budget) IsZero() bool { return b.USD == nil && b.Credits == nil }
+
+// Validate rejects budgets that cannot mean anything.
+func (b Budget) Validate() error {
+	var errs []error
+	if b.USD != nil && *b.USD <= 0 {
+		errs = append(errs, fmt.Errorf("budget_usd must be greater than zero, got %v", *b.USD))
+	}
+	if b.Credits != nil && *b.Credits <= 0 {
+		errs = append(errs, fmt.Errorf("budget_credits must be greater than zero, got %v", *b.Credits))
+	}
+	return errors.Join(errs...)
 }
 
 // validID is strict because an ID becomes a file name and a path segment.
@@ -88,6 +115,9 @@ func (t Task) validateCommon() error {
 	}
 	if !t.CLI.Known() {
 		errs = append(errs, fmt.Errorf("unsupported cli %q, want one of %v", t.CLI, KnownCLIs))
+	}
+	if err := t.Budget.Validate(); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }

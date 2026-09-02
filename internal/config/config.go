@@ -35,8 +35,11 @@ type File struct {
 
 // Defaults are the batch-wide settings a task inherits.
 type Defaults struct {
-	CLI   task.CLI `yaml:"cli"`
-	Model string   `yaml:"model"`
+	CLI           task.CLI `yaml:"cli"`
+	Model         string   `yaml:"model"`
+	Subagents     *bool    `yaml:"subagents"`
+	BudgetUSD     *float64 `yaml:"budget_usd"`
+	BudgetCredits *float64 `yaml:"budget_credits"`
 }
 
 // Entry is one task as written in the batch file. Every field is optional
@@ -51,6 +54,12 @@ type Entry struct {
 	BaseBranch string   `yaml:"base_branch"`
 	CLI        task.CLI `yaml:"cli"`
 	Model      string   `yaml:"model"`
+	// Subagents and the budget fields are pointers so "unset" is
+	// distinguishable from "explicitly false or zero", so a task can turn a
+	// batch default off rather than only leave it alone.
+	Subagents     *bool    `yaml:"subagents"`
+	BudgetUSD     *float64 `yaml:"budget_usd"`
+	BudgetCredits *float64 `yaml:"budget_credits"`
 }
 
 // Load reads and validates a batch file. Paths inside it are resolved relative
@@ -148,9 +157,15 @@ func (f *File) validate() error {
 		if t.CLI == "" && f.Defaults.CLI == "" {
 			errs = append(errs, fmt.Errorf("%s: no cli set, and defaults sets none either", where))
 		}
+		if err := (task.Budget{USD: t.BudgetUSD, Credits: t.BudgetCredits}).Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", where, err))
+		}
 	}
 	if f.Defaults.CLI != "" && !f.Defaults.CLI.Known() {
 		errs = append(errs, fmt.Errorf("defaults: unsupported cli %q, want one of %v", f.Defaults.CLI, task.KnownCLIs))
+	}
+	if err := (task.Budget{USD: f.Defaults.BudgetUSD, Credits: f.Defaults.BudgetCredits}).Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("defaults: %w", err))
 	}
 	return errors.Join(errs...)
 }
@@ -168,6 +183,10 @@ func (f *File) Resolved(e Entry) task.Task {
 		return ""
 	}
 	cli := task.CLI(pick(string(e.CLI), string(f.Defaults.CLI)))
+	subagents := false
+	if v := firstBool(e.Subagents, f.Defaults.Subagents); v != nil {
+		subagents = *v
+	}
 	return task.Task{
 		ID:         e.ID,
 		Source:     e.Source,
@@ -177,5 +196,30 @@ func (f *File) Resolved(e Entry) task.Task {
 		BaseBranch: pick(e.BaseBranch, f.BaseBranch),
 		CLI:        cli,
 		Model:      pick(e.Model, f.Defaults.Model),
+		Subagents:  subagents,
+		Budget: task.Budget{
+			USD:     firstFloat(e.BudgetUSD, f.Defaults.BudgetUSD),
+			Credits: firstFloat(e.BudgetCredits, f.Defaults.BudgetCredits),
+		},
 	}
+}
+
+// firstBool returns the first value that was actually set.
+func firstBool(values ...*bool) *bool {
+	for _, v := range values {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+// firstFloat returns the first value that was actually set.
+func firstFloat(values ...*float64) *float64 {
+	for _, v := range values {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
 }
