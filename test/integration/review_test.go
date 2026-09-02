@@ -90,7 +90,7 @@ func TestReviewApprovesAndStops(t *testing.T) {
 		t.Errorf("review_round = %d, want 1", got.ReviewRound)
 	}
 
-	// The reviewer saw the diff and the task, in a clean session — no resume.
+	// The reviewer saw the diff and the task in a clean session, with no resume.
 	r := readFile(t, reviewerReceipt)
 	for _, want := range []string{"do the thing", "git diff main...HEAD", "LGTM"} {
 		if !strings.Contains(r, want) {
@@ -137,7 +137,7 @@ func TestReviewLoopsFeedbackBackToTheWorker(t *testing.T) {
 		t.Errorf("review output = %q, want the cap to stop the loop", out)
 	}
 
-	// The worker was resumed — its own session, not a fresh one — and given
+	// The worker was resumed in its own session, not a fresh one, and given
 	// the reviewer's comments.
 	w := readFile(t, workerReceipt)
 	if !strings.Contains(w, "arg=--resume") || !strings.Contains(w, "arg="+rec.SessionID) {

@@ -129,7 +129,7 @@ func spend(t state.Task) string {
 // rounds renders review progress against the task's cap.
 func rounds(t state.Task) string {
 	if !t.Review.Enabled {
-		return "—"
+		return unknown
 	}
 	return strconv.Itoa(t.ReviewRound) + "/" + strconv.Itoa(t.Review.Rounds())
 }

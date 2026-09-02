@@ -8,7 +8,7 @@
 // author's scratch work.
 //
 // The loop is sequential and hard-capped. The worker and the reviewer never
-// run at the same time and never message each other — this is a bounded
+// run at the same time and never message each other. This is a bounded
 // pre-check, not a replacement for human review.
 package review
 
@@ -24,14 +24,14 @@ const LGTM = "LGTM"
 func ReviewerPrompt(taskPrompt, baseBranch string) string {
 	var b strings.Builder
 	b.WriteString("You are reviewing a change on the branch checked out in this worktree.\n")
-	fmt.Fprintf(&b, "Review the diff against `%s` — run `git diff %s...HEAD` to see it.\n\n", baseBranch, baseBranch)
+	fmt.Fprintf(&b, "Review the diff against `%s`. Run `git diff %s...HEAD` to see it.\n\n", baseBranch, baseBranch)
 	b.WriteString("The change was made to satisfy this task:\n\n---\n")
 	b.WriteString(strings.TrimSpace(taskPrompt))
 	b.WriteString("\n---\n\n")
 	b.WriteString(`Judge it on three things, in this order:
-1. Correctness — does it do what it claims, without introducing bugs?
-2. Completeness — does it actually satisfy the task above?
-3. Style — does it match the surrounding code?
+1. Correctness: does it do what it claims, without introducing bugs?
+2. Completeness: does it actually satisfy the task above?
+3. Style: does it match the surrounding code?
 
 Do not edit anything. Do not commit, push, or create branches. Review only.
 

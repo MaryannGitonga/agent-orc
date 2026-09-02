@@ -119,18 +119,18 @@ agent-orc review PROJ-1234
 ```
 
 The reviewer is a **fresh session in its own worktree**, never a resume of the
-worker'"'"'s — a reviewer that inherited the worker'"'"'s conversation would inherit
+worker's. A reviewer that inherited the worker's conversation would inherit
 its framing of the problem too. It sees the diff and the original task, the way
-a human reviewer sees the PR and not the author'"'"'s scratch work. Left
+a human reviewer sees the PR and not the author's scratch work. Left
 unconfigured, it runs on a *different* CLI from the worker, so the two are less
 likely to share a blind spot.
 
 It answers `LGTM` or a list of concrete comments. Comments are handed back to
-the worker'"'"'s own session (resumed by the session ID agent-orc assigned at
+the worker's own session (resumed by the session ID agent-orc assigned at
 launch) to address on the same branch. Anything that is neither is an error:
 the round stops and waits for a human rather than guessing.
 
-The loop is sequential and hard-capped — `max_rounds`, default 1. The worker
+The loop is sequential and hard-capped by `max_rounds`, default 1. The worker
 and reviewer never run at the same time and never message each other. A review
 round draws on the same per-task budget, not a separate pool. None of this
 replaces the human "Ready for review" click.

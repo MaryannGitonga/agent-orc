@@ -207,7 +207,7 @@ func TestNewSessionIDLooksLikeAUUIDAndIsUnique(t *testing.T) {
 	if len(first) != 36 || strings.Count(first, "-") != 4 {
 		t.Errorf("NewSessionID() = %q, want a 36-character UUID", first)
 	}
-	// Version 4, variant 10 — Claude Code rejects anything that is not a
+	// Version 4, variant 10: Claude Code rejects anything that is not a
 	// well-formed UUID.
 	if first[14] != '4' {
 		t.Errorf("NewSessionID() = %q, want version 4", first)

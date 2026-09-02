@@ -62,8 +62,9 @@ type Task struct {
 // Review configures the optional, manually triggered review pass.
 //
 // It is off by default and hard-capped on purpose: unlike opening a draft PR,
-// a review round costs real money and real time, and an uncapped worker↔
-// reviewer loop is exactly the kind of thing that runs until someone notices.
+// a review round costs real money and real time, and an uncapped loop between
+// worker and reviewer is exactly the kind of thing that runs until someone
+// notices.
 type Review struct {
 	// Enabled allows `agent-orc review` to run for this task.
 	Enabled bool `yaml:"enabled" json:"enabled,omitempty"`
