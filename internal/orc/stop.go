@@ -19,7 +19,7 @@ func (r *Reporter) Stop(id string) error {
 	if err != nil {
 		return err
 	}
-	if !t.Status.Active() {
+	if !t.Status.HasProcess() {
 		return fmt.Errorf("task %q is %s, not running", id, t.Status)
 	}
 	if t.PID == 0 {

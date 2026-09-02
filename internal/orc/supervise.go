@@ -79,11 +79,17 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	now := time.Now().UTC()
 	code := cmd.ProcessState.ExitCode()
 
+	// The task is not done until the publish chain has run: §12's whole point
+	// is that nothing reaches the remote unsanitized, so "done" has to mean
+	// "sanitized, pushed and open as a draft", not "the agent stopped".
 	status := state.StatusDone
 	message := ""
-	if runErr != nil {
+	switch {
+	case runErr != nil:
 		status = state.StatusFailed
 		message = runErr.Error()
+	case record.AutoPR:
+		status = state.StatusPublishing
 	}
 
 	usage := s.readUsage(record)
@@ -110,7 +116,58 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	if runErr != nil {
 		return fmt.Errorf("task %s failed: %w", id, runErr)
 	}
+	if status == state.StatusPublishing {
+		s.publish(id, record)
+	} else {
+		s.logf("auto_pr is off; run 'agent-orc pr %s' when you want the draft opened", id)
+	}
 	return nil
+}
+
+// publish chains the sanitize → push → draft-PR pass onto the same per-task
+// process, the moment the agent exits. This is what makes "automatic on
+// completion" work with no daemon: the automation hangs off a process that was
+// already running for this task.
+//
+// A publish failure does not fail the task — the agent's work is committed and
+// on its branch either way. It is logged and left for `agent-orc pr` to retry.
+func (s *Supervisor) publish(id string, record state.Task) {
+	p, err := NewPublisher(s.layout, s.out)
+	if err == nil {
+		err = p.Publish(id)
+	}
+	if err == nil {
+		s.mark(id, state.StatusDone, "")
+		s.logf("task %s is done", id)
+		return
+	}
+	if errors.Is(err, ErrNoRemote) {
+		// A local-only repository is a legitimate way to work, not a failure.
+		s.mark(id, state.StatusDone, "")
+		s.logf("no %s remote; the work is on %s and was not pushed", defaultRemote, record.Branch)
+		return
+	}
+
+	s.logf("publish failed: %v", err)
+	s.logf("the work is committed on %s; retry with 'agent-orc pr %s'", record.Branch, id)
+	// Publish may already have recorded something more specific — a policy
+	// violation, say — and that diagnosis should not be overwritten.
+	if current, loadErr := s.store.Load(id); loadErr == nil && current.Status != state.StatusPublishing {
+		return
+	}
+	s.mark(id, state.StatusPublishFailed, err.Error())
+}
+
+// mark sets a task's terminal status.
+func (s *Supervisor) mark(id string, status state.Status, message string) {
+	if err := s.store.Update(id, func(k *state.Task) {
+		k.Status = status
+		if message != "" {
+			k.Error = message
+		}
+	}); err != nil {
+		s.logf("warning: could not record status %s: %v", status, err)
+	}
 }
 
 // readUsage asks the adapter what the run cost. A CLI that reports nothing is

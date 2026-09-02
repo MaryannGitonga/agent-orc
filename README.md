@@ -19,7 +19,7 @@ Early. Built in phases:
 | 0 | `run` for a single task; worktree lifecycle; Claude adapter | done |
 | 1 | Multi-CLI adapters, YAML batch config, JIRA/GitHub source fetching | done |
 | 2 | Subagent seeding, budget caps, `status` | done |
-| 3 | Draft PR chain, commit sanitization, `cleanup`, `logs` | planned |
+| 3 | Draft PR chain, commit sanitization, `cleanup`, `logs` | done |
 | 4 | Agentic review with a capped worker↔reviewer loop | planned |
 
 ## Usage
@@ -52,6 +52,11 @@ agent-orc run tasks.yaml
 Tasks in a batch are independent: each gets its own branch, worktree and
 process, so one that cannot launch does not stop the others.
 
+When the agent exits, the same per-task process sanitizes its commits, pushes
+the branch and opens a **draft** PR — no daemon, and nothing reaches the remote
+unsanitized. `--no-auto-pr` holds off; `agent-orc pr <id>` runs the same three
+steps by hand.
+
 `agent-orc status` prints one row per task, and `agent-orc stop <id>` kills a
 running one (leaving its worktree for you to look at):
 
@@ -76,6 +81,40 @@ as that CLI's own native cap at launch:
 A budget in a unit the CLI cannot enforce is not silently dropped. It is
 warned about at launch and noted under `agent-orc status`. Actual spend is read
 back out of the CLI's own output after the run, where it reports one.
+
+### Commit policy
+
+Before anything is pushed, every commit the task added is rewritten in one pass
+that strips what should not be there and adds what must be:
+
+- **AI attribution trailers are removed** — `Co-authored-by: Claude/Copilot/Codex`,
+  `Claude-Session:`, `🤖 Generated with`, and any `[bot]` co-author. Each CLI is
+  also asked not to add them in the first place, but those settings are
+  inconsistently honoured and an agent crafting a raw `git commit` bypasses
+  them, so the rewrite never depends on them working. Add your own patterns in
+  `~/.agent-orc/trailers.txt`, one regular expression per line.
+- **`Signed-off-by:` is added** to commits missing one when `dco_signoff: true`
+  (or `--dco-signoff`) is set. It is the one trailer that is never stripped.
+- **GPG signing needs nothing new.** A worktree shares the parent repo'"'"'s
+  config, so if `commit.gpgsign=true` is set, the agent'"'"'s commits and the
+  rewrite are signed exactly as a human'"'"'s would be.
+
+Only commits unique to the task'"'"'s own branch are touched, in the task'"'"'s own
+worktree — never the base branch, never anyone else'"'"'s work. If the rewrite
+cannot complete, it is aborted and the branch is left exactly as the agent made
+it; a half-rewritten branch is never pushed.
+
+If the agent pushes its own branch despite being told not to, that branch never
+went through this pass — so the task is flagged `policy_violation` rather than
+treated as if agent-orc had published it.
+
+### Cleaning up
+
+```sh
+agent-orc logs <id> [-f]        # print, or follow until the task finishes
+agent-orc cleanup <id>          # remove the worktree and state; keep the branch
+agent-orc cleanup --all --force # everything, including uncommitted work and logs
+```
 
 ### Subagents
 

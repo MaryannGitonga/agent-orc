@@ -52,6 +52,21 @@ func initRepo(t *testing.T) string {
 	return repo
 }
 
+// initRepoWithRemote creates a repository whose origin is a real bare
+// repository on disk, so pushes actually go somewhere and can be inspected.
+func initRepoWithRemote(t *testing.T) (repo, remote string) {
+	t.Helper()
+	// The path contains "github.com" so the forge layer picks the gh code
+	// path, while every git operation still runs against this local bare
+	// repository — no network, no credentials, real pushes.
+	remote = filepath.Join(t.TempDir(), "github.com", "org", "repo.git")
+	git(t, t.TempDir(), "init", "--bare", "--initial-branch=main", remote)
+	repo = initRepo(t)
+	git(t, repo, "remote", "add", "origin", remote)
+	git(t, repo, "push", "-q", "origin", "main")
+	return repo, remote
+}
+
 // write creates a file, failing the test if it cannot.
 func write(t *testing.T, path, content string) {
 	t.Helper()

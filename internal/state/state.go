@@ -19,19 +19,29 @@ import (
 // Status is where a task is in its lifecycle.
 type Status string
 
-// The statuses a task moves through. Pending means the supervisor has not
-// started the agent yet, failed also covers an agent that never launched, and
-// stopped means a human killed the run with `agent-orc stop`.
+// The statuses a task moves through. A task is not done until the sanitize,
+// push and draft-PR chain that runs after the agent has also finished.
 const (
-	StatusPending Status = "pending"
-	StatusRunning Status = "running"
-	StatusDone    Status = "done"
-	StatusFailed  Status = "failed"
-	StatusStopped Status = "stopped"
+	StatusPending       Status = "pending" // the supervisor has not started the agent
+	StatusRunning       Status = "running"
+	StatusPublishing    Status = "publishing"
+	StatusDone          Status = "done"
+	StatusPublishFailed Status = "publish_failed" // committed but unpublished; retry with `agent-orc pr`
+	StatusFailed        Status = "failed"         // exited non-zero, or never launched
+	StatusStopped       Status = "stopped"        // killed by `agent-orc stop`
+	// StatusPolicyViolation means the agent did something it was told not to
+	// — pushing its branch or opening its own PR — so the change did not go
+	// through agent-orc's sanitize-then-draft path.
+	StatusPolicyViolation Status = "policy_violation"
 )
 
-// Active reports whether the task still has a process behind it.
-func (s Status) Active() bool { return s == StatusPending || s == StatusRunning }
+// Active reports whether work is still in flight for the task.
+func (s Status) Active() bool {
+	return s == StatusPending || s == StatusRunning || s == StatusPublishing
+}
+
+// HasProcess reports whether a live agent process should back this status.
+func (s Status) HasProcess() bool { return s == StatusPending || s == StatusRunning }
 
 // Task is the persisted record of one dispatched task.
 type Task struct {
@@ -55,6 +65,10 @@ type Task struct {
 	BudgetNote string `json:"budget_note,omitempty"`
 	// SeededAgents lists the subagent definitions copied into the worktree.
 	SeededAgents []string `json:"seeded_agents,omitempty"`
+	// PRURL is the draft change opened for the branch.
+	PRURL string `json:"pr_url,omitempty"`
+	// RewrittenCommits counts the commits the sanitization pass changed.
+	RewrittenCommits int `json:"rewritten_commits,omitempty"`
 }
 
 // ErrNotFound is returned when no state file exists for a task ID.

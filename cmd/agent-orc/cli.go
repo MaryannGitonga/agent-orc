@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/gitx"
 	"github.com/MaryannGitonga/agent-orc/internal/orc"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
+	"github.com/MaryannGitonga/agent-orc/internal/sanitize"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 	"github.com/MaryannGitonga/agent-orc/internal/version"
 )
@@ -23,7 +25,11 @@ Usage:
   agent-orc run [flags]         dispatch a single task
   agent-orc run <tasks.yaml>    dispatch every task in a batch file
   agent-orc status              show every task as a table
+  agent-orc logs <task-id> [-f] print a task's log
   agent-orc stop <task-id>      kill a running task
+  agent-orc pr <task-id>        sanitize, push and open the draft PR by hand
+  agent-orc cleanup <task-id|--all>
+                                remove a task's worktree and local state
   agent-orc version             print the version
 
 Run 'agent-orc run -h' for the run flags.`
@@ -39,8 +45,16 @@ func dispatch(argv []string, out io.Writer) error {
 		return runCmd(argv[1:], out)
 	case "status":
 		return statusCmd(argv[1:], out)
+	case "logs":
+		return logsCmd(argv[1:], out)
 	case "stop":
 		return stopCmd(argv[1:], out)
+	case "pr":
+		return prCmd(argv[1:], out)
+	case "cleanup":
+		return cleanupCmd(argv[1:], out)
+	case "sanitize-commit":
+		return sanitizeCommitCmd(argv[1:])
 	case "supervise":
 		return superviseCmd(argv[1:], out)
 	case "version", "--version", "-v":
@@ -70,6 +84,8 @@ func runCmd(argv []string, out io.Writer) error {
 		subs    = fs.Bool("subagents", false, "seed the CLI's subagent definitions into the worktree")
 		usd     = fs.Float64("budget-usd", 0, "cap spend in dollars, where the CLI supports it")
 		credits = fs.Float64("budget-credits", 0, "cap spend in the CLI's own credit unit, where it supports it")
+		noPR    = fs.Bool("no-auto-pr", false, "do not open a draft PR when the agent finishes")
+		dco     = fs.Bool("dco-signoff", false, "add a Signed-off-by trailer to commits missing one")
 	)
 	fs.Usage = func() {
 		fmt.Fprintln(out, "Usage: agent-orc run --id <id> --cli <name> [--prompt <text>] [--source <ref>] [flags]")
@@ -111,6 +127,7 @@ func runCmd(argv []string, out io.Writer) error {
 		id: *id, source: *src, prompt: *prompt, repo: *repo,
 		branch: *branch, base: *base, cli: *cliName, model: *model,
 		subagents: *subs, budgetUSD: *usd, budgetCredits: *credits,
+		autoPR: !*noPR, dcoSignoff: *dco,
 	})
 	if err != nil {
 		return err
@@ -130,7 +147,7 @@ func runBatch(ctx context.Context, d *orc.Dispatcher, path string) error {
 // flags carries the single-task run flags as parsed.
 type flags struct {
 	id, source, prompt, repo, branch, base, cli, model string
-	subagents                                          bool
+	subagents, autoPR, dcoSignoff                      bool
 	budgetUSD, budgetCredits                           float64
 }
 
@@ -168,7 +185,82 @@ func buildTask(f flags) (task.Task, error) {
 		Model:      f.model,
 		Subagents:  f.subagents,
 		Budget:     budget,
+		AutoPR:     f.autoPR,
+		DCOSignoff: f.dcoSignoff,
 	})
+}
+
+// logsCmd prints or tails a task's log.
+func logsCmd(argv []string, out io.Writer) error {
+	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
+	fs.SetOutput(out)
+	follow := fs.Bool("f", false, "keep printing until the task finishes")
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: agent-orc logs <task-id> [-f]")
+	}
+	layout, err := paths.Resolve()
+	if err != nil {
+		return err
+	}
+	return orc.NewReporter(layout.State, out).Logs(fs.Arg(0), *follow)
+}
+
+// prCmd runs the sanitize, push and draft-PR chain by hand.
+func prCmd(argv []string, out io.Writer) error {
+	if len(argv) != 1 {
+		return errors.New("usage: agent-orc pr <task-id>")
+	}
+	layout, err := paths.Resolve()
+	if err != nil {
+		return err
+	}
+	p, err := orc.NewPublisher(layout, out)
+	if err != nil {
+		return err
+	}
+	return p.Publish(argv[0])
+}
+
+// cleanupCmd removes a task's worktree and local state.
+func cleanupCmd(argv []string, out io.Writer) error {
+	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+	fs.SetOutput(out)
+	all := fs.Bool("all", false, "clean up every task that is not running")
+	force := fs.Bool("force", false, "discard uncommitted work and remove logs too")
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	layout, err := paths.Resolve()
+	if err != nil {
+		return err
+	}
+	c := orc.NewCleaner(layout, out)
+	if *all {
+		if fs.NArg() != 0 {
+			return errors.New("pass either a task id or --all, not both")
+		}
+		return c.CleanAll(*force)
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: agent-orc cleanup <task-id|--all> [--force]")
+	}
+	return c.Clean(fs.Arg(0), *force)
+}
+
+// sanitizeCommitCmd applies the commit policy to HEAD. The sanitization rebase
+// execs it once per commit; it is not meant to be typed by hand.
+func sanitizeCommitCmd(argv []string) error {
+	if len(argv) != 0 {
+		return errors.New("usage: agent-orc sanitize-commit")
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	return sanitize.AmendHead(wd)
 }
 
 // statusCmd prints the task table.

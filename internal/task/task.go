@@ -50,6 +50,11 @@ type Task struct {
 	// of the files is the "off" state, so no flag is passed to the CLI itself.
 	Subagents bool   `yaml:"subagents" json:"subagents,omitempty"`
 	Budget    Budget `yaml:",inline" json:"budget"` // omitempty does nothing on a struct
+	// AutoPR opens a draft PR when the agent finishes. On by default: a draft
+	// still needs a human to mark it ready, so it costs nothing in safety.
+	AutoPR bool `yaml:"auto_pr" json:"auto_pr"`
+	// DCOSignoff adds a Signed-off-by trailer to any commit missing one.
+	DCOSignoff bool `yaml:"dco_signoff" json:"dco_signoff,omitempty"`
 }
 
 // Budget caps a task's spend. Each CLI caps cost in its own unit and agent-orc

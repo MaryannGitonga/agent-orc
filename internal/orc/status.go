@@ -64,7 +64,7 @@ func (r *Reporter) Status() error {
 // is gone after a machine reboot, or a supervisor killed outright. Without it,
 // `status` would report a task as running forever.
 func reconcile(store *state.Store, t state.Task) state.Task {
-	if !t.Status.Active() || t.PID == 0 || processAlive(t.PID) {
+	if !t.Status.HasProcess() || t.PID == 0 || processAlive(t.PID) {
 		return t
 	}
 	now := time.Now().UTC()

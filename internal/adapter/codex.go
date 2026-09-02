@@ -29,6 +29,12 @@ func (Codex) BudgetArgs(b task.Budget) ([]string, string) {
 	return nil, "codex exposes no native spend cap; this task's budget is reported, not enforced"
 }
 
+// AttributionArgs returns nothing. Codex's commit_attribution setting lives in
+// the user's own ~/.codex/config.toml rather than in a per-run flag, so it is
+// left to the user to set globally; the sanitization pass covers the run
+// either way.
+func (Codex) AttributionArgs() []string { return nil }
+
 // SubagentDir is empty: Codex has no subagent definitions to seed.
 func (Codex) SubagentDir() string { return "" }
 
