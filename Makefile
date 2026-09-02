@@ -47,6 +47,10 @@ lint:
 lint-install:
 	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
+## print-lint-version: print the pinned golangci-lint version, for CI to install
+print-lint-version:
+	@echo $(GOLANGCI_VERSION)
+
 ## build: compile the binary into bin/
 build:
 	@mkdir -p $(BIN_DIR)
@@ -84,4 +88,4 @@ commit-check:
 ## ci: the ci and commit-policy checks that run locally; do this before pushing
 ci: fmt-check vet lint build test test-integration commit-check
 
-.PHONY: help fmt fmt-check vet lint lint-install build test test-integration tidy verify-clean clean commit-check ci
+.PHONY: help fmt fmt-check vet lint lint-install print-lint-version build test test-integration tidy verify-clean clean commit-check ci

@@ -14,7 +14,6 @@ concurrency:
 
 env:
   GO_VERSION: "1.22"
-  GOLANGCI_VERSION: v1.64.8
 
 jobs:
   fmt:
@@ -45,10 +44,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: ${{ env.GOLANGCI_VERSION }}
-          args: --timeout=5m
+      # golangci-lint-action is avoided deliberately: its config-verify step
+      # fetches a JSON schema from golangci-lint.run and fails the whole job
+      # when that request times out. Installing the pinned release directly is
+      # deterministic, and it lets CI run the same `make lint` a developer
+      # runs. The version comes from the Makefile so there is one pin.
+      - name: Install golangci-lint
+        run: |
+          version=$(make -s print-lint-version)
+          curl -sSfL -o /tmp/golangci-lint.tar.gz \
+            "https://github.com/golangci/golangci-lint/releases/download/$version/golangci-lint-${version#v}-linux-amd64.tar.gz"
+          tar -xzf /tmp/golangci-lint.tar.gz -C /tmp
+          sudo install "/tmp/golangci-lint-${version#v}-linux-amd64/golangci-lint" /usr/local/bin/
+      - run: make lint
 
   build:
     name: build
