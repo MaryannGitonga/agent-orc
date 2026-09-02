@@ -16,11 +16,35 @@ Early. Built in phases:
 
 | Phase | Scope | State |
 | ----- | ----- | ----- |
-| 0 | `run` for a single task; worktree lifecycle; Claude adapter | planned |
+| 0 | `run` for a single task; worktree lifecycle; Claude adapter | done |
 | 1 | Multi-CLI adapters, YAML batch config, JIRA/GitHub source fetching | planned |
 | 2 | Subagent seeding, budget caps, `status` | planned |
 | 3 | Draft PR chain, commit sanitization, `cleanup`, `logs` | planned |
 | 4 | Agentic review with a capped worker↔reviewer loop | planned |
+
+## Usage
+
+```sh
+agent-orc run --id PROJ-1234 --repo . \
+  --prompt "Fix the null-pointer in the FX sync retry handler" \
+  --branch fix/proj-1234 --base-branch main --model opus-4-6
+```
+
+`run` returns as soon as the task is dispatched. It creates a worktree, starts
+a detached supervisor that drives the agent inside it, and records everything
+under `~/.agent-orc` (override with `AGENT_ORC_HOME`):
+
+```
+~/.agent-orc/
+  state/PROJ-1234.json          status, branch, pid, exit code
+  logs/PROJ-1234.log            the agent's own output
+  logs/PROJ-1234.supervisor.log what agent-orc did around it
+  worktrees/PROJ-1234/          the isolated checkout
+```
+
+Only `--id` and `--prompt` are required. `--repo` defaults to the current
+directory, `--base-branch` to the repository's default branch, and `--branch`
+to `agent-orc/<id>`.
 
 ## Development
 
