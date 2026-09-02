@@ -1,6 +1,7 @@
 package orc
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -80,9 +81,12 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 }
 
 // processAlive reports whether a pid still refers to a live process. Signal 0
-// performs the permission and existence checks without delivering anything.
+// runs the existence and permission checks without delivering anything, so
+// only ESRCH means gone: EPERM is a process that is very much alive, just
+// owned by someone else.
 func processAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // spend renders "$spent / $budget" in whichever units are known.
@@ -116,7 +120,25 @@ func elapsed(t state.Task) string {
 	if d < 0 {
 		return unknown
 	}
-	return strings.TrimSuffix(d.String(), "0s0ms")
+	return trimZeroTail(d.String())
+}
+
+// trimZeroTail shortens "1m0s" to "1m" and "2h0m0s" to "2h". Duration.String()
+// always spells out every unit, so a whole number of minutes carries a "0s"
+// that says nothing. A zero component only ever follows another unit's letter,
+// which is what makes stripping it safe: "40s" keeps its seconds, and a bare
+// "0s" is left alone rather than trimmed away to nothing.
+func trimZeroTail(s string) string {
+	for _, zero := range []string{"0s", "0m"} {
+		trimmed := strings.TrimSuffix(s, zero)
+		if trimmed == s || trimmed == "" {
+			continue
+		}
+		if last := trimmed[len(trimmed)-1]; last == 'm' || last == 'h' {
+			s = trimmed
+		}
+	}
+	return s
 }
 
 // orUnknown renders an empty value as the table's placeholder.

@@ -2,7 +2,11 @@ package orc
 
 import (
 	"bytes"
+	"errors"
+	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -153,5 +157,84 @@ func TestStopReportsAnUnknownTask(t *testing.T) {
 	var out bytes.Buffer
 	if err := NewReporter(t.TempDir(), &out).Stop("nope"); err == nil {
 		t.Error("Stop() on an unknown task = nil, want an error")
+	}
+}
+
+// TestProcessAliveTreatsEPERMAsAlive covers the Unix distinction: signal 0 to a
+// process owned by another user returns EPERM, which means it exists.
+func TestProcessAliveTreatsEPERMAsAlive(t *testing.T) {
+	// pid 1 is always running and, unless this test runs as root, not ours.
+	if !processAlive(1) {
+		t.Error("processAlive(1) = false, want true; pid 1 always exists")
+	}
+	if err := syscall.Kill(1, 0); os.Geteuid() != 0 && !errors.Is(err, syscall.EPERM) {
+		t.Skipf("signalling pid 1 gave %v rather than EPERM; nothing to assert", err)
+	}
+}
+
+// TestProcessAliveOnAGonePID checks the other half: a reaped pid is dead.
+func TestProcessAliveOnAGonePID(t *testing.T) {
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("running true: %v", err)
+	}
+	if processAlive(cmd.Process.Pid) {
+		t.Skip("the pid was reused between exit and the check")
+	}
+}
+
+// TestStopOnAProcessThatIsAlreadyGone keeps the record stopped rather than
+// rolling it back to running, which status would then have to reconcile.
+func TestStopOnAProcessThatIsAlreadyGone(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("running true: %v", err)
+	}
+	gone := cmd.Process.Pid
+	if processAlive(gone) {
+		t.Skip("the pid was reused between exit and the check")
+	}
+
+	if err := store.Save(state.Task{
+		Task:      task.Task{ID: "GONE", CLI: task.CLIClaude},
+		Status:    state.StatusRunning,
+		PID:       gone,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := NewReporter(dir, &out).Stop("GONE"); err != nil {
+		t.Fatalf("Stop() on a gone process = %v, want nil", err)
+	}
+	got, err := store.Load("GONE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusStopped {
+		t.Errorf("status = %q, want %q; rolling back re-asserts a dead process as live", got.Status, state.StatusStopped)
+	}
+	if !strings.Contains(out.String(), "already gone") {
+		t.Errorf("output = %q, want it to say the process was already gone", out.String())
+	}
+}
+
+func TestTrimZeroTail(t *testing.T) {
+	for in, want := range map[string]string{
+		"1m0s":    "1m",
+		"2h0m0s":  "2h",
+		"1h30m0s": "1h30m",
+		"40s":     "40s",
+		"45s":     "45s",
+		"0s":      "0s",
+		"1m30s":   "1m30s",
+	} {
+		if got := trimZeroTail(in); got != want {
+			t.Errorf("trimZeroTail(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

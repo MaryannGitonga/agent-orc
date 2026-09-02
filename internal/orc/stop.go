@@ -1,6 +1,7 @@
 package orc
 
 import (
+	"errors"
 	"fmt"
 	"syscall"
 	"time"
@@ -38,7 +39,19 @@ func (r *Reporter) Stop(id string) error {
 		return err
 	}
 	if err := syscall.Kill(t.PID, syscall.SIGTERM); err != nil {
-		// Nothing was signalled, so do not leave the task claiming otherwise.
+		// ESRCH is the process already being gone, which is the end state the
+		// caller asked for. Rolling back here would re-assert a running record
+		// for a process that does not exist, which is what `status` then has to
+		// reconcile away.
+		if errors.Is(err, syscall.ESRCH) {
+			_ = r.store.Update(id, func(k *state.Task) {
+				k.Error = "process was already gone when stop ran"
+			})
+			fmt.Fprintf(r.out, "%s  was already gone; recorded as stopped\n", id)
+			return nil
+		}
+		// Any other failure is a live process this could not signal, so the
+		// task is still running and the record must say so again.
 		_ = r.store.Update(id, func(k *state.Task) {
 			k.Status = t.Status
 			k.FinishedAt = t.FinishedAt
