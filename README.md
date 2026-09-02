@@ -20,7 +20,7 @@ Early. Built in phases:
 | 1 | Multi-CLI adapters, YAML batch config, JIRA/GitHub source fetching | done |
 | 2 | Subagent seeding, budget caps, `status` | done |
 | 3 | Draft PR chain, commit sanitization, `cleanup`, `logs` | done |
-| 4 | Agentic review with a capped worker↔reviewer loop | planned |
+| 4 | Agentic review with a capped worker↔reviewer loop | done |
 
 ## Usage
 
@@ -107,6 +107,37 @@ it; a half-rewritten branch is never pushed.
 If the agent pushes its own branch despite being told not to, that branch never
 went through this pass, so the task is flagged `policy_violation` rather than
 treated as if agent-orc had published it.
+
+### Agentic review
+
+Off by default and triggered by hand. With `review.enabled` set for a task,
+`agent-orc review <id>` runs an independent review of the finished branch:
+
+```sh
+agent-orc run --id PROJ-1234 --prompt "..." --review --review-cli copilot
+agent-orc review PROJ-1234
+```
+
+The reviewer is a **fresh session in its own worktree**, never a resume of the
+worker'"'"'s — a reviewer that inherited the worker'"'"'s conversation would inherit
+its framing of the problem too. It sees the diff and the original task, the way
+a human reviewer sees the PR and not the author'"'"'s scratch work. Left
+unconfigured, it runs on a *different* CLI from the worker, so the two are less
+likely to share a blind spot.
+
+It answers `LGTM` or a list of concrete comments. Comments are handed back to
+the worker'"'"'s own session (resumed by the session ID agent-orc assigned at
+launch) to address on the same branch. Anything that is neither is an error:
+the round stops and waits for a human rather than guessing.
+
+The loop is sequential and hard-capped — `max_rounds`, default 1. The worker
+and reviewer never run at the same time and never message each other. A review
+round draws on the same per-task budget, not a separate pool. None of this
+replaces the human "Ready for review" click.
+
+Codex tasks cannot be reviewed this way: Codex sessions cannot be resumed, so
+there is nowhere to send the feedback. agent-orc says so rather than silently
+starting the worker over.
 
 ### Cleaning up
 

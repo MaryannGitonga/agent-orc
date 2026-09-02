@@ -198,3 +198,95 @@ func TestSubagentDirs(t *testing.T) {
 		t.Errorf("codex SubagentDir() = %q, want it empty", got)
 	}
 }
+
+func TestNewSessionIDLooksLikeAUUIDAndIsUnique(t *testing.T) {
+	first, err := NewSessionID()
+	if err != nil {
+		t.Fatalf("NewSessionID() = %v", err)
+	}
+	if len(first) != 36 || strings.Count(first, "-") != 4 {
+		t.Errorf("NewSessionID() = %q, want a 36-character UUID", first)
+	}
+	// Version 4, variant 10 — Claude Code rejects anything that is not a
+	// well-formed UUID.
+	if first[14] != '4' {
+		t.Errorf("NewSessionID() = %q, want version 4", first)
+	}
+	if !strings.ContainsRune("89ab", rune(first[19])) {
+		t.Errorf("NewSessionID() = %q, want the RFC 4122 variant", first)
+	}
+
+	second, err := NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Error("NewSessionID() returned the same id twice")
+	}
+}
+
+func TestSessionArgsWhereTheCLIAcceptsOne(t *testing.T) {
+	for name, a := range map[string]Adapter{"claude": Claude{}, "copilot": Copilot{}} {
+		t.Run(name, func(t *testing.T) {
+			if got := argAfter(a.SessionArgs("abc"), "--session-id"); got != "abc" {
+				t.Errorf("SessionArgs() = %v, want --session-id abc", a.SessionArgs("abc"))
+			}
+			if got := a.SessionArgs(""); len(got) != 0 {
+				t.Errorf("SessionArgs(\"\") = %v, want nothing", got)
+			}
+		})
+	}
+	// Codex takes no session ID, which is how the review loop knows it cannot
+	// hand feedback back to a Codex worker.
+	if got := (Codex{}).SessionArgs("abc"); len(got) != 0 {
+		t.Errorf("codex SessionArgs() = %v, want nothing", got)
+	}
+}
+
+func TestResumeCommandCarriesTheFeedback(t *testing.T) {
+	for name, a := range map[string]Adapter{"claude": Claude{}, "copilot": Copilot{}} {
+		t.Run(name, func(t *testing.T) {
+			argv, err := a.ResumeCommand("sess-1", "please fix the backoff", "some-model")
+			if err != nil {
+				t.Fatalf("ResumeCommand() = %v", err)
+			}
+			joined := strings.Join(argv, "\x00")
+			if !strings.Contains(joined, "sess-1") {
+				t.Errorf("argv = %v, want the session id", argv)
+			}
+			if !strings.Contains(joined, "please fix the backoff") {
+				t.Errorf("argv = %v, want the feedback prompt", argv)
+			}
+			if argAfter(argv, "--model") != "some-model" {
+				t.Errorf("argv = %v, want the model", argv)
+			}
+		})
+	}
+}
+
+func TestResumeCommandNeedsASessionID(t *testing.T) {
+	if _, err := (Claude{}).ResumeCommand("", "x", ""); err == nil {
+		t.Error("ResumeCommand() without a session id = nil, want an error")
+	}
+}
+
+func TestCodexCannotBeResumed(t *testing.T) {
+	_, err := (Codex{}).ResumeCommand("sess-1", "x", "")
+	if err == nil {
+		t.Fatal("ResumeCommand() = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "review feedback") {
+		t.Errorf("error = %q, want it to explain the consequence", err)
+	}
+}
+
+func TestClaudeParsesTheSessionIDFromItsOutput(t *testing.T) {
+	path := logWith(t, `{"type":"result","session_id":"abc-123","total_cost_usd":0.1}`)
+	got, err := Claude{}.ParseSessionID(path)
+	if err != nil {
+		t.Fatalf("ParseSessionID() = %v", err)
+	}
+	if got != "abc-123" {
+		t.Errorf("ParseSessionID() = %q, want %q", got, "abc-123")
+	}
+}

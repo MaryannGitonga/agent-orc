@@ -13,6 +13,8 @@ defaults:
   subagents: false
   budget_usd: 2.00              # applied as the CLI's own native cap at launch
   auto_pr: true                 # open a draft PR when the agent finishes
+  review:
+    enabled: false              # off unless a task turns it on
 
 tasks:
   - id: PROJ-1234
@@ -21,6 +23,11 @@ tasks:
     branch: fix/proj-1234
     model: opus-4-6             # override the default; this one's tricky
     subagents: true             # complex task, let it delegate
+    review:
+      enabled: true
+      cli: copilot              # a different CLI and model from the worker's,
+      model: gpt-5.1            # so the reviewer has different blind spots
+      max_rounds: 1             # cap on worker-reviewer round-trips
 
   - id: PROJ-1240
     source: github://canonical/data-mesh#87  # no prompt: the issue says it all

@@ -54,7 +54,7 @@ func TestEnsureCreatesEveryDirectory(t *testing.T) {
 	if err := l.Ensure(); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
-	for _, dir := range []string{l.Root, l.State, l.Logs, l.Worktrees} {
+	for _, dir := range []string{l.Root, l.State, l.Logs, l.Worktrees, l.Reviews} {
 		info, err := os.Stat(dir)
 		if err != nil {
 			t.Errorf("Stat(%q) = %v, want the directory to exist", dir, err)
@@ -73,6 +73,8 @@ func TestPerTaskPaths(t *testing.T) {
 		"log":        {l.LogFile("PROJ-1"), "/root/logs/PROJ-1.log"},
 		"supervisor": {l.SupervisorLogFile("PROJ-1"), "/root/logs/PROJ-1.supervisor.log"},
 		"worktree":   {l.Worktree("PROJ-1"), "/root/worktrees/PROJ-1"},
+		"review wt":  {l.ReviewWorktree("PROJ-1"), "/root/reviews/PROJ-1"},
+		"review log": {l.ReviewLogFile("PROJ-1"), "/root/logs/PROJ-1.review.log"},
 	}
 	for name, tc := range tests {
 		if tc.got != tc.want {

@@ -138,3 +138,70 @@ func TestParseAllowsDistinctDefaultBranches(t *testing.T) {
 		t.Errorf("Parse() = %v, want nil", err)
 	}
 }
+
+func TestReviewBlockMergesDefaultsWithOverrides(t *testing.T) {
+	body := `
+defaults:
+  cli: claude
+  review:
+    enabled: false
+    max_rounds: 2
+tasks:
+  - id: A
+    prompt: inherits
+  - id: B
+    prompt: overrides
+    review:
+      enabled: true
+      cli: copilot
+      model: gpt-5.1
+`
+	f, err := Parse([]byte(body))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+
+	a := f.Resolved(f.Tasks[0]).Review
+	if a.Enabled {
+		t.Error("task A review is enabled, want the default's false")
+	}
+	if a.MaxRounds != 2 {
+		t.Errorf("task A max_rounds = %d, want the default 2", a.MaxRounds)
+	}
+
+	b := f.Resolved(f.Tasks[1]).Review
+	if !b.Enabled {
+		t.Error("task B review is disabled, want the override's true")
+	}
+	if b.CLI != task.CLICopilot || b.Model != "gpt-5.1" {
+		t.Errorf("task B reviewer = %q/%q, want copilot/gpt-5.1", b.CLI, b.Model)
+	}
+	// Fields the task did not restate still come from the defaults.
+	if b.MaxRounds != 2 {
+		t.Errorf("task B max_rounds = %d, want the inherited 2", b.MaxRounds)
+	}
+}
+
+func TestReviewIsOffWhenNothingSaysOtherwise(t *testing.T) {
+	f, err := Parse([]byte("defaults:\n  cli: claude\ntasks:\n  - id: A\n    prompt: x\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Resolved(f.Tasks[0]).Review; got.Enabled {
+		t.Error("review is enabled by default, want it opt-in")
+	}
+}
+
+func TestParseRejectsABadReviewBlock(t *testing.T) {
+	tests := map[string]string{
+		"unknown review cli": "tasks:\n  - id: A\n    prompt: x\n    review:\n      cli: gemini\n",
+		"negative rounds":    "tasks:\n  - id: A\n    prompt: x\n    review:\n      max_rounds: -1\n",
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(body)); err == nil {
+				t.Error("Parse() = nil, want an error")
+			}
+		})
+	}
+}

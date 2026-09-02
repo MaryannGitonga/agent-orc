@@ -44,6 +44,15 @@ type Defaults struct {
 	BudgetUSD     *float64 `yaml:"budget_usd"`
 	BudgetCredits *float64 `yaml:"budget_credits"`
 	AutoPR        *bool    `yaml:"auto_pr"`
+	Review        *Review  `yaml:"review"`
+}
+
+// Review is the review block as written in a batch file.
+type Review struct {
+	Enabled   *bool    `yaml:"enabled"`
+	CLI       task.CLI `yaml:"cli"`
+	Model     string   `yaml:"model"`
+	MaxRounds *int     `yaml:"max_rounds"`
 }
 
 // Entry is one task as written in the batch file. Every field is optional
@@ -65,6 +74,7 @@ type Entry struct {
 	BudgetUSD     *float64 `yaml:"budget_usd"`
 	BudgetCredits *float64 `yaml:"budget_credits"`
 	AutoPR        *bool    `yaml:"auto_pr"`
+	Review        *Review  `yaml:"review"`
 }
 
 // Load reads and validates a batch file. Paths inside it are resolved relative
@@ -165,6 +175,14 @@ func (f *File) validate() error {
 		if err := (task.Budget{USD: t.BudgetUSD, Credits: t.BudgetCredits}).Validate(); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 		}
+		if r := t.Review; r != nil {
+			if r.CLI != "" && !r.CLI.Known() {
+				errs = append(errs, fmt.Errorf("%s: unsupported review cli %q, want one of %v", where, r.CLI, task.KnownCLIs))
+			}
+			if r.MaxRounds != nil && *r.MaxRounds < 0 {
+				errs = append(errs, fmt.Errorf("%s: review max_rounds must not be negative", where))
+			}
+		}
 	}
 	if f.Defaults.CLI != "" && !f.Defaults.CLI.Known() {
 		errs = append(errs, fmt.Errorf("defaults: unsupported cli %q, want one of %v", f.Defaults.CLI, task.KnownCLIs))
@@ -214,7 +232,32 @@ func (f *File) Resolved(e Entry) task.Task {
 		},
 		AutoPR:     autoPR,
 		DCOSignoff: f.DCOSignoff,
+		Review:     mergeReview(e.Review, f.Defaults.Review),
 	}
+}
+
+// mergeReview layers a task's review block over the batch default, field by
+// field, so a task can change the reviewer without restating the whole block.
+func mergeReview(entry, defaults *Review) task.Review {
+	var out task.Review
+	for _, r := range []*Review{defaults, entry} {
+		if r == nil {
+			continue
+		}
+		if r.Enabled != nil {
+			out.Enabled = *r.Enabled
+		}
+		if r.CLI != "" {
+			out.CLI = r.CLI
+		}
+		if r.Model != "" {
+			out.Model = r.Model
+		}
+		if r.MaxRounds != nil {
+			out.MaxRounds = *r.MaxRounds
+		}
+	}
+	return out
 }
 
 // firstBool returns the first value that was actually set.

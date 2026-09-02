@@ -82,12 +82,12 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	// Check the agent's binary before touching the repository. The supervisor
 	// would otherwise fail on exec, after a worktree, a branch and a state file
 	// already exist for a task that never had a chance to run.
-	argv, err := buildCommand(t)
+	bin, err := agentBinary(t)
 	if err != nil {
 		return err
 	}
-	if _, err := exec.LookPath(argv[0]); err != nil {
-		return fmt.Errorf("task %q needs %s, but %q is not on PATH: %w", t.ID, t.CLI, argv[0], err)
+	if _, err := exec.LookPath(bin); err != nil {
+		return fmt.Errorf("task %q needs %s, but %q is not on PATH: %w", t.ID, t.CLI, bin, err)
 	}
 
 	repo, err := gitx.Open(t.Repo)
@@ -122,6 +122,18 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		return err
 	}
 
+	// The session ID is assigned here rather than discovered afterwards, so a
+	// CLI that accepts one is resumable even if it says nothing about its own
+	// session. That is what lets review feedback go back to this session.
+	sessionID, err := adapter.NewSessionID()
+	if err != nil {
+		_ = repo.RemoveWorktree(worktree, true)
+		return err
+	}
+	if len(a.SessionArgs(sessionID)) == 0 {
+		sessionID = ""
+	}
+
 	_, budgetNote := a.BudgetArgs(t.Budget)
 	record := state.Task{
 		Task:         t,
@@ -131,6 +143,7 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		StartedAt:    time.Now().UTC(),
 		BudgetNote:   budgetNote,
 		SeededAgents: seeded,
+		SessionID:    sessionID,
 	}
 	if err := d.store.Save(record); err != nil {
 		// Nothing is running yet, so undo both halves of what AddWorktree did.

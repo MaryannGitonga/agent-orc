@@ -1,6 +1,10 @@
 package adapter
 
-import "github.com/MaryannGitonga/agent-orc/internal/task"
+import (
+	"fmt"
+
+	"github.com/MaryannGitonga/agent-orc/internal/task"
+)
 
 // Codex drives the OpenAI Codex CLI.
 type Codex struct{}
@@ -41,3 +45,17 @@ func (Codex) SubagentDir() string { return "" }
 // ParseUsage reports nothing: Codex writes no machine-readable cost to its
 // output.
 func (Codex) ParseUsage(string) (*Usage, error) { return nil, ErrNoUsage }
+
+// SessionArgs returns nothing: Codex takes no session ID at launch.
+func (Codex) SessionArgs(string) []string { return nil }
+
+// ParseSessionID returns nothing: Codex writes no machine-readable session
+// marker to its output.
+func (Codex) ParseSessionID(string) (string, error) { return "", nil }
+
+// ResumeCommand reports that Codex cannot be resumed by agent-orc. Saying so
+// is the point: the review loop needs to hand feedback back to the original
+// session, and a task run under Codex simply cannot do that.
+func (Codex) ResumeCommand(string, string, string) ([]string, error) {
+	return nil, fmt.Errorf("codex sessions cannot be resumed by agent-orc, so review feedback cannot be looped back")
+}

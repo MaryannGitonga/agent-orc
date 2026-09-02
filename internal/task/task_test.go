@@ -81,3 +81,47 @@ func TestRenderAppendsOperatingRules(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewerCLIDefaultsToADifferentCLI(t *testing.T) {
+	// An unset reviewer should not share the worker's blind spots, so it
+	// defaults to some other CLI rather than the same one.
+	for _, worker := range KnownCLIs {
+		got := Task{CLI: worker}.ReviewerCLI()
+		if got == worker {
+			t.Errorf("worker %q got reviewer %q, want a different CLI", worker, got)
+		}
+		if !got.Known() {
+			t.Errorf("worker %q got reviewer %q, which is not a known CLI", worker, got)
+		}
+	}
+}
+
+func TestReviewerCLIHonoursAnExplicitChoice(t *testing.T) {
+	tk := Task{CLI: CLIClaude, Review: Review{CLI: CLIClaude}}
+	if got := tk.ReviewerCLI(); got != CLIClaude {
+		t.Errorf("ReviewerCLI() = %q, want the configured %q even when it matches the worker", got, CLIClaude)
+	}
+}
+
+func TestReviewRoundsDefaultsToOne(t *testing.T) {
+	tests := map[int]int{0: 1, -1: 1, 3: 3}
+	for set, want := range tests {
+		if got := (Review{MaxRounds: set}).Rounds(); got != want {
+			t.Errorf("Review{MaxRounds: %d}.Rounds() = %d, want %d", set, got, want)
+		}
+	}
+}
+
+func TestValidateRejectsABadReviewBlock(t *testing.T) {
+	tk := valid()
+	tk.Review = Review{Enabled: true, CLI: "gemini"}
+	if err := tk.Validate(); err == nil || !strings.Contains(err.Error(), "review cli") {
+		t.Errorf("Validate() = %v, want an error naming the review cli", err)
+	}
+
+	tk = valid()
+	tk.Review = Review{Enabled: true, MaxRounds: -2}
+	if err := tk.Validate(); err == nil || !strings.Contains(err.Error(), "max_rounds") {
+		t.Errorf("Validate() = %v, want an error naming max_rounds", err)
+	}
+}

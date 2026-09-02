@@ -41,7 +41,7 @@ func (s *Supervisor) Supervise(id string) error {
 	}
 	defer logFile.Close()
 
-	argv, err := buildCommand(record.Task)
+	argv, err := buildCommand(record.Task, record.SessionID)
 	if err != nil {
 		return s.fail(id, err)
 	}
@@ -93,6 +93,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	}
 
 	usage := s.readUsage(record)
+	sessionID := s.readSessionID(record)
 
 	if err := s.store.Update(id, func(k *state.Task) {
 		// A task a human stopped stays stopped; the non-zero exit that came
@@ -107,6 +108,9 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 		if usage != nil {
 			k.SpentUSD = usage.CostUSD
 			k.Tokens = usage.Tokens
+		}
+		if sessionID != "" {
+			k.SessionID = sessionID
 		}
 	}); err != nil {
 		return err
@@ -187,6 +191,23 @@ func (s *Supervisor) readUsage(record state.Task) *adapter.Usage {
 	return usage
 }
 
+// readSessionID falls back to whatever the CLI wrote about its own session,
+// for the ones that will not accept an ID at launch.
+func (s *Supervisor) readSessionID(record state.Task) string {
+	if record.SessionID != "" {
+		return record.SessionID
+	}
+	a, err := adapter.For(record.CLI)
+	if err != nil {
+		return ""
+	}
+	id, err := a.ParseSessionID(record.LogPath)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
 // fail records a task that could not be run at all.
 func (s *Supervisor) fail(id string, cause error) error {
 	now := time.Now().UTC()
@@ -206,11 +227,26 @@ func (s *Supervisor) logf(format string, args ...any) {
 	fmt.Fprintf(s.out, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
 }
 
-// buildCommand returns the argv for a task's CLI.
-func buildCommand(t task.Task) ([]string, error) {
+// agentBinary returns the executable a task's CLI runs as, so a caller can
+// check it exists before committing to any on-disk work.
+func agentBinary(t task.Task) (string, error) {
+	a, err := adapter.For(t.CLI)
+	if err != nil {
+		return "", err
+	}
+	argv := a.BuildCommand(t)
+	if len(argv) == 0 {
+		return "", fmt.Errorf("the %s adapter produced an empty command", t.CLI)
+	}
+	return argv[0], nil
+}
+
+// buildCommand returns the argv for a task's CLI, pinned to the session ID
+// agent-orc assigned so the session can be resumed later.
+func buildCommand(t task.Task, sessionID string) ([]string, error) {
 	a, err := adapter.For(t.CLI)
 	if err != nil {
 		return nil, err
 	}
-	return a.BuildCommand(t), nil
+	return append(a.BuildCommand(t), a.SessionArgs(sessionID)...), nil
 }
