@@ -270,3 +270,35 @@ func TestRunRefusesAnUnreadableStateFile(t *testing.T) {
 		t.Error("a worktree was created for a task that never launched")
 	}
 }
+
+// TestRunCleansUpWhenTheStateWriteFails checks the rollback is complete: a
+// launch that dies after the worktree exists must leave neither the worktree
+// nor the branch, so the same id can simply be retried.
+func TestRunCleansUpWhenTheStateWriteFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; directory permissions would not block the write")
+	}
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	// A read-only state directory lets the layout check pass and the worktree
+	// be created, then fails the state write, which is the path under test.
+	stateDir := filepath.Join(home, "state")
+	if err := os.MkdirAll(stateDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o755) })
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "PROJ-8", "--repo", repo, "--cli", "claude", "--prompt", "x")
+	if err == nil {
+		t.Fatalf("run with an unwritable state directory succeeded, want an error\n%s", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "worktrees", "PROJ-8")); !os.IsNotExist(statErr) {
+		t.Error("the worktree was left behind after a failed launch")
+	}
+	if b := strings.TrimSpace(git(t, repo, "branch", "--list", "agent-orc/proj-8")); b != "" {
+		t.Errorf("branch %q was left behind after a failed launch", b)
+	}
+}

@@ -159,3 +159,30 @@ func TestAddWorktreeReportsGitStderr(t *testing.T) {
 		t.Errorf("error = %q, want it to name the missing base branch", err)
 	}
 }
+
+func TestDeleteBranch(t *testing.T) {
+	dir := newRepo(t)
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	if err := r.AddWorktree(wt, "feat/gone", "main"); err != nil {
+		t.Fatalf("AddWorktree() = %v", err)
+	}
+	if err := r.RemoveWorktree(wt, true); err != nil {
+		t.Fatalf("RemoveWorktree() = %v", err)
+	}
+	if !r.BranchExists("feat/gone") {
+		t.Fatal("BranchExists(feat/gone) = false before delete, want true")
+	}
+	if err := r.DeleteBranch("feat/gone"); err != nil {
+		t.Fatalf("DeleteBranch() = %v", err)
+	}
+	if r.BranchExists("feat/gone") {
+		t.Error("BranchExists(feat/gone) = true after delete, want false")
+	}
+	if err := r.DeleteBranch("never-existed"); err == nil {
+		t.Error("DeleteBranch(never-existed) = nil, want an error")
+	}
+}

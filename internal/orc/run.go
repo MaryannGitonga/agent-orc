@@ -93,8 +93,11 @@ func (d *Dispatcher) Run(t task.Task) error {
 		StartedAt: time.Now().UTC(),
 	}
 	if err := d.store.Save(record); err != nil {
-		// Nothing is running yet, so undo the worktree rather than orphan it.
+		// Nothing is running yet, so undo both halves of what AddWorktree did.
+		// The branch has to go too: left behind, it is an empty branch at base
+		// that makes a retry with the same id fail on the collision check.
 		_ = repo.RemoveWorktree(worktree, true)
+		_ = repo.DeleteBranch(t.Branch)
 		return err
 	}
 
@@ -134,7 +137,12 @@ func (d *Dispatcher) startSupervisor(id string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting supervisor for %q: %w", id, err)
 	}
-	// The supervisor outlives this process; release it so it is not left a
-	// zombie when agent-orc exits immediately afterwards.
-	return cmd.Process.Release()
+	// The supervisor is running from here on and owns the task's state. Release
+	// only drops this process's handle on it, so a failure is worth reporting
+	// but must not be returned: the caller marks the task failed on error, and
+	// writing that would race the state the supervisor is already updating.
+	if err := cmd.Process.Release(); err != nil {
+		fmt.Fprintf(d.out, "warning: could not release supervisor %d: %v\n", cmd.Process.Pid, err)
+	}
+	return nil
 }

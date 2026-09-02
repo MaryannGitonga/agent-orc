@@ -61,6 +61,15 @@ func (r *Repo) AddWorktree(dir, branch, base string) error {
 	return nil
 }
 
+// DeleteBranch removes a local branch. It exists to undo a branch agent-orc
+// created moments earlier, not to throw away a user's work.
+func (r *Repo) DeleteBranch(branch string) error {
+	if _, err := run(r.Dir, "branch", "-D", branch); err != nil {
+		return fmt.Errorf("deleting branch %q: %w", branch, err)
+	}
+	return nil
+}
+
 // RemoveWorktree deletes the worktree at dir. Its branch is left alone: that
 // is where the task's work lives.
 func (r *Repo) RemoveWorktree(dir string, force bool) error {

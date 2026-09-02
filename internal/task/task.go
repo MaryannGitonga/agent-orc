@@ -56,7 +56,10 @@ func (t Task) Validate() error {
 	return errors.Join(errs...)
 }
 
-// DefaultBranch is the branch name used when a task does not specify one.
+// DefaultBranch is the branch name used when a task does not specify one. It
+// lowercases the id, so two ids differing only in case share a branch; the
+// second one to run fails on the branch collision check rather than colliding
+// silently.
 func DefaultBranch(id string) string {
 	return "agent-orc/" + strings.ToLower(id)
 }
