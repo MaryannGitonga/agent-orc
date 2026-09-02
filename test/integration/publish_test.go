@@ -258,3 +258,41 @@ func TestBatchDCOSignoffAppliesToEveryTask(t *testing.T) {
 		t.Errorf("the batch's dco_signoff was not applied:\n%s", pushed)
 	}
 }
+
+// TestPRRetriesAfterAPushThatSucceeded covers the recovery agent-orc advertises
+// for publish_failed. If the push lands and only the draft-open fails, the
+// retry must open the draft, not mistake agent-orc's own pushed branch for the
+// agent having pushed it.
+func TestPRRetriesAfterAPushThatSucceeded(t *testing.T) {
+	repo, _ := initRepoWithRemote(t)
+	home := t.TempDir()
+	ghReceipt := filepath.Join(t.TempDir(), "gh")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), dirtyCommit)
+	// The draft-open fails while the push succeeds: the retryable case.
+	stubInto(t, stub, "gh", ghReceipt, "echo 'gh: not authenticated' >&2\nexit 1")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "RETRY-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "RETRY-1", "publish_failed")
+
+	// The branch is on the remote now, pushed by agent-orc itself.
+	if remote := strings.TrimSpace(git(t, repo, "ls-remote", "--heads", "origin", "agent-orc/retry-1")); remote == "" {
+		t.Fatal("the first attempt did not push, so this is not the case under test")
+	}
+
+	// gh works this time; the retry must finish the job.
+	stubInto(t, stub, "gh", ghReceipt, `printf 'https://example.com/pr/9\n'`)
+	out, err := orcRun(t, home, stub, "pr", "RETRY-1")
+	if err != nil {
+		t.Fatalf("agent-orc pr after a failed draft-open = %v\n%s", err, out)
+	}
+	got := loadRecord(t, home, "RETRY-1")
+	if got.Status != "done" {
+		t.Errorf("status = %q, want done after a successful retry", got.Status)
+	}
+	if got.PRURL == "" {
+		t.Error("no pr_url recorded after the retry")
+	}
+}

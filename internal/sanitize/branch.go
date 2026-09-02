@@ -95,7 +95,12 @@ func (r Rewriter) signOff() string {
 
 // messages returns the message of every commit the branch has ahead of base.
 func (r Rewriter) messages() ([]string, error) {
-	cmd := exec.Command("git", "log", "--no-merges", "--reverse", "--format=%B%x00", r.Base+"..HEAD")
+	// Merges included deliberately. The rewrite is --rebase-merges, so a merge
+	// commit's message goes through the per-commit pass like any other; if the
+	// pre-check skipped merges, a trailer living only on a merge message would
+	// leave needed at zero, skip the rewrite entirely, and reach the remote
+	// unsanitized.
+	cmd := exec.Command("git", "log", "--reverse", "--format=%B%x00", r.Base+"..HEAD")
 	cmd.Dir = r.Worktree
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

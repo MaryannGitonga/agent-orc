@@ -117,6 +117,13 @@ func (p *Publisher) Publish(id string) error {
 	if err := p.opener.Push(req); err != nil {
 		return err
 	}
+	// Record the pushed commit before the draft is opened. If opening fails,
+	// this is what lets the retry tell its own branch from an agent-pushed one.
+	if pushed, shaErr := p.opener.LocalSHA(record.Worktree, "HEAD"); shaErr == nil {
+		if err := p.store.Update(id, func(k *state.Task) { k.PushedSHA = pushed }); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintf(p.out, "%s  pushed %s\n", id, record.Branch)
 
 	url, err := p.opener.OpenDraft(forge.Detect(remoteURL), req)
@@ -124,7 +131,15 @@ func (p *Publisher) Publish(id string) error {
 		return err
 	}
 
-	if err := p.store.Update(id, func(k *state.Task) { k.PRURL = url }); err != nil {
+	// Publishing succeeded, so the task is done and any error from an earlier
+	// failed attempt is stale. Recording it here rather than only in the
+	// supervisor is what lets a manual `agent-orc pr` retry actually finish a
+	// task that was left at publish_failed.
+	if err := p.store.Update(id, func(k *state.Task) {
+		k.PRURL = url
+		k.Status = state.StatusDone
+		k.Error = ""
+	}); err != nil {
 		return err
 	}
 	fmt.Fprintf(p.out, "%s  draft opened %s\n", id, url)
@@ -139,11 +154,18 @@ func (p *Publisher) Publish(id string) error {
 // been through sanitization, so it is surfaced as a policy violation rather
 // than quietly treated as if agent-orc had published it.
 func (p *Publisher) checkAgentDidNotPublish(record *state.Task) error {
-	published, err := p.opener.RemoteBranchExists(record.Worktree, defaultRemote, record.Branch)
+	remoteSHA, err := p.opener.RemoteBranchSHA(record.Worktree, defaultRemote, record.Branch)
 	if err != nil {
 		return err
 	}
-	if !published {
+	if remoteSHA == "" {
+		return nil
+	}
+	// A branch sitting at exactly the commit agent-orc pushed is agent-orc's
+	// own work, not the agent's. This is what makes `agent-orc pr` able to
+	// recover a publish_failed whose push had already succeeded and whose
+	// draft-open had not.
+	if record.PushedSHA != "" && remoteSHA == record.PushedSHA {
 		return nil
 	}
 	if uerr := p.store.Update(record.ID, func(k *state.Task) {

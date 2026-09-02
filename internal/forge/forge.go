@@ -87,11 +87,32 @@ func New() *Opener { return &Opener{Runner: ExecRunner{}} }
 // means the agent pushed it itself, against the instructions it was given,
 // which is a trust problem with that CLI and not something to paper over.
 func (o *Opener) RemoteBranchExists(worktree, remote, branch string) (bool, error) {
+	sha, err := o.RemoteBranchSHA(worktree, remote, branch)
+	return sha != "", err
+}
+
+// RemoteBranchSHA returns the commit a remote branch points at, or an empty
+// string when the branch is not there. Callers use it to tell a branch they
+// pushed themselves from one someone else put there.
+func (o *Opener) RemoteBranchSHA(worktree, remote, branch string) (string, error) {
 	out, err := o.Runner.Run(worktree, "git", "ls-remote", "--heads", remote, "refs/heads/"+branch)
 	if err != nil {
-		return false, fmt.Errorf("checking whether %s/%s already exists: %w: %s", remote, branch, err, out)
+		return "", fmt.Errorf("checking whether %s/%s already exists: %w: %s", remote, branch, err, out)
 	}
-	return strings.TrimSpace(out) != "", nil
+	line := strings.TrimSpace(out)
+	if line == "" {
+		return "", nil
+	}
+	return strings.Fields(line)[0], nil
+}
+
+// LocalSHA returns the commit a local ref points at.
+func (o *Opener) LocalSHA(worktree, ref string) (string, error) {
+	out, err := o.Runner.Run(worktree, "git", "rev-parse", ref)
+	if err != nil {
+		return "", fmt.Errorf("resolving %q: %w: %s", ref, err, out)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // RemoteURL returns the push URL of a remote.

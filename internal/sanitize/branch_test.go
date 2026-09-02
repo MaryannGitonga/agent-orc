@@ -219,3 +219,54 @@ func mergeCount(t *testing.T, dir string) int {
 	}
 	return len(strings.Split(out, "\n"))
 }
+
+// TestRewriterSeesTrailersOnMergeCommits closes the seam between the pre-check
+// and the rewrite. The rewrite is --rebase-merges, so a merge message goes
+// through the per-commit pass; if the pre-check skipped merges, a trailer
+// living only on a merge would leave the count at zero, skip the rewrite
+// entirely, and reach the remote unsanitized.
+func TestRewriterSeesTrailersOnMergeCommits(t *testing.T) {
+	self, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no true binary to stand in for the per-commit pass")
+	}
+	// Every ordinary commit is clean; only the merge carries the trailer.
+	dir := repoWith(t, "feat: clean work\n")
+
+	run(t, dir, "checkout", "-q", "main")
+	if err := os.WriteFile(filepath.Join(dir, "main.txt"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, dir, "add", ".")
+	run(t, dir, "commit", "--no-gpg-sign", "-m", "feat: main moves on")
+	run(t, dir, "checkout", "-q", "feat/x")
+	run(t, dir, "merge", "-q", "--no-ff", "--no-gpg-sign", "main",
+		"-m", "chore: merge main\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+
+	r := Rewriter{Worktree: dir, Base: "main"}
+	msgs, err := r.messages()
+	if err != nil {
+		t.Fatalf("messages() = %v", err)
+	}
+	var sawTrailer bool
+	for _, m := range msgs {
+		if strings.Contains(m, "Co-Authored-By") {
+			sawTrailer = true
+		}
+	}
+	if !sawTrailer {
+		t.Fatal("messages() skipped the merge commit, so its trailer would never be rewritten")
+	}
+
+	policy, err := NewPolicy(DefaultPatterns, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := (Rewriter{Worktree: dir, Base: "main", Policy: policy, Patterns: DefaultPatterns, Self: self}).Run()
+	if err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if n == 0 {
+		t.Error("Run() skipped the branch; a trailer on a merge must still trigger the rewrite")
+	}
+}

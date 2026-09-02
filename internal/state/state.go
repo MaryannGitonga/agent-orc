@@ -67,6 +67,9 @@ type Task struct {
 	SeededAgents []string `json:"seeded_agents,omitempty"`
 	// PRURL is the draft change opened for the branch.
 	PRURL string `json:"pr_url,omitempty"`
+	// PushedSHA is the commit agent-orc last pushed for this task. It is what
+	// distinguishes its own pushed branch from one the agent pushed itself.
+	PushedSHA string `json:"pushed_sha,omitempty"`
 	// RewrittenCommits counts the commits the sanitization pass changed.
 	RewrittenCommits int `json:"rewritten_commits,omitempty"`
 }

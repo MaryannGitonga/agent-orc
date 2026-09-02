@@ -26,6 +26,15 @@ var gitEnv = []string{
 	"GIT_COMMITTER_EMAIL=test@example.invalid",
 	"GIT_CONFIG_GLOBAL=" + os.DevNull,
 	"GIT_CONFIG_SYSTEM=" + os.DevNull,
+	// Config can also arrive through the environment, and a setting such as
+	// safe.bareRepository=explicit injected that way breaks the bare remote
+	// these tests push to. Zero discards any GIT_CONFIG_KEY_n/VALUE_n pairs
+	// the surrounding shell set.
+	"GIT_CONFIG_COUNT=0",
+	// Config can also arrive through the environment, and a setting such as
+	// safe.bareRepository=explicit injected that way breaks the bare remote
+	// these tests push to. Zero discards any GIT_CONFIG_KEY_n/VALUE_n pairs
+	// the surrounding shell set.
 }
 
 // git runs a git command in dir and fails the test if it errors.
