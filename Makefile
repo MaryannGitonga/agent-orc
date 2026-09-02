@@ -55,9 +55,12 @@ build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/agent-orc
 
-## test: run unit tests with the race detector
-test:
+## test-unit: run unit tests with the race detector
+test-unit:
 	$(GO) test -race -coverprofile=coverage.out -covermode=atomic $(PKG)
+
+## test: alias for test-unit
+test: test-unit
 
 ## test-integration: run tests that shell out to real git/gh
 test-integration:
@@ -85,6 +88,6 @@ commit-check:
 	@./scripts/check-commits.sh $(RANGE)
 
 ## ci: the ci and commit-policy checks that run locally; do this before pushing
-ci: fmt-check vet lint build test test-integration commit-check
+ci: fmt-check vet lint build test-unit test-integration commit-check
 
-.PHONY: help fmt fmt-check vet lint lint-install print-lint-version build test test-integration tidy verify-clean clean commit-check ci
+.PHONY: help fmt fmt-check vet lint lint-install print-lint-version build test-unit test test-integration tidy verify-clean clean commit-check ci
