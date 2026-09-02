@@ -114,15 +114,22 @@ func (p *Publisher) Publish(id string) error {
 		Title:      p.title(record),
 		Body:       p.body(record, commits),
 	}
+	// Resolve what is about to be pushed before pushing it. Reading the branch
+	// afterwards would leave a window where the push succeeded but the commit
+	// went unrecorded, and a retry would then mistake agent-orc's own branch
+	// for one the agent pushed. Failing here costs nothing: nothing has been
+	// published yet.
+	pushed, err := p.opener.LocalSHA(record.Worktree, record.Branch)
+	if err != nil {
+		return err
+	}
 	if err := p.opener.Push(req); err != nil {
 		return err
 	}
-	// Record the pushed commit before the draft is opened. If opening fails,
-	// this is what lets the retry tell its own branch from an agent-pushed one.
-	if pushed, shaErr := p.opener.LocalSHA(record.Worktree, "HEAD"); shaErr == nil {
-		if err := p.store.Update(id, func(k *state.Task) { k.PushedSHA = pushed }); err != nil {
-			return err
-		}
+	// Recorded before the draft is opened, because that is the step that can
+	// fail and leave the branch on the remote for a later retry to recognise.
+	if err := p.store.Update(id, func(k *state.Task) { k.PushedSHA = pushed }); err != nil {
+		return err
 	}
 	fmt.Fprintf(p.out, "%s  pushed %s\n", id, record.Branch)
 
