@@ -58,16 +58,14 @@ func waitForStatus(t *testing.T, home, id string, want ...string) record {
 	return last
 }
 
-// TestRunDispatchesATaskEndToEnd covers the whole Phase 0 lifecycle: a
-// worktree is created on a new branch, the agent runs inside it with the
-// rendered prompt, and the task is recorded as done.
+// TestRunDispatchesATaskEndToEnd covers the whole lifecycle: a worktree on a
+// new branch, the agent run inside it, and the task recorded as done.
 func TestRunDispatchesATaskEndToEnd(t *testing.T) {
 	repo := initRepo(t)
 	home := t.TempDir()
 	receipt := filepath.Join(t.TempDir(), "receipt")
 
-	// The stub commits inside the worktree, standing in for an agent that
-	// does its work and commits locally.
+	// The stub stands in for an agent that works and commits locally.
 	stub := stubAgent(t, "claude", receipt,
 		"echo 'agent output' \n"+
 			"printf 'fixed\\n' > fix.txt\n"+
@@ -127,8 +125,8 @@ func TestRunDispatchesATaskEndToEnd(t *testing.T) {
 	}
 }
 
-// TestRunRecordsAFailingAgent checks that a non-zero exit is surfaced rather
-// than swallowed, and that the worktree is left in place for inspection.
+// TestRunRecordsAFailingAgent: a non-zero exit is surfaced, and the worktree
+// is left in place for inspection.
 func TestRunRecordsAFailingAgent(t *testing.T) {
 	repo := initRepo(t)
 	home := t.TempDir()
@@ -152,8 +150,7 @@ func TestRunRecordsAFailingAgent(t *testing.T) {
 	}
 }
 
-// TestRunRejectsADuplicateTaskID guards the invariant that one ID owns one
-// worktree, branch, log and state file.
+// TestRunRejectsADuplicateTaskID: one ID owns one worktree, branch and log.
 func TestRunRejectsADuplicateTaskID(t *testing.T) {
 	repo := initRepo(t)
 	home := t.TempDir()
@@ -176,7 +173,7 @@ func TestRunRejectsADuplicateTaskID(t *testing.T) {
 	}
 }
 
-// TestRunRejectsAnUnknownBaseBranch fails at launch rather than creating a
+// TestRunRejectsAnUnknownBaseBranch fails at launch rather than making a
 // worktree from a branch that is not there.
 func TestRunRejectsAnUnknownBaseBranch(t *testing.T) {
 	repo := initRepo(t)

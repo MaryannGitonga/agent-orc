@@ -31,8 +31,7 @@ func TestClaudeCommandPassesTheModelOnlyWhenSet(t *testing.T) {
 		t.Errorf("argv = %q, want --model opus-4-6", withModel)
 	}
 
-	// An unset model must leave the flag off entirely so the CLI's own
-	// default applies, rather than passing an empty string.
+	// An unset model must leave the flag off, not pass an empty string.
 	if got := ClaudeCommand(task.Task{Prompt: "x"}); slices.Contains(got, "--model") {
 		t.Errorf("argv = %q, want no --model flag when the task sets no model", got)
 	}

@@ -1,6 +1,5 @@
-// Package state persists what agent-orc knows about a task as one JSON file
-// per task. Files, not a database: there are at most a handful of tasks in
-// flight and `cat` is a perfectly good debugger.
+// Package state persists each task as one JSON file. Files, not a database:
+// there are only ever a handful of tasks and `cat` is a fine debugger.
 package state
 
 import (
@@ -20,16 +19,13 @@ import (
 // Status is where a task is in its lifecycle.
 type Status string
 
-// The statuses a task moves through.
+// The statuses a task moves through. Pending means the supervisor has not
+// started the agent yet; failed also covers an agent that never launched.
 const (
-	// StatusPending is written before the supervisor has started the agent.
 	StatusPending Status = "pending"
-	// StatusRunning means the agent process is alive.
 	StatusRunning Status = "running"
-	// StatusDone means the agent exited successfully.
-	StatusDone Status = "done"
-	// StatusFailed means the agent exited non-zero or could not be launched.
-	StatusFailed Status = "failed"
+	StatusDone    Status = "done"
+	StatusFailed  Status = "failed"
 )
 
 // Task is the persisted record of one dispatched task.
@@ -140,8 +136,7 @@ func (s *Store) List() ([]Task, error) {
 	return tasks, nil
 }
 
-// Delete removes the record for id. Deleting a task that does not exist is not
-// an error; the desired end state is the same either way.
+// Delete removes the record for id. Deleting a missing record is not an error.
 func (s *Store) Delete(id string) error {
 	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("deleting state for %q: %w", id, err)

@@ -82,8 +82,7 @@ func runCmd(argv []string, out io.Writer) error {
 	return d.Run(t)
 }
 
-// buildTask applies the defaults that need the filesystem or git to resolve,
-// then hands back a task ready to validate.
+// buildTask applies the defaults that need the filesystem or git to resolve.
 func buildTask(id, prompt, repo, branch, base, cliName, model string) (task.Task, error) {
 	if strings.TrimSpace(id) == "" {
 		return task.Task{}, errors.New("--id is required")
@@ -122,8 +121,8 @@ func buildTask(id, prompt, repo, branch, base, cliName, model string) (task.Task
 	return t, t.Validate()
 }
 
-// superviseCmd runs the per-task supervisor. It is spawned by 'run', not meant
-// to be typed by hand, so it is left out of the usage text.
+// superviseCmd runs the per-task supervisor. It is spawned by 'run', so it is
+// left out of the usage text.
 func superviseCmd(argv []string, out io.Writer) error {
 	if len(argv) != 1 {
 		return errors.New("usage: agent-orc supervise <task-id>")

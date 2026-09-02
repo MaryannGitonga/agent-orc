@@ -131,8 +131,7 @@ func TestWorktreeAddAndRemove(t *testing.T) {
 		t.Error("AddWorktree() did not create the branch")
 	}
 
-	// A dirty worktree needs force; without it removal must refuse rather
-	// than silently discard the agent's uncommitted work.
+	// Without force, removal must refuse rather than discard uncommitted work.
 	if err := os.WriteFile(filepath.Join(wt, "dirty.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}

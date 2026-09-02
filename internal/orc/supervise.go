@@ -15,9 +15,7 @@ import (
 )
 
 // Supervisor drives one task's agent process to completion and records the
-// outcome. It runs in its own detached process, one per task; that process is
-// also where the later phases hang usage parsing and PR creation, which is how
-// "automatic on completion" happens without a daemon.
+// outcome. One detached process per task is what stands in for a daemon.
 type Supervisor struct {
 	layout paths.Layout
 	store  *state.Store

@@ -1,8 +1,7 @@
 //go:build integration
 
-// Package integration holds tests that shell out to real external tools
-// (git, gh) or to a built agent-orc binary. They are excluded from the default
-// build via the `integration` tag and run with `make test-integration`.
+// Package integration holds tests that shell out to real git or to a built
+// agent-orc binary. The `integration` tag keeps them out of the default build.
 package integration
 
 import (
@@ -13,9 +12,8 @@ import (
 	"testing"
 )
 
-// TestGitWorktreeRoundTrip exercises the primitive the whole orchestrator is
-// built on: adding a worktree on a new branch, working in it independently of
-// the parent checkout, then removing it cleanly.
+// TestGitWorktreeRoundTrip exercises the primitive the orchestrator is built
+// on: add a worktree on a new branch, work in it, remove it cleanly.
 func TestGitWorktreeRoundTrip(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

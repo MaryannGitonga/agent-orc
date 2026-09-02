@@ -19,28 +19,20 @@ const (
 
 // Task is one unit of dispatched work.
 type Task struct {
-	// ID identifies the task; it names its state file, log and worktree.
-	ID string `yaml:"id" json:"id"`
-	// Repo is the absolute path to the repository the work happens in.
-	Repo string `yaml:"repo" json:"repo"`
-	// Prompt is what the agent is asked to do.
-	Prompt string `yaml:"prompt" json:"prompt"`
-	// Branch is the branch created for the work.
-	Branch string `yaml:"branch" json:"branch"`
-	// BaseBranch is what Branch is cut from.
+	// ID names the task's state file, log, worktree and default branch.
+	ID         string `yaml:"id" json:"id"`
+	Repo       string `yaml:"repo" json:"repo"` // absolute path
+	Prompt     string `yaml:"prompt" json:"prompt"`
+	Branch     string `yaml:"branch" json:"branch"`
 	BaseBranch string `yaml:"base_branch" json:"base_branch"`
-	// CLI is which agentic CLI runs the task.
-	CLI CLI `yaml:"cli" json:"cli"`
-	// Model is the model that CLI should use; empty means the CLI's default.
-	Model string `yaml:"model" json:"model"`
+	CLI        CLI    `yaml:"cli" json:"cli"`
+	Model      string `yaml:"model" json:"model"` // empty means the CLI's default
 }
 
-// validID is deliberately strict: an ID becomes a file name and a path
-// segment, so anything that could escape a directory is rejected outright.
+// validID is strict because an ID becomes a file name and a path segment.
 var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// Validate reports whether the task is well formed enough to dispatch. It
-// assumes defaults have already been applied.
+// Validate checks a task that already has its defaults applied.
 func (t Task) Validate() error {
 	var errs []error
 	if !validID.MatchString(t.ID) {
@@ -69,9 +61,8 @@ func DefaultBranch(id string) string {
 	return "agent-orc/" + strings.ToLower(id)
 }
 
-// policySuffix is appended to every prompt. Pushing and opening the PR is
-// agent-orc's job, not the agent's: doing it here would bypass the commit
-// sanitization that has to run first.
+// policySuffix is appended to every prompt. Publishing is agent-orc's job: an
+// agent that pushed would bypass the commit sanitization that has to run first.
 const policySuffix = `
 
 ---
@@ -82,8 +73,7 @@ Operating rules for this run (set by agent-orc, not by the task author):
   Pushing and opening a draft PR is handled for you after this session ends.
 - Do not add any Co-authored-by or "Generated with" trailer to your commits.`
 
-// Render returns the full prompt handed to the agent: the task's own prompt
-// followed by the fixed operating rules.
+// Render returns the task's prompt followed by the fixed operating rules.
 func (t Task) Render() string {
 	return strings.TrimSpace(t.Prompt) + policySuffix
 }

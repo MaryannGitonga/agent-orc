@@ -17,8 +17,7 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
-// Dispatcher launches tasks. Its zero value is not usable; build one with
-// [NewDispatcher].
+// Dispatcher launches tasks; build one with [NewDispatcher].
 type Dispatcher struct {
 	layout paths.Layout
 	store  *state.Store
@@ -36,9 +35,8 @@ func NewDispatcher(layout paths.Layout, out io.Writer) (*Dispatcher, error) {
 	return &Dispatcher{layout: layout, store: state.NewStore(layout.State), self: self, out: out}, nil
 }
 
-// Run prepares a worktree for t and starts a detached supervisor to drive the
-// agent inside it. It returns as soon as the supervisor is running; the agent
-// itself keeps going in the background.
+// Run prepares a worktree for t and starts a detached supervisor in it. It
+// returns as soon as the supervisor is up; the agent keeps going after that.
 func (d *Dispatcher) Run(t task.Task) error {
 	if err := t.Validate(); err != nil {
 		return fmt.Errorf("invalid task: %w", err)
@@ -77,8 +75,7 @@ func (d *Dispatcher) Run(t task.Task) error {
 		StartedAt: time.Now().UTC(),
 	}
 	if err := d.store.Save(record); err != nil {
-		// Nothing is running yet, so undo the worktree rather than leaving an
-		// orphan the user has to find and clean up by hand.
+		// Nothing is running yet, so undo the worktree rather than orphan it.
 		_ = repo.RemoveWorktree(worktree, true)
 		return err
 	}
@@ -98,10 +95,9 @@ func (d *Dispatcher) Run(t task.Task) error {
 	return nil
 }
 
-// startSupervisor re-execs agent-orc as a detached supervisor for the task.
-// Detaching it into its own session means the agent survives the terminal that
-// dispatched it going away, which is what makes several tasks in a batch able
-// to run unattended without a daemon.
+// startSupervisor re-execs agent-orc as a detached supervisor. Its own session
+// is what lets the agent survive the dispatching terminal going away, so a
+// batch can run unattended without a daemon.
 func (d *Dispatcher) startSupervisor(id string) error {
 	logFile, err := os.OpenFile(d.layout.SupervisorLogFile(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -120,7 +116,7 @@ func (d *Dispatcher) startSupervisor(id string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting supervisor for %q: %w", id, err)
 	}
-	// The supervisor outlives this process; releasing it avoids leaving a
-	// zombie behind when agent-orc exits immediately afterwards.
+	// The supervisor outlives this process; release it so it is not left a
+	// zombie when agent-orc exits immediately afterwards.
 	return cmd.Process.Release()
 }

@@ -24,8 +24,6 @@ var gitEnv = []string{
 	"GIT_AUTHOR_EMAIL=test@example.invalid",
 	"GIT_COMMITTER_NAME=agent-orc test",
 	"GIT_COMMITTER_EMAIL=test@example.invalid",
-	// os.DevNull rather than a literal, so the isolation works wherever the
-	// tests are run from.
 	"GIT_CONFIG_GLOBAL=" + os.DevNull,
 	"GIT_CONFIG_SYSTEM=" + os.DevNull,
 }
@@ -91,10 +89,8 @@ type buildFailure struct {
 func (b *buildFailure) Error() string { return b.err.Error() + "\n" + b.output }
 func (b *buildFailure) Unwrap() error { return b.err }
 
-// stubAgent installs a fake agentic CLI named name on PATH. The script writes
-// its argv and working directory to a receipt file, then runs body inside the
-// worktree, so a test can assert on both how the CLI was invoked and what it
-// was allowed to do.
+// stubAgent installs a fake agentic CLI on PATH. It records its argv and
+// working directory to a receipt file, then runs body inside the worktree.
 func stubAgent(t *testing.T, name, receipt, body string) string {
 	t.Helper()
 	dir := t.TempDir()

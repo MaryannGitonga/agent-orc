@@ -1,7 +1,6 @@
-// Package gitx wraps the handful of git commands agent-orc needs. It shells
-// out to the git binary rather than linking a library: the tool is a
-// dispatcher, and shelling out keeps the parent repo's own config (signing,
-// hooks, credentials) in effect exactly as it would be for a human.
+// Package gitx wraps the handful of git commands agent-orc needs. It shells out
+// to the git binary so the repository's own config (signing, hooks,
+// credentials) applies exactly as it would for a human.
 package gitx
 
 import (
@@ -13,8 +12,7 @@ import (
 
 // Repo is a git repository agent-orc dispatches work from.
 type Repo struct {
-	// Dir is the absolute path to the repository's top level.
-	Dir string
+	Dir string // absolute path to the repository's top level
 }
 
 // Open verifies that dir is inside a git repository and returns a Repo rooted
@@ -27,9 +25,8 @@ func Open(dir string) (*Repo, error) {
 	return &Repo{Dir: out}, nil
 }
 
-// DefaultBranch reports the branch a task should be cut from when none is
-// given. It prefers the remote's published HEAD, falls back to the currently
-// checked-out branch, and errors if neither is available.
+// DefaultBranch reports the branch to cut from when none is given: the
+// remote's published HEAD, else the checked-out branch.
 func (r *Repo) DefaultBranch() (string, error) {
 	if out, err := run(r.Dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		return strings.TrimPrefix(out, "origin/"), nil
@@ -64,8 +61,8 @@ func (r *Repo) AddWorktree(dir, branch, base string) error {
 	return nil
 }
 
-// RemoveWorktree deletes the worktree at dir. The branch it had checked out is
-// left alone; it holds the task's work.
+// RemoveWorktree deletes the worktree at dir. Its branch is left alone: that
+// is where the task's work lives.
 func (r *Repo) RemoveWorktree(dir string, force bool) error {
 	args := []string{"worktree", "remove"}
 	if force {

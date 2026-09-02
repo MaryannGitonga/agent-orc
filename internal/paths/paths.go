@@ -1,7 +1,5 @@
-// Package paths resolves the on-disk locations agent-orc keeps its state in.
-//
-// Everything lives under a single root (~/.agent-orc by default, overridable
-// with AGENT_ORC_HOME) so a run leaves nothing behind outside it.
+// Package paths resolves where agent-orc keeps its state: one root
+// (~/.agent-orc, or AGENT_ORC_HOME) so a run leaves nothing behind outside it.
 package paths
 
 import (
@@ -10,8 +8,7 @@ import (
 	"path/filepath"
 )
 
-// EnvHome overrides the root directory when set. Used by tests and by anyone
-// who wants task state somewhere other than their home directory.
+// EnvHome overrides the root directory when set.
 const EnvHome = "AGENT_ORC_HOME"
 
 // Layout holds the resolved directory layout for one agent-orc invocation.
@@ -22,8 +19,7 @@ type Layout struct {
 	Worktrees string // ~/.agent-orc/worktrees
 }
 
-// Resolve returns the layout, creating no directories. Use [Layout.Ensure] for
-// that.
+// Resolve returns the layout without creating anything; see [Layout.Ensure].
 func Resolve() (Layout, error) {
 	root := os.Getenv(EnvHome)
 	if root == "" {
