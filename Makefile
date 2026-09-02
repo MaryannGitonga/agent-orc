@@ -70,11 +70,12 @@ test-integration:
 tidy:
 	$(GO) mod tidy
 
-## verify-clean: fail if fmt/tidy would change tracked files
+## verify-clean: fail if fmt/tidy would change or add any file
 verify-clean: fmt tidy
-	@if ! git diff --quiet --exit-code; then \
+	@dirty=$$(git status --porcelain); \
+	if [ -n "$$dirty" ]; then \
 		echo "working tree is dirty after 'make fmt tidy':"; \
-		git --no-pager diff --stat; \
+		echo "$$dirty"; \
 		echo "commit the result of 'make fmt tidy'"; exit 1; \
 	fi
 
