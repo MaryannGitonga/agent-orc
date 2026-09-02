@@ -1,8 +1,9 @@
 // Package config parses the YAML batch file that dispatches many tasks at
 // once.
 //
-// The format is flat on purpose — `defaults` plus per-task overrides, no DSL —
-// so anyone on the team can read and write one without learning new syntax. It
+// The format is flat on purpose: `defaults` plus per-task overrides and no
+// DSL, so anyone on the team can read and write one without learning new
+// syntax. It
 // shares its field names with the single-task command-line flags, so there is
 // one set of concepts, not two.
 package config

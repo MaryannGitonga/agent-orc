@@ -44,7 +44,7 @@ var (
 )
 
 // Parse classifies a source string. Anything without a recognised scheme is
-// free text, which is used as-is rather than treated as an error — a task can
+// free text, which is used as-is rather than treated as an error. A task can
 // legitimately describe its own work without a ticket behind it.
 func Parse(raw string) (Ref, error) {
 	trimmed := strings.TrimSpace(raw)

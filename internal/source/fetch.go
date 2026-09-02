@@ -62,7 +62,8 @@ func (r *Resolver) Resolve(ctx context.Context, ref Ref) (string, error) {
 }
 
 // GitHubFetcher reads an issue with the gh CLI, reusing the authentication
-// that opening a PR already needs — no second credential to configure.
+// that opening a PR already needs, so there is no second credential to
+// configure.
 type GitHubFetcher struct {
 	// Bin is the gh executable; empty means "gh" from PATH.
 	Bin string

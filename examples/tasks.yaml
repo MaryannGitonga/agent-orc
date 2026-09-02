@@ -15,7 +15,7 @@ tasks:
     source: jira://PROJ-1234    # fetched at launch and used as the base prompt
     prompt: "Focus on the retry handler, not the whole sync module"
     branch: fix/proj-1234
-    model: opus-4-6             # override the default — this one's tricky
+    model: opus-4-6             # override the default; this one's tricky
 
   - id: PROJ-1240
     source: github://canonical/data-mesh#87  # no prompt: the issue says it all

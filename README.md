@@ -30,7 +30,7 @@ agent-orc run --id PROJ-1234 --repo . --cli claude \
   --branch fix/proj-1234 --base-branch main --model opus-4-6
 ```
 
-A ticket reference can stand in for the prompt — it is fetched once, at launch,
+A ticket reference can stand in for the prompt. It is fetched once, at launch,
 and the task's own prompt is layered on top as extra instructions:
 
 ```sh
@@ -42,8 +42,8 @@ JIRA needs `JIRA_BASE_URL` and `JIRA_API_TOKEN` in the environment (plus
 `JIRA_USER_EMAIL` on Cloud, which authenticates with basic auth rather than a
 bearer token). GitHub reuses the `gh` login you already have.
 
-To dispatch many tasks at once, put them in a YAML file — see
-[`examples/tasks.yaml`](examples/tasks.yaml) — and run:
+To dispatch many tasks at once, put them in a YAML file (see
+[`examples/tasks.yaml`](examples/tasks.yaml)) and run:
 
 ```sh
 agent-orc run tasks.yaml

@@ -52,8 +52,8 @@ type Task struct {
 var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // ValidateSpec checks a task as written, before its source has been fetched.
-// At that point a task needs something to work from — a source, a prompt, or
-// both — but not necessarily a prompt.
+// At that point a task needs something to work from (a source, a prompt, or
+// both) but not necessarily a prompt.
 func (t Task) ValidateSpec() error {
 	errs := []error{t.validateCommon()}
 	if strings.TrimSpace(t.Prompt) == "" && strings.TrimSpace(t.Source) == "" {
