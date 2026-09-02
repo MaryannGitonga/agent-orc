@@ -90,9 +90,7 @@ func buildTask(id, prompt, repo, branch, base, cliName, model string) (task.Task
 	if strings.TrimSpace(prompt) == "" {
 		return task.Task{}, errors.New("--prompt is required")
 	}
-	// No default CLI: agent-orc dispatches to whichever tool the user actually
-	// has, and guessing one produces a task that fails after its worktree and
-	// branch already exist.
+
 	if strings.TrimSpace(cliName) == "" {
 		return task.Task{}, errors.New("--cli is required")
 	}
