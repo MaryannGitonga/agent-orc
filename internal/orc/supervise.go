@@ -118,10 +118,9 @@ func (s *Supervisor) logf(format string, args ...any) {
 
 // buildCommand returns the argv for a task's CLI.
 func buildCommand(t task.Task) ([]string, error) {
-	switch t.CLI {
-	case task.CLIClaude:
-		return adapter.ClaudeCommand(t), nil
-	default:
-		return nil, fmt.Errorf("no adapter for cli %q", t.CLI)
+	a, err := adapter.For(t.CLI)
+	if err != nil {
+		return nil, err
 	}
+	return a.BuildCommand(t), nil
 }

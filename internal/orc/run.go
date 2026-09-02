@@ -3,6 +3,7 @@
 package orc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,8 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MaryannGitonga/agent-orc/internal/config"
 	"github.com/MaryannGitonga/agent-orc/internal/gitx"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
+	"github.com/MaryannGitonga/agent-orc/internal/source"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
@@ -25,6 +28,8 @@ type Dispatcher struct {
 	// self is the agent-orc binary to re-exec as the supervisor.
 	self string
 	out  io.Writer
+	// Resolver fetches a task's source. Replaceable for tests.
+	Resolver *source.Resolver
 }
 
 // NewDispatcher returns a dispatcher writing progress to out.
@@ -33,14 +38,27 @@ func NewDispatcher(layout paths.Layout, out io.Writer) (*Dispatcher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("locating the agent-orc binary: %w", err)
 	}
-	return &Dispatcher{layout: layout, store: state.NewStore(layout.State), self: self, out: out}, nil
+	return &Dispatcher{
+		layout:   layout,
+		store:    state.NewStore(layout.State),
+		self:     self,
+		out:      out,
+		Resolver: source.NewResolver(),
+	}, nil
 }
 
 // Run prepares a worktree for t and starts a detached supervisor in it. It
 // returns as soon as the supervisor is up; the agent keeps going after that.
-func (d *Dispatcher) Run(t task.Task) error {
+func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
+	if err := t.ValidateSpec(); err != nil {
+		return fmt.Errorf("invalid task %q: %w", t.ID, err)
+	}
+	t, err := d.resolvePrompt(ctx, t)
+	if err != nil {
+		return err
+	}
 	if err := t.Validate(); err != nil {
-		return fmt.Errorf("invalid task: %w", err)
+		return fmt.Errorf("invalid task %q: %w", t.ID, err)
 	}
 	if err := d.layout.Ensure(); err != nil {
 		return err
@@ -145,4 +163,53 @@ func (d *Dispatcher) startSupervisor(id string) error {
 		fmt.Fprintf(d.out, "warning: could not release supervisor %d: %v\n", cmd.Process.Pid, err)
 	}
 	return nil
+}
+
+// resolvePrompt fetches the task's source, if it has one, and layers the
+// task's own prompt on top of it.
+//
+// This happens before anything is created on disk: a failed fetch must be a
+// clean launch-time error, not a half-set-up task with an orphaned worktree.
+func (d *Dispatcher) resolvePrompt(ctx context.Context, t task.Task) (task.Task, error) {
+	if t.Source == "" {
+		return t, nil
+	}
+	ref, err := source.Parse(t.Source)
+	if err != nil {
+		return t, fmt.Errorf("task %q: %w", t.ID, err)
+	}
+	resolver := d.Resolver
+	if resolver == nil {
+		resolver = source.NewResolver()
+	}
+	fetched, err := resolver.Resolve(ctx, ref)
+	if err != nil {
+		return t, fmt.Errorf("task %q: %w", t.ID, err)
+	}
+	t.Prompt = source.Compose(fetched, t.Prompt)
+	return t, nil
+}
+
+// RunBatch dispatches every task in a batch file.
+//
+// A task that cannot be launched does not stop the rest: the tasks are
+// independent by construction, so failing the whole batch over one bad entry
+// would throw away work that was fine. Every failure is reported at the end.
+func (d *Dispatcher) RunBatch(ctx context.Context, f *config.File, prepare func(task.Task) (task.Task, error)) error {
+	var errs []error
+	launched := 0
+	for _, entry := range f.Tasks {
+		t, err := prepare(f.Resolved(entry))
+		if err == nil {
+			err = d.Run(ctx, t)
+		}
+		if err != nil {
+			fmt.Fprintf(d.out, "%s  not launched: %v\n", entry.ID, err)
+			errs = append(errs, err)
+			continue
+		}
+		launched++
+	}
+	fmt.Fprintf(d.out, "\n%d of %d tasks launched\n", launched, len(f.Tasks))
+	return errors.Join(errs...)
 }

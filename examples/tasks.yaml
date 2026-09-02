@@ -1,0 +1,25 @@
+# A batch of tasks for `agent-orc run examples/tasks.yaml`.
+#
+# `defaults` applies to every task; any task can override any field. Paths are
+# resolved relative to this file.
+
+repo: /home/me/code/data-mesh
+base_branch: main               # default for the batch; any task can override it
+
+defaults:
+  cli: claude                   # claude | copilot | codex
+  model: sonnet-4-6
+
+tasks:
+  - id: PROJ-1234
+    source: jira://PROJ-1234    # fetched at launch and used as the base prompt
+    prompt: "Focus on the retry handler, not the whole sync module"
+    branch: fix/proj-1234
+    model: opus-4-6             # override the default — this one's tricky
+
+  - id: PROJ-1240
+    source: github://canonical/data-mesh#87  # no prompt: the issue says it all
+    branch: chore/proj-1240
+    base_branch: release/2.4    # builds on a release branch, not main
+    cli: copilot                # different CLI, same batch
+    model: gpt-5.1

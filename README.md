@@ -17,7 +17,7 @@ Early. Built in phases:
 | Phase | Scope | State |
 | ----- | ----- | ----- |
 | 0 | `run` for a single task; worktree lifecycle; Claude adapter | done |
-| 1 | Multi-CLI adapters, YAML batch config, JIRA/GitHub source fetching | planned |
+| 1 | Multi-CLI adapters, YAML batch config, JIRA/GitHub source fetching | done |
 | 2 | Subagent seeding, budget caps, `status` | planned |
 | 3 | Draft PR chain, commit sanitization, `cleanup`, `logs` | planned |
 | 4 | Agentic review with a capped worker↔reviewer loop | planned |
@@ -29,6 +29,28 @@ agent-orc run --id PROJ-1234 --repo . --cli claude \
   --prompt "Fix the null-pointer in the FX sync retry handler" \
   --branch fix/proj-1234 --base-branch main --model opus-4-6
 ```
+
+A ticket reference can stand in for the prompt — it is fetched once, at launch,
+and the task's own prompt is layered on top as extra instructions:
+
+```sh
+agent-orc run --id PROJ-1240 --source github://canonical/data-mesh#87
+agent-orc run --id PROJ-1234 --source jira://PROJ-1234 --prompt "Only the retry handler"
+```
+
+JIRA needs `JIRA_BASE_URL` and `JIRA_API_TOKEN` in the environment (plus
+`JIRA_USER_EMAIL` on Cloud, which authenticates with basic auth rather than a
+bearer token). GitHub reuses the `gh` login you already have.
+
+To dispatch many tasks at once, put them in a YAML file — see
+[`examples/tasks.yaml`](examples/tasks.yaml) — and run:
+
+```sh
+agent-orc run tasks.yaml
+```
+
+Tasks in a batch are independent: each gets its own branch, worktree and
+process, so one that cannot launch does not stop the others.
 
 `run` returns as soon as the task is dispatched. It creates a worktree, starts
 a detached supervisor that drives the agent inside it, and records everything
@@ -42,11 +64,11 @@ under `~/.agent-orc` (override with `AGENT_ORC_HOME`):
   worktrees/PROJ-1234/          the isolated checkout
 ```
 
-`--id`, `--prompt` and `--cli` are required. There is no default CLI: the
-tool dispatches to whichever agent you actually have installed, and it checks
-that the binary is on PATH before creating a worktree or a branch. `--repo`
-defaults to the current directory, `--base-branch` to the repository's default
-branch, and `--branch` to `agent-orc/<id>`.
+`--id`, `--cli` and one of `--prompt`/`--source` are required. There is no
+default CLI: the tool dispatches to whichever agent you actually have
+installed, and it checks the binary is on PATH before creating a worktree or a
+branch. `--repo` defaults to the current directory, `--base-branch` to the
+repository's default branch, and `--branch` to `agent-orc/<id>`.
 
 ## Development
 
