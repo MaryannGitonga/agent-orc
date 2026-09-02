@@ -1,0 +1,58 @@
+name: commit-policy
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: commit-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  message-dco:
+    name: message + DCO sign-off
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Check commit messages, attribution trailers and DCO sign-off
+        run: |
+          git fetch --no-tags origin \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}"
+          ./scripts/check-commits.sh \
+            "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+  gpg-signature:
+    name: GPG signature
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check every commit is signed with a key GitHub trusts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/pulls/$PR/commits" \
+            --jq '.[] | [.sha[0:8], .commit.verification.verified, .commit.verification.reason] | @tsv' \
+            > commits.tsv
+          fail=0
+          while IFS=$'\t' read -r sha verified reason; do
+            if [ "$verified" = "true" ]; then
+              printf '  ✓ %s signed (%s)\n' "$sha" "$reason"
+            else
+              printf '  ✗ %s unverified signature: %s\n' "$sha" "$reason"
+              fail=1
+            fi
+          done < commits.tsv
+          if [ "$fail" -ne 0 ]; then
+            echo
+            echo "every commit must be GPG signed with a key registered on GitHub" >&2
+            exit 1
+          fi

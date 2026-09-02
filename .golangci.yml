@@ -1,0 +1,37 @@
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - revive
+    - bodyclose
+    - errorlint
+    - unconvert
+    - nolintlint
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/MaryannGitonga/agent-orc
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+  nolintlint:
+    require-explanation: true
+    require-specific: true
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
