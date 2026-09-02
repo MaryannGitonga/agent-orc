@@ -1,7 +1,7 @@
 // Package gitx wraps the handful of git commands agent-orc needs. It shells
 // out to the git binary rather than linking a library: the tool is a
-// dispatcher, and shelling out keeps the parent repo's own config — signing,
-// hooks, credentials — in effect exactly as it would be for a human.
+// dispatcher, and shelling out keeps the parent repo's own config (signing,
+// hooks, credentials) in effect exactly as it would be for a human.
 package gitx
 
 import (
@@ -65,7 +65,7 @@ func (r *Repo) AddWorktree(dir, branch, base string) error {
 }
 
 // RemoveWorktree deletes the worktree at dir. The branch it had checked out is
-// left alone — it holds the task's work.
+// left alone; it holds the task's work.
 func (r *Repo) RemoveWorktree(dir string, force bool) error {
 	args := []string{"worktree", "remove"}
 	if force {

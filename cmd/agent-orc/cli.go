@@ -15,7 +15,7 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/version"
 )
 
-const usage = `agent-orc — dispatch agentic CLI runs across isolated git worktrees
+const usage = `agent-orc: dispatch agentic CLI runs across isolated git worktrees
 
 Usage:
   agent-orc run [flags]     dispatch a single task

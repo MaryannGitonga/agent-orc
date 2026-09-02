@@ -141,7 +141,7 @@ func (s *Store) List() ([]Task, error) {
 }
 
 // Delete removes the record for id. Deleting a task that does not exist is not
-// an error — the desired end state is the same either way.
+// an error; the desired end state is the same either way.
 func (s *Store) Delete(id string) error {
 	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("deleting state for %q: %w", id, err)

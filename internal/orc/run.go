@@ -37,7 +37,7 @@ func NewDispatcher(layout paths.Layout, out io.Writer) (*Dispatcher, error) {
 }
 
 // Run prepares a worktree for t and starts a detached supervisor to drive the
-// agent inside it. It returns as soon as the supervisor is running — the agent
+// agent inside it. It returns as soon as the supervisor is running; the agent
 // itself keeps going in the background.
 func (d *Dispatcher) Run(t task.Task) error {
 	if err := t.Validate(); err != nil {
