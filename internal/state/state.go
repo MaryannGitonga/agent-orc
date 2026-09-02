@@ -30,7 +30,7 @@ const (
 	StatusFailed        Status = "failed"         // exited non-zero, or never launched
 	StatusStopped       Status = "stopped"        // killed by `agent-orc stop`
 	// StatusPolicyViolation means the agent did something it was told not to
-	// — pushing its branch or opening its own PR — so the change did not go
+	// by pushing its branch or opening its own PR, so the change did not go
 	// through agent-orc's sanitize-then-draft path.
 	StatusPolicyViolation Status = "policy_violation"
 )

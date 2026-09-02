@@ -8,8 +8,8 @@ import (
 )
 
 // Logs writes a task's agent log to out. When follow is set it keeps writing
-// as the agent produces more, and stops when the task finishes — a tail that
-// ends on its own rather than one the user has to interrupt.
+// as the agent produces more, and stops when the task finishes. It is a tail
+// that ends on its own rather than one the user has to interrupt.
 func (r *Reporter) Logs(id string, follow bool) error {
 	record, err := r.store.Load(id)
 	if err != nil {

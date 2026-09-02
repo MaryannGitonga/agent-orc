@@ -53,8 +53,8 @@ Tasks in a batch are independent: each gets its own branch, worktree and
 process, so one that cannot launch does not stop the others.
 
 When the agent exits, the same per-task process sanitizes its commits, pushes
-the branch and opens a **draft** PR — no daemon, and nothing reaches the remote
-unsanitized. `--no-auto-pr` holds off; `agent-orc pr <id>` runs the same three
+the branch and opens a **draft** PR. No daemon is involved, and nothing reaches
+the remote unsanitized. `--no-auto-pr` holds off; `agent-orc pr <id>` runs the same three
 steps by hand.
 
 `agent-orc status` prints one row per task, and `agent-orc stop <id>` kills a
@@ -87,7 +87,7 @@ back out of the CLI's own output after the run, where it reports one.
 Before anything is pushed, every commit the task added is rewritten in one pass
 that strips what should not be there and adds what must be:
 
-- **AI attribution trailers are removed** — `Co-authored-by: Claude/Copilot/Codex`,
+- **AI attribution trailers are removed**: `Co-authored-by: Claude/Copilot/Codex`,
   `Claude-Session:`, `🤖 Generated with`, and any `[bot]` co-author. Each CLI is
   also asked not to add them in the first place, but those settings are
   inconsistently honoured and an agent crafting a raw `git commit` bypasses
@@ -95,17 +95,17 @@ that strips what should not be there and adds what must be:
   `~/.agent-orc/trailers.txt`, one regular expression per line.
 - **`Signed-off-by:` is added** to commits missing one when `dco_signoff: true`
   (or `--dco-signoff`) is set. It is the one trailer that is never stripped.
-- **GPG signing needs nothing new.** A worktree shares the parent repo'"'"'s
-  config, so if `commit.gpgsign=true` is set, the agent'"'"'s commits and the
-  rewrite are signed exactly as a human'"'"'s would be.
+- **GPG signing needs nothing new.** A worktree shares the parent repo's
+  config, so if `commit.gpgsign=true` is set, the agent's commits and the
+  rewrite are signed exactly as a human's would be.
 
-Only commits unique to the task'"'"'s own branch are touched, in the task'"'"'s own
-worktree — never the base branch, never anyone else'"'"'s work. If the rewrite
+Only commits unique to the task's own branch are touched, in the task's own
+worktree, never the base branch and never anyone else's work. If the rewrite
 cannot complete, it is aborted and the branch is left exactly as the agent made
 it; a half-rewritten branch is never pushed.
 
 If the agent pushes its own branch despite being told not to, that branch never
-went through this pass — so the task is flagged `policy_violation` rather than
+went through this pass, so the task is flagged `policy_violation` rather than
 treated as if agent-orc had published it.
 
 ### Cleaning up

@@ -37,8 +37,8 @@ type Rewriter struct {
 // It first checks whether anything needs changing at all: a branch whose
 // commits are already clean is left with its SHAs intact rather than rewritten
 // for nothing. If the rewrite cannot complete, the rebase is aborted so the
-// branch is left exactly as the agent produced it — a half-rewritten branch
-// must never be pushed.
+// branch is left exactly as the agent produced it, because a half-rewritten
+// branch must never be pushed.
 func (r Rewriter) Run() (int, error) {
 	messages, err := r.messages()
 	if err != nil {

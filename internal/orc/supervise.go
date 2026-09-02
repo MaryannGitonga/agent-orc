@@ -129,7 +129,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 // completion" work with no daemon: the automation hangs off a process that was
 // already running for this task.
 //
-// A publish failure does not fail the task — the agent's work is committed and
+// A publish failure does not fail the task: the agent's work is committed and
 // on its branch either way. It is logged and left for `agent-orc pr` to retry.
 func (s *Supervisor) publish(id string, record state.Task) {
 	p, err := NewPublisher(s.layout, s.out)
@@ -150,8 +150,8 @@ func (s *Supervisor) publish(id string, record state.Task) {
 
 	s.logf("publish failed: %v", err)
 	s.logf("the work is committed on %s; retry with 'agent-orc pr %s'", record.Branch, id)
-	// Publish may already have recorded something more specific — a policy
-	// violation, say — and that diagnosis should not be overwritten.
+	// Publish may already have recorded something more specific, a policy
+	// violation say, and that diagnosis should not be overwritten.
 	if current, loadErr := s.store.Load(id); loadErr == nil && current.Status != state.StatusPublishing {
 		return
 	}

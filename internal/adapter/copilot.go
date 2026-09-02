@@ -44,7 +44,7 @@ func (Copilot) BudgetArgs(b task.Budget) ([]string, string) {
 
 // AttributionArgs returns nothing: the Copilot CLI has no documented setting
 // that suppresses its Co-authored-by trailer, and prompt-level instructions
-// are reported not to hold — it complies for one commit and adds the trailer
+// are reported not to hold: it complies for one commit and adds the trailer
 // again on the next. The sanitization pass before push is what actually
 // removes it.
 func (Copilot) AttributionArgs() []string { return nil }

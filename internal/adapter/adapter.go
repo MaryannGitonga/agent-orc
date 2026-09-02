@@ -29,8 +29,8 @@ type Adapter interface {
 	// mechanism agent-orc can seed.
 	SubagentDir() string
 	// AttributionArgs asks the CLI not to add its own attribution trailers.
-	// This is only a first line of defence — the settings are inconsistently
-	// honoured, and an agent crafting a raw `git commit` bypasses them — so
+	// This is only a first line of defence: the settings are inconsistently
+	// honoured, and an agent crafting a raw `git commit` bypasses them, so
 	// the sanitization pass before push never depends on it working.
 	AttributionArgs() []string
 	// ParseUsage reads what the run actually cost out of its log. It returns

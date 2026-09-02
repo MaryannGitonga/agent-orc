@@ -3,7 +3,7 @@
 //
 // It does two jobs in one pass: it strips trailers that should not be there
 // (AI attribution), and adds the one that must be (DCO sign-off). Doing it
-// here rather than trusting each CLI's own attribution setting is deliberate —
+// here rather than trusting each CLI's own attribution setting is deliberate:
 // those settings are inconsistently honoured, and an agent crafting a raw
 // `git commit` can bypass them entirely. This pass cannot be bypassed because
 // it runs after the agent has finished and before the branch is pushed.
@@ -68,7 +68,7 @@ func NewPolicy(patterns []string, signOff *Signature) (Policy, error) {
 
 // LoadPatterns returns the default patterns plus any extra ones from path, one
 // regular expression per line, blank lines and # comments ignored. A missing
-// file is not an error — it just means the defaults are the whole list.
+// file is not an error; it just means the defaults are the whole list.
 func LoadPatterns(path string) ([]string, error) {
 	patterns := append([]string(nil), DefaultPatterns...)
 	f, err := os.Open(path)
@@ -119,7 +119,8 @@ func (p Policy) Clean(message string) (string, bool) {
 }
 
 // stripped reports whether a line should be removed. A sign-off is never
-// stripped, whatever the patterns say — this pass exists partly to add them.
+// stripped, whatever the patterns say, because this pass exists partly to add
+// them.
 func (p Policy) stripped(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	if strings.HasPrefix(trimmed, signOffPrefix) {
@@ -159,7 +160,7 @@ var trailerLine = regexp.MustCompile(`^[A-Za-z][A-Za-z-]*:\s`)
 func lastLineIsTrailer(body string) bool {
 	lines := strings.Split(body, "\n")
 	// A subject on its own is never a trailer block, however much "feat: x"
-	// looks like one — a trailer needs a body above it to belong to.
+	// looks like one, because a trailer needs a body above it to belong to.
 	if len(lines) < 2 {
 		return false
 	}

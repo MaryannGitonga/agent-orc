@@ -2,7 +2,7 @@
 //
 // Opening a *draft* is what does the safety work: it makes "agent-produced,
 // not yet human-checked" visible in the PR list the moment the branch exists.
-// A human still reviews the diff and clicks "Ready for review" — agent-orc has
+// A human still reviews the diff and clicks "Ready for review". agent-orc has
 // no command for that, because it is the human-in-the-loop gate.
 package forge
 
@@ -84,8 +84,8 @@ func New() *Opener { return &Opener{Runner: ExecRunner{}} }
 // RemoteBranchExists reports whether the branch is already published.
 //
 // It is checked before pushing because a branch that is already on the remote
-// means the agent pushed it itself, against the instructions it was given —
-// which is a trust problem with that CLI, not something to paper over.
+// means the agent pushed it itself, against the instructions it was given,
+// which is a trust problem with that CLI and not something to paper over.
 func (o *Opener) RemoteBranchExists(worktree, remote, branch string) (bool, error) {
 	out, err := o.Runner.Run(worktree, "git", "ls-remote", "--heads", remote, "refs/heads/"+branch)
 	if err != nil {

@@ -58,7 +58,7 @@ func initRepoWithRemote(t *testing.T) (repo, remote string) {
 	t.Helper()
 	// The path contains "github.com" so the forge layer picks the gh code
 	// path, while every git operation still runs against this local bare
-	// repository — no network, no credentials, real pushes.
+	// repository: no network, no credentials, real pushes.
 	remote = filepath.Join(t.TempDir(), "github.com", "org", "repo.git")
 	git(t, t.TempDir(), "init", "--bare", "--initial-branch=main", remote)
 	repo = initRepo(t)

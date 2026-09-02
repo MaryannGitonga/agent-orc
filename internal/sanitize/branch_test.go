@@ -153,7 +153,7 @@ func TestRewriterSkipsABranchThatIsAlreadyClean(t *testing.T) {
 	if n != 0 {
 		t.Errorf("Run() rewrote %d commits, want 0", n)
 	}
-	// No rebase ran, so the SHAs are untouched — which is why Self could be a
+	// No rebase ran, so the SHAs are untouched, which is why Self could be a
 	// path that does not exist.
 	if after := strings.TrimSpace(run(t, dir, "rev-parse", "HEAD")); after != before {
 		t.Errorf("HEAD changed from %s to %s, want an already-clean branch left alone", before, after)

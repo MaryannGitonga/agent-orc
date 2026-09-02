@@ -18,7 +18,7 @@ import (
 const defaultRemote = "origin"
 
 // ErrNoRemote means the repository has no remote to publish to. That is a
-// legitimate way to work — a local-only repository — so it is reported as its
+// legitimate way to work (a local-only repository), so it is reported as its
 // own condition rather than as a publish failure.
 var ErrNoRemote = errors.New("the repository has no " + defaultRemote + " remote to push to")
 
@@ -142,7 +142,7 @@ func (p *Publisher) checkAgentDidNotPublish(record *state.Task) error {
 	}); uerr != nil {
 		return uerr
 	}
-	return fmt.Errorf("task %q: %s/%s already exists — the agent pushed it despite being told not to, so it never went through sanitization; inspect the branch before doing anything with it",
+	return fmt.Errorf("task %q: %s/%s already exists; the agent pushed it despite being told not to, so it never went through sanitization; inspect the branch before doing anything with it",
 		record.ID, defaultRemote, record.Branch)
 }
 
@@ -178,9 +178,9 @@ func (p *Publisher) sanitize(record state.Task) (int, error) {
 // identity is who a DCO sign-off is written as.
 //
 // git's configured identity comes first, since that is who is certifying the
-// contribution. Where it is unset — the identity came from the environment
-// instead, as it does in CI — the author of the branch's newest commit is used
-// rather than failing, because that is the same person by construction.
+// contribution. Where it is unset, because the identity came from the
+// environment instead as it does in CI, the author of the branch's newest
+// commit is used rather than failing: that is the same person by construction.
 func (p *Publisher) identity(worktree string) (sanitize.Signature, error) {
 	name := gitConfig(worktree, "user.name")
 	email := gitConfig(worktree, "user.email")
