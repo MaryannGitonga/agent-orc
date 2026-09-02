@@ -1,0 +1,16 @@
+# Local agent tooling (not shared)
+.claude/
+
+# Build output
+/bin/
+/dist/
+
+# Test artifacts
+*.out
+*.test
+coverage.*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
