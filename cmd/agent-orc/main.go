@@ -24,7 +24,7 @@ func run(args []string, out *os.File) error {
 	return nil
 }
 
-const usage = `agent-orc — dispatch agentic CLI runs across isolated git worktrees
+const usage = `agent-orc: dispatch agentic CLI runs across isolated git worktrees
 
 Usage:
   agent-orc version   print the version`

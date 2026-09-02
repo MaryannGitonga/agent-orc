@@ -44,7 +44,7 @@ commits=$(git rev-list --no-merges "$RANGE") || {
 }
 
 if [ -z "$commits" ]; then
-	echo "no commits in range '$RANGE' — nothing to check"
+	echo "no commits in range '$RANGE'; nothing to check"
 	exit 0
 fi
 
@@ -90,7 +90,7 @@ done
 
 if [ "$fail" -ne 0 ]; then
 	echo
-	echo "commit policy violations found — see the commit policy in README.md" >&2
+	echo "commit policy violations found; see the commit policy in README.md" >&2
 	exit 1
 fi
 

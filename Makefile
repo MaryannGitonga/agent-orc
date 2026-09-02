@@ -1,4 +1,4 @@
-# agent-orc — developer tasks.
+# agent-orc developer tasks.
 #
 # `make ci` runs the checks from both the ci and commit-policy workflows that
 # can run on a working copy. Two of them cannot: `verify-clean` needs a
@@ -81,7 +81,7 @@ clean:
 commit-check:
 	@./scripts/check-commits.sh $(RANGE)
 
-## ci: the ci and commit-policy checks that run locally — do this before pushing
+## ci: the ci and commit-policy checks that run locally; do this before pushing
 ci: fmt-check vet lint build test test-integration commit-check
 
 .PHONY: help fmt fmt-check vet lint lint-install build test test-integration tidy verify-clean clean commit-check ci
