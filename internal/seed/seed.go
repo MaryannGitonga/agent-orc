@@ -142,6 +142,10 @@ func Ignore(worktree, subagentDir string) error {
 		return nil
 	}
 	path := filepath.Join(worktree, subagentDir, ".gitignore")
+	// This covers untracked files, which is what a seeded definition normally
+	// is. It cannot hide one that overwrote a file the repository already
+	// tracks: git ignores .gitignore for tracked paths. The dispatcher warns
+	// when that happens rather than letting it pass silently.
 	body := "# Seeded by agent-orc for this task; not part of the branch.\n*\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)

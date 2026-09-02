@@ -49,7 +49,7 @@ type Task struct {
 	// Subagents seeds the CLI's subagent definitions into the worktree. Absence
 	// of the files is the "off" state, so no flag is passed to the CLI itself.
 	Subagents bool   `yaml:"subagents" json:"subagents,omitempty"`
-	Budget    Budget `yaml:",inline" json:"budget,omitempty"`
+	Budget    Budget `yaml:",inline" json:"budget"` // omitempty does nothing on a struct
 }
 
 // Budget caps a task's spend. Each CLI caps cost in its own unit and agent-orc

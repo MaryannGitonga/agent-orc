@@ -68,17 +68,36 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 		return t
 	}
 	now := time.Now().UTC()
-	t.Status = state.StatusFailed
-	t.PID = 0
-	t.FinishedAt = &now
-	t.Error = "the agent process is no longer running; it was killed or the machine restarted"
-	if err := store.Save(t); err != nil {
-		// Reporting is best-effort: show the corrected row even if the
-		// correction could not be written back.
+	// Decide again inside the update, against the record as it is on disk
+	// rather than the copy this listing read. The supervisor may have written
+	// its own outcome in between, and saving the stale copy would discard that
+	// along with the spend and session it recorded. A window still remains
+	// between that load and its save; for a reporting command in a single-user
+	// tool that is an acceptable trade rather than a lock.
+	_ = store.Update(t.ID, func(k *state.Task) {
+		if !k.Status.Active() || k.PID == 0 || processAlive(k.PID) {
+			return
+		}
+		k.Status = state.StatusFailed
+		k.PID = 0
+		k.FinishedAt = &now
+		k.Error = processGoneNote
+	})
+	// Reporting is best-effort: fall back to a locally corrected row if the
+	// record cannot be read back.
+	fresh, err := store.Load(t.ID)
+	if err != nil {
+		t.Status = state.StatusFailed
+		t.PID = 0
+		t.FinishedAt = &now
+		t.Error = processGoneNote
 		return t
 	}
-	return t
+	return fresh
 }
+
+// processGoneNote explains a task reconciled from running to failed.
+const processGoneNote = "the agent process is no longer running; it was killed or the machine restarted"
 
 // processAlive reports whether a pid still refers to a live process. Signal 0
 // runs the existence and permission checks without delivering anything, so

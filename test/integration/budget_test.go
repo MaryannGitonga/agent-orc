@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // TestRunAppliesTheNativeBudgetCapAndRecordsSpend covers §9 end to end: the
@@ -234,4 +237,52 @@ tasks:
 			t.Errorf("receipt is missing %q; want both the default and the override:\n%s", want, receipt)
 		}
 	}
+}
+
+// TestStopKillsTheAgentsChildren covers the process group. An agent runs
+// compilers, test runners and git of its own; signalling only the agent would
+// leave those running after `agent-orc stop` reported success.
+func TestStopKillsTheAgentsChildren(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	// The stub spawns a long-lived child, records its pid, then blocks.
+	body := "sleep 300 &\necho $! > '" + pidFile + "'\nwait"
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), body)
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "KIDS-1", "--repo", repo, "--cli", "claude", "--prompt", "spawn"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+
+	var child int
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
+		if raw := strings.TrimSpace(readFile(t, pidFile)); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil {
+				child = n
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if child == 0 {
+		t.Fatal("the agent never recorded a child pid")
+	}
+	t.Cleanup(func() { _ = syscall.Kill(child, syscall.SIGKILL) })
+	if err := syscall.Kill(child, 0); err != nil {
+		t.Fatalf("the child was not running before stop: %v", err)
+	}
+
+	if out, err := orcRun(t, home, stub, "stop", "KIDS-1"); err != nil {
+		t.Fatalf("agent-orc stop = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "KIDS-1", "stopped")
+
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		if err := syscall.Kill(child, 0); err != nil {
+			return // the child went with its parent, which is the point
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Errorf("child %d survived the stop; only the agent was signalled", child)
 }

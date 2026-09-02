@@ -186,3 +186,36 @@ func TestDeleteBranch(t *testing.T) {
 		t.Error("DeleteBranch(never-existed) = nil, want an error")
 	}
 }
+
+func TestTrackedUnder(t *testing.T) {
+	dir := newRepo(t)
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	if got, err := r.TrackedUnder(".claude/agents"); err != nil || len(got) != 0 {
+		t.Errorf("TrackedUnder on an untracked path = %v, %v; want none", got, err)
+	}
+
+	agents := filepath.Join(dir, ".claude", "agents")
+	if err := os.MkdirAll(agents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agents, "reviewer.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Untracked until it is committed, which is the whole distinction.
+	if got, _ := r.TrackedUnder(".claude/agents"); len(got) != 0 {
+		t.Errorf("TrackedUnder before commit = %v, want none", got)
+	}
+	mustGit(t, dir, "add", ".claude/agents/reviewer.md")
+	mustGit(t, dir, "commit", "--no-gpg-sign", "-m", "feat: ship a subagent")
+
+	got, err := r.TrackedUnder(".claude/agents")
+	if err != nil {
+		t.Fatalf("TrackedUnder() = %v", err)
+	}
+	if len(got) != 1 || got[0] != ".claude/agents/reviewer.md" {
+		t.Errorf("TrackedUnder() = %v, want [.claude/agents/reviewer.md]", got)
+	}
+}

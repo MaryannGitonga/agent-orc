@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
@@ -51,6 +52,10 @@ func (s *Supervisor) Supervise(id string) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = os.Environ()
+	// Its own process group, so `agent-orc stop` can signal the agent and
+	// everything it spawned. Without this the agent shares the supervisor's
+	// group and a group signal would take the supervisor down with it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return s.fail(id, fmt.Errorf("starting %s: %w", argv[0], err))

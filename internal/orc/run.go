@@ -184,7 +184,26 @@ func (d *Dispatcher) seedSubagents(t task.Task, a adapter.Adapter, worktree stri
 	if err := seed.Ignore(worktree, dir); err != nil {
 		return nil, fmt.Errorf("task %q: %w", t.ID, err)
 	}
+	d.warnIfTracked(t, worktree, dir)
 	return copied, nil
+}
+
+// warnIfTracked reports seeded definitions that landed on files the repository
+// already tracks. The .gitignore seed.Ignore writes cannot hide those, so they
+// stay visible as modifications the agent could commit. Warn rather than fail:
+// the run is still valid, the user just needs to know the seeding is not
+// invisible in this repository.
+func (d *Dispatcher) warnIfTracked(t task.Task, worktree, dir string) {
+	wt, err := gitx.Open(worktree)
+	if err != nil {
+		return
+	}
+	tracked, err := wt.TrackedUnder(dir)
+	if err != nil || len(tracked) == 0 {
+		return
+	}
+	fmt.Fprintf(d.out, "warning: %s already tracks %d file(s) under %s; seeded definitions there cannot be ignored and may be committed\n",
+		t.Repo, len(tracked), dir)
 }
 
 // startSupervisor re-execs agent-orc as a detached supervisor. Its own session

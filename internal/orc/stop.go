@@ -38,7 +38,7 @@ func (r *Reporter) Stop(id string) error {
 	}); err != nil {
 		return err
 	}
-	if err := syscall.Kill(t.PID, syscall.SIGTERM); err != nil {
+	if err := signalGroup(t.PID); err != nil {
 		// ESRCH is the process already being gone, which is the end state the
 		// caller asked for. Rolling back here would re-assert a running record
 		// for a process that does not exist, which is what `status` then has to
@@ -61,4 +61,18 @@ func (r *Reporter) Stop(id string) error {
 	}
 	fmt.Fprintf(r.out, "%s  stopped (pid %d); worktree %s left in place\n", id, t.PID, t.Worktree)
 	return nil
+}
+
+// signalGroup terminates the agent and everything it spawned. An agent runs
+// compilers, test runners and git of its own, and signalling only the leader
+// would orphan them. The supervisor starts it with Setpgid, so the negative
+// pid addresses exactly that agent's descendants and nothing else. Records
+// written before agents were given their own group have no such group, so a
+// missing one falls back to signalling the agent itself.
+func signalGroup(pid int) error {
+	err := syscall.Kill(-pid, syscall.SIGTERM)
+	if errors.Is(err, syscall.ESRCH) {
+		return syscall.Kill(pid, syscall.SIGTERM)
+	}
+	return err
 }
