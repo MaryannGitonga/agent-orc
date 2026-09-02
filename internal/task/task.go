@@ -6,22 +6,41 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
 // CLI names an agentic command-line tool agent-orc can dispatch to.
 type CLI string
 
-// The CLIs agent-orc knows about. Phase 0 dispatches to Claude only.
+// The CLIs agent-orc knows about.
 const (
+	// CLIClaude is Claude Code.
 	CLIClaude CLI = "claude"
+	// CLICopilot is the GitHub Copilot CLI.
+	CLICopilot CLI = "copilot"
+	// CLICodex is the OpenAI Codex CLI.
+	CLICodex CLI = "codex"
 )
+
+// KnownCLIs lists every CLI a task may name, in a stable order.
+var KnownCLIs = []CLI{CLIClaude, CLICopilot, CLICodex}
+
+// Known reports whether c is a CLI agent-orc can dispatch to.
+func (c CLI) Known() bool {
+	return slices.Contains(KnownCLIs, c)
+}
 
 // Task is one unit of dispatched work.
 type Task struct {
 	// ID names the task's state file, log, worktree and default branch.
-	ID         string `yaml:"id" json:"id"`
-	Repo       string `yaml:"repo" json:"repo"` // absolute path
+	ID   string `yaml:"id" json:"id"`
+	Repo string `yaml:"repo" json:"repo"` // absolute path
+	// Source is where the work is described: a `github://owner/repo#N` or
+	// `jira://KEY-1` reference fetched at launch, or free text. It may be
+	// empty when Prompt says everything.
+	Source string `yaml:"source" json:"source,omitempty"`
+	// Prompt is layered on top of a fetched Source as extra instructions.
 	Prompt     string `yaml:"prompt" json:"prompt"`
 	Branch     string `yaml:"branch" json:"branch"`
 	BaseBranch string `yaml:"base_branch" json:"base_branch"`
@@ -32,14 +51,31 @@ type Task struct {
 // validID is strict because an ID becomes a file name and a path segment.
 var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// Validate checks a task that already has its defaults applied.
+// ValidateSpec checks a task as written, before its source has been fetched.
+// At that point a task needs something to work from (a source, a prompt, or
+// both) but not necessarily a prompt.
+func (t Task) ValidateSpec() error {
+	errs := []error{t.validateCommon()}
+	if strings.TrimSpace(t.Prompt) == "" && strings.TrimSpace(t.Source) == "" {
+		errs = append(errs, errors.New("needs a source, a prompt, or both"))
+	}
+	return errors.Join(errs...)
+}
+
+// Validate reports whether the task is ready to dispatch: defaults applied and
+// any source already fetched into the prompt.
 func (t Task) Validate() error {
+	errs := []error{t.validateCommon()}
+	if strings.TrimSpace(t.Prompt) == "" {
+		errs = append(errs, errors.New("prompt is empty"))
+	}
+	return errors.Join(errs...)
+}
+
+func (t Task) validateCommon() error {
 	var errs []error
 	if !validID.MatchString(t.ID) {
 		errs = append(errs, fmt.Errorf("id %q must be 1-64 chars of letters, digits, '.', '_' or '-' and start alphanumeric", t.ID))
-	}
-	if strings.TrimSpace(t.Prompt) == "" {
-		errs = append(errs, errors.New("prompt is empty"))
 	}
 	if t.Repo == "" {
 		errs = append(errs, errors.New("repo is empty"))
@@ -50,8 +86,8 @@ func (t Task) Validate() error {
 	if t.BaseBranch == "" {
 		errs = append(errs, errors.New("base branch is empty"))
 	}
-	if t.CLI != CLIClaude {
-		errs = append(errs, fmt.Errorf("unsupported cli %q, want %q", t.CLI, CLIClaude))
+	if !t.CLI.Known() {
+		errs = append(errs, fmt.Errorf("unsupported cli %q, want one of %v", t.CLI, KnownCLIs))
 	}
 	return errors.Join(errs...)
 }

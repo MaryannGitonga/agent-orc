@@ -89,18 +89,25 @@ type buildFailure struct {
 func (b *buildFailure) Error() string { return b.err.Error() + "\n" + b.output }
 func (b *buildFailure) Unwrap() error { return b.err }
 
-// stubAgent installs a fake agentic CLI on PATH. It records its argv and
-// working directory to a receipt file, then runs body inside the worktree.
-func stubAgent(t *testing.T, name, receipt, body string) string {
+// stubInto adds another fake CLI to an existing stub directory, so one PATH
+// entry can hold every tool a test needs.
+func stubInto(t *testing.T, dir, name, receipt, body string) {
 	t.Helper()
-	dir := t.TempDir()
 	script := "#!/usr/bin/env bash\nset -euo pipefail\n" +
-		"{ printf 'cwd=%s\\n' \"$PWD\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; } >> " + receipt + "\n" +
+		"{ printf 'cwd=%s\\n' \"$PWD\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; } >> '" + receipt + "'\n" +
 		body + "\n"
 	write(t, filepath.Join(dir, name), script)
 	if err := os.Chmod(filepath.Join(dir, name), 0o755); err != nil {
 		t.Fatalf("making the stub executable: %v", err)
 	}
+}
+
+// stubAgent installs a fake agentic CLI on PATH. It records its argv and
+// working directory to a receipt file, then runs body inside the worktree.
+func stubAgent(t *testing.T, name, receipt, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	stubInto(t, dir, name, receipt, body)
 	return dir
 }
 
