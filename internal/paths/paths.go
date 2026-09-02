@@ -71,6 +71,12 @@ func (l Layout) SupervisorLogFile(id string) string {
 	return filepath.Join(l.Logs, id+".supervisor.log")
 }
 
+// TrailerPatternsFile is where a user may add commit-trailer patterns to strip
+// on top of the built-in list, one regular expression per line.
+func (l Layout) TrailerPatternsFile() string {
+	return filepath.Join(l.Root, "trailers.txt")
+}
+
 // Worktree returns the worktree directory for a task.
 func (l Layout) Worktree(id string) string {
 	return filepath.Join(l.Worktrees, id)

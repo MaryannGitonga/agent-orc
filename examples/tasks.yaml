@@ -5,12 +5,14 @@
 
 repo: /home/me/code/data-mesh
 base_branch: main               # default for the batch; any task can override it
+dco_signoff: false              # set true if this repo requires DCO sign-off
 
 defaults:
   cli: claude                   # claude | copilot | codex
   model: sonnet-4-6
   subagents: false
   budget_usd: 2.00              # applied as the CLI's own native cap at launch
+  auto_pr: true                 # open a draft PR when the agent finishes
 
 tasks:
   - id: PROJ-1234
@@ -27,3 +29,4 @@ tasks:
     cli: copilot                # different CLI, same batch
     model: gpt-5.1
     budget_credits: 20          # copilot meters in credits, not dollars
+    auto_pr: false              # hold off; open it later with `agent-orc pr`

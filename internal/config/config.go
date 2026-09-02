@@ -27,6 +27,9 @@ type File struct {
 	Repo string `yaml:"repo"`
 	// BaseBranch is what tasks branch from unless they override it.
 	BaseBranch string `yaml:"base_branch"`
+	// DCOSignoff adds a Signed-off-by trailer to commits missing one. Set it
+	// for repositories that require DCO.
+	DCOSignoff bool `yaml:"dco_signoff"`
 	// Defaults are applied to every task that does not set the field itself.
 	Defaults Defaults `yaml:"defaults"`
 	// Tasks are the units of work to dispatch.
@@ -40,6 +43,7 @@ type Defaults struct {
 	Subagents     *bool    `yaml:"subagents"`
 	BudgetUSD     *float64 `yaml:"budget_usd"`
 	BudgetCredits *float64 `yaml:"budget_credits"`
+	AutoPR        *bool    `yaml:"auto_pr"`
 }
 
 // Entry is one task as written in the batch file. Every field is optional
@@ -60,6 +64,7 @@ type Entry struct {
 	Subagents     *bool    `yaml:"subagents"`
 	BudgetUSD     *float64 `yaml:"budget_usd"`
 	BudgetCredits *float64 `yaml:"budget_credits"`
+	AutoPR        *bool    `yaml:"auto_pr"`
 }
 
 // Load reads and validates a batch file. Paths inside it are resolved relative
@@ -187,6 +192,12 @@ func (f *File) Resolved(e Entry) task.Task {
 	if v := firstBool(e.Subagents, f.Defaults.Subagents); v != nil {
 		subagents = *v
 	}
+	// A draft PR opens by default: it still needs a human to mark it ready,
+	// so the safety cost is nil and the work becomes visible immediately.
+	autoPR := true
+	if v := firstBool(e.AutoPR, f.Defaults.AutoPR); v != nil {
+		autoPR = *v
+	}
 	return task.Task{
 		ID:         e.ID,
 		Source:     e.Source,
@@ -201,6 +212,8 @@ func (f *File) Resolved(e Entry) task.Task {
 			USD:     firstFloat(e.BudgetUSD, f.Defaults.BudgetUSD),
 			Credits: firstFloat(e.BudgetCredits, f.Defaults.BudgetCredits),
 		},
+		AutoPR:     autoPR,
+		DCOSignoff: f.DCOSignoff,
 	}
 }
 

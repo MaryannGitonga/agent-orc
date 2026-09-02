@@ -20,8 +20,16 @@ func (c Claude) BuildCommand(t task.Task) []string {
 	if t.Model != "" {
 		argv = append(argv, "--model", t.Model)
 	}
+	argv = append(argv, c.AttributionArgs()...)
 	budget, _ := c.BudgetArgs(t.Budget)
 	return append(argv, budget...)
+}
+
+// AttributionArgs turns off Claude Code's commit and PR attribution trailers.
+// Passing them as inline settings rather than seeding a settings file keeps
+// agent-orc from writing anything into the checkout the agent commits from.
+func (Claude) AttributionArgs() []string {
+	return []string{"--settings", `{"attribution":{"commit":"","pr":""}}`}
 }
 
 // BudgetArgs caps the run with Claude Code's own dollar limit, which stops the

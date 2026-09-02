@@ -26,6 +26,15 @@ var gitEnv = []string{
 	"GIT_COMMITTER_EMAIL=test@example.invalid",
 	"GIT_CONFIG_GLOBAL=" + os.DevNull,
 	"GIT_CONFIG_SYSTEM=" + os.DevNull,
+	// Config can also arrive through the environment, and a setting such as
+	// safe.bareRepository=explicit injected that way breaks the bare remote
+	// these tests push to. Zero discards any GIT_CONFIG_KEY_n/VALUE_n pairs
+	// the surrounding shell set.
+	"GIT_CONFIG_COUNT=0",
+	// Config can also arrive through the environment, and a setting such as
+	// safe.bareRepository=explicit injected that way breaks the bare remote
+	// these tests push to. Zero discards any GIT_CONFIG_KEY_n/VALUE_n pairs
+	// the surrounding shell set.
 }
 
 // git runs a git command in dir and fails the test if it errors.
@@ -50,6 +59,21 @@ func initRepo(t *testing.T) string {
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "--no-gpg-sign", "-m", "chore: base")
 	return repo
+}
+
+// initRepoWithRemote creates a repository whose origin is a real bare
+// repository on disk, so pushes actually go somewhere and can be inspected.
+func initRepoWithRemote(t *testing.T) (repo, remote string) {
+	t.Helper()
+	// The path contains "github.com" so the forge layer picks the gh code
+	// path, while every git operation still runs against this local bare
+	// repository: no network, no credentials, real pushes.
+	remote = filepath.Join(t.TempDir(), "github.com", "org", "repo.git")
+	git(t, t.TempDir(), "init", "--bare", "--initial-branch=main", remote)
+	repo = initRepo(t)
+	git(t, repo, "remote", "add", "origin", remote)
+	git(t, repo, "push", "-q", "origin", "main")
+	return repo, remote
 }
 
 // write creates a file, failing the test if it cannot.
