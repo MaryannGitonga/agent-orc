@@ -38,20 +38,80 @@ flowchart TB
         SAN["sanitize commit messages"] --> PUSH["push the branch"] --> PR["open a draft PR"]
     end
 
+    subgraph REVIEW["agent-orc review, opt-in and run by hand"]
+        direction TB
+        REV["a different CLI, fresh session,<br/>disposable worktree"]
+        VERDICT{"LGTM?"}
+        RESUME["resume the worker's own session<br/>with the comments"]
+        MORE["further commits on the same branch"]
+        REV --> VERDICT
+        VERDICT -->|"comments"| RESUME --> MORE
+        MORE -->|"another round, up to max_rounds"| REV
+    end
+
     RUN --> SUP
     WORK -->|"the agent exits"| SAN
+    WORK -.->|"when you ask for it"| REV
+    VERDICT -->|"yes"| REVIEWED["status: reviewed"]
     SUP -.->|"status, logs, spend"| STATE
     PUSH -.-> STATE
     STATE[("~/.agent-orc")]
 ```
 
 Several tasks run this way at once, each with its own branch, worktree and
-supervisor, so one that fails does not touch the others. The publish chain
-hangs off the process that was already running for that task, which is what
-makes it automatic without anything running in the background.
+supervisor, so one that fails does not touch the others. The publish chain hangs
+off the process that was already running for that task, which is what makes it
+automatic without anything running in the background. Review is separate and
+opt-in: it never runs on its own, and it works on the same branch the worker
+committed to.
 
-Sanitization runs whether or not there is a remote: it is about the history,
-not about the push.
+Sanitization runs whether or not there is a remote: it is about the history, not
+about the push.
+
+### What it talks to
+
+agent-orc adds no runtime of its own. Everything below is either the operating
+system or a binary you already have, and it never talks to a model itself: the
+agent CLIs do that.
+
+```mermaid
+flowchart LR
+    ORC["agent-orc"]
+
+    subgraph KERNEL["the operating system does the hard parts"]
+        direction TB
+        SESS["setsid<br/>the supervisor outlives your shell"]
+        PGRP["setpgid<br/>stop reaches the agent's children"]
+        LIVE["signal 0<br/>is that pid still alive?"]
+        DISK[("~/.agent-orc<br/>one JSON per task,<br/>written to a temp file then renamed")]
+    end
+
+    subgraph BINS["binaries already on your PATH"]
+        direction TB
+        GIT["git"]
+        ACLI["claude / copilot / codex"]
+        FORGE["gh / glab"]
+    end
+
+    subgraph NET["the network"]
+        direction TB
+        GHUB["GitHub"]
+        JIRA["JIRA"]
+        MODEL["model providers"]
+    end
+
+    ORC --> SESS
+    ORC --> PGRP
+    ORC --> LIVE
+    ORC --> DISK
+    ORC -->|"worktree, commit,<br/>rebase --exec, push"| GIT
+    ORC -->|"argv built by the adapter"| ACLI
+    ORC -->|"pr create --draft,<br/>issue view --json"| FORGE
+    ORC -->|"REST v2/v3, capped at 1 MiB"| JIRA
+    GIT --> GHUB
+    FORGE --> GHUB
+    ACLI --> MODEL
+```
 
 ## Install
 
