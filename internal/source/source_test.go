@@ -6,15 +6,15 @@ import (
 )
 
 func TestParseGitHubReferences(t *testing.T) {
-	got, err := Parse("github://canonical/data-mesh#87")
+	got, err := Parse("github://acme/data-mesh#87")
 	if err != nil {
 		t.Fatalf("Parse() = %v", err)
 	}
 	if got.Kind != KindGitHub {
 		t.Errorf("Kind = %q, want %q", got.Kind, KindGitHub)
 	}
-	if got.Owner != "canonical" || got.Repo != "data-mesh" || got.Number != 87 {
-		t.Errorf("Parse() = %+v, want canonical/data-mesh#87", got)
+	if got.Owner != "acme" || got.Repo != "data-mesh" || got.Number != 87 {
+		t.Errorf("Parse() = %+v, want acme/data-mesh#87", got)
 	}
 }
 

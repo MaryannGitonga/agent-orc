@@ -30,7 +30,7 @@ tasks:
       max_rounds: 1             # cap on worker-reviewer round-trips
 
   - id: PROJ-1240
-    source: github://canonical/data-mesh#87  # no prompt: the issue says it all
+    source: github://acme/data-mesh#87  # no prompt: the issue says it all
     branch: chore/proj-1240
     base_branch: release/2.4    # builds on a release branch, not main
     cli: copilot                # different CLI, same batch

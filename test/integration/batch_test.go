@@ -126,7 +126,7 @@ func TestRunFetchesAGitHubSource(t *testing.T) {
 
 	out, err := orcRun(t, home, stub, "run",
 		"--id", "GH-1", "--repo", repo, "--cli", "claude",
-		"--source", "github://canonical/data-mesh#87",
+		"--source", "github://acme/data-mesh#87",
 		"--prompt", "Focus on the retry handler")
 	if err != nil {
 		t.Fatalf("agent-orc run = %v\n%s", err, out)
@@ -135,7 +135,7 @@ func TestRunFetchesAGitHubSource(t *testing.T) {
 
 	// gh was asked for exactly that issue.
 	gh := readFile(t, ghReceipt)
-	for _, want := range []string{"arg=issue", "arg=view", "arg=87", "arg=canonical/data-mesh", "arg=title,body"} {
+	for _, want := range []string{"arg=issue", "arg=view", "arg=87", "arg=acme/data-mesh", "arg=title,body"} {
 		if !strings.Contains(gh, want) {
 			t.Errorf("gh receipt is missing %q:\n%s", want, gh)
 		}
@@ -160,7 +160,7 @@ func TestRunFailsFastOnABadSourceFetch(t *testing.T) {
 
 	out, err := orcRun(t, home, stub, "run",
 		"--id", "GH-2", "--repo", repo, "--cli", "claude",
-		"--source", "github://canonical/data-mesh#404")
+		"--source", "github://acme/data-mesh#404")
 	if err == nil {
 		t.Fatalf("run with an unfetchable source succeeded, want an error\n%s", out)
 	}
