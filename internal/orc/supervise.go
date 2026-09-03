@@ -128,7 +128,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	return nil
 }
 
-// publish chains the sanitize → push → draft-PR pass onto the same per-task
+// publish chains the sanitize, push and draft-PR pass onto the same per-task
 // process, the moment the agent exits. This is what makes "automatic on
 // completion" work with no daemon: the automation hangs off a process that was
 // already running for this task.

@@ -77,7 +77,7 @@ type Review struct {
 	CLI CLI `yaml:"cli" json:"cli,omitempty"`
 	// Model is the reviewer's model; empty means that CLI's default.
 	Model string `yaml:"model" json:"model,omitempty"`
-	// MaxRounds caps worker↔reviewer round-trips. Zero means one round.
+	// MaxRounds caps worker and reviewer round-trips. Zero means one round.
 	MaxRounds int `yaml:"max_rounds" json:"max_rounds,omitempty"`
 }
 

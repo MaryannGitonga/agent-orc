@@ -20,7 +20,7 @@ Early. Built in phases:
 | 1 | Multi-CLI adapters, YAML batch config, JIRA/GitHub source fetching | done |
 | 2 | Subagent seeding, budget caps, `status` | done |
 | 3 | Draft PR chain, commit sanitization, `cleanup`, `logs` | done |
-| 4 | Agentic review with a capped worker↔reviewer loop | done |
+| 4 | Agentic review with a capped worker and reviewer loop | done |
 
 ## Usage
 
@@ -34,8 +34,8 @@ A ticket reference can stand in for the prompt. It is fetched once, at launch,
 and the task's own prompt is layered on top as extra instructions:
 
 ```sh
-agent-orc run --id PROJ-1240 --source github://canonical/data-mesh#87
-agent-orc run --id PROJ-1234 --source jira://PROJ-1234 --prompt "Only the retry handler"
+agent-orc run --id PROJ-1240 --cli claude --source github://canonical/data-mesh#87
+agent-orc run --id PROJ-1234 --cli claude --source jira://PROJ-1234 --prompt "Only the retry handler"
 ```
 
 JIRA needs `JIRA_BASE_URL` and `JIRA_API_TOKEN` in the environment (plus
@@ -55,10 +55,13 @@ process, so one that cannot launch does not stop the others.
 When the agent exits, the same per-task process sanitizes its commits, pushes
 the branch and opens a **draft** PR. No daemon is involved, and nothing reaches
 the remote unsanitized. `--no-auto-pr` holds off; `agent-orc pr <id>` runs the same three
-steps by hand.
+steps by hand, and is also how you retry a task left at `publish_failed`: it
+recognises a branch it pushed itself, so a retry finishes the job rather than
+starting an argument about who pushed what.
 
 `agent-orc status` prints one row per task, and `agent-orc stop <id>` kills a
-running one (leaving its worktree for you to look at):
+running one, signalling the agent's whole process group so the compilers and
+test runners it spawned go with it (its worktree is left for you to look at):
 
 ```
 ID       CLI      MODEL      STATUS   SPEND          BRANCH          ELAPSED
@@ -66,17 +69,24 @@ PROJ-1   claude   opus-4-6   done     $0.42 / $2.00  fix/proj-1234   1m30s
 PROJ-2   copilot  gpt-5.1    running  -              chore/proj-1240 12s
 ```
 
+`pending` and `running` cover the agent itself; `publishing` is the sanitize,
+push and draft-PR chain that follows it, and only then `done`. `publish_failed`
+means the work is committed on its branch but that chain did not finish, which
+`agent-orc pr <id>` retries. The rest are terminal: `failed` for a non-zero
+exit, `stopped` for a run you killed, `reviewed` for a branch an agentic review
+approved, and `policy_violation` for one the agent pushed itself.
+
 ### Budgets
 
 Each CLI meters in its own unit, and agent-orc does not invent an exchange rate
 between them. Set the budget in the unit your CLI understands and it is applied
 as that CLI's own native cap at launch:
 
-| CLI | Field | Native cap |
-| --- | --- | --- |
-| claude | `budget_usd` | `--max-budget-usd` |
-| copilot | `budget_credits` | `--max-ai-credits` |
-| codex | none | none; the budget is reported, not enforced |
+| CLI | Batch field | Flag | Native cap |
+| --- | --- | --- | --- |
+| claude | `budget_usd` | `--budget-usd` | `--max-budget-usd` |
+| copilot | `budget_credits` | `--budget-credits` | `--max-ai-credits` |
+| codex | none | none | none; the budget is reported, not enforced |
 
 A budget in a unit the CLI cannot enforce is not silently dropped. It is
 warned about at launch and noted under `agent-orc status`. Actual spend is read
@@ -88,7 +98,8 @@ Before anything is pushed, every commit the task added is rewritten in one pass
 that strips what should not be there and adds what must be:
 
 - **AI attribution trailers are removed**: `Co-authored-by: Claude/Copilot/Codex`,
-  `Claude-Session:`, `🤖 Generated with`, and any `[bot]` co-author. Each CLI is
+  `Claude-Session:`, `Generated with [Claude Code]` and its robot-emoji variant,
+  `Assisted-by:`, `Generated-with:`, and any `[bot]` co-author. Each CLI is
   also asked not to add them in the first place, but those settings are
   inconsistently honoured and an agent crafting a raw `git commit` bypasses
   them, so the rewrite never depends on them working. Add your own patterns in
@@ -100,7 +111,9 @@ that strips what should not be there and adds what must be:
   rewrite are signed exactly as a human's would be.
 
 Only commits unique to the task's own branch are touched, in the task's own
-worktree, never the base branch and never anyone else's work. If the rewrite
+worktree, never the base branch and never anyone else's work. The pass rewrites
+messages and nothing else: a branch that contains a merge keeps it, rather than
+being quietly flattened. If the rewrite
 cannot complete, it is aborted and the branch is left exactly as the agent made
 it; a half-rewritten branch is never pushed.
 
@@ -114,7 +127,8 @@ Off by default and triggered by hand. With `review.enabled` set for a task,
 `agent-orc review <id>` runs an independent review of the finished branch:
 
 ```sh
-agent-orc run --id PROJ-1234 --prompt "..." --review --review-cli copilot
+agent-orc run --id PROJ-1234 --cli claude --prompt "..." \
+  --review --review-cli copilot --review-model gpt-5.1
 agent-orc review PROJ-1234
 ```
 
@@ -149,11 +163,17 @@ agent-orc cleanup --all --force # everything, including uncommitted work and log
 
 ### Subagents
 
-`subagents: true` copies subagent definitions into the worktree before launch,
-into the directory that CLI already reads (`.claude/agents` for Claude Code,
-`.github/agents` for Copilot). Definitions come from `~/.agent-orc/agents/<cli>/`,
-falling back to whatever the repository already ships. They are ignored inside
-the worktree so the agent does not commit them.
+`subagents: true` (or `--subagents`) copies subagent definitions into the
+worktree before launch, into the directory that CLI already reads
+(`.claude/agents` for Claude Code, `.github/agents` for Copilot). Definitions
+come from `~/.agent-orc/agents/<cli>/`, falling back to whatever the repository
+already ships. They are ignored inside the worktree so the agent does not commit
+them.
+
+That ignore covers untracked files, which is what a seeded definition normally
+is. It cannot hide one that landed on a path the repository already tracks,
+because git does not consult `.gitignore` for tracked files. agent-orc warns at
+launch when that is the case rather than letting it pass quietly.
 
 `run` returns as soon as the task is dispatched. It creates a worktree, starts
 a detached supervisor that drives the agent inside it, and records everything
@@ -177,9 +197,11 @@ repository's default branch, and `--branch` to `agent-orc/<id>`.
 ## Development
 
 ```sh
-make help    # list targets
-make ci      # the CI checks that run locally; do this before pushing
-make build   # compile to bin/agent-orc
+make help             # list targets
+make ci               # the CI checks that run locally; do this before pushing
+make build            # compile to bin/agent-orc
+make test-unit        # unit tests only
+make test-integration # the tests that shell out to real git and gh
 ```
 
 Requires Go 1.22+ and `golangci-lint` (`make lint-install` fetches the pinned

@@ -16,7 +16,7 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
-// Reviewer runs bounded worker↔reviewer round-trips for a task.
+// Reviewer runs bounded worker and reviewer round-trips for a task.
 type Reviewer struct {
 	layout paths.Layout
 	store  *state.Store

@@ -22,7 +22,7 @@ const defaultRemote = "origin"
 // own condition rather than as a publish failure.
 var ErrNoRemote = errors.New("the repository has no " + defaultRemote + " remote to push to")
 
-// Publisher runs the sanitize → push → draft-PR chain for a finished task.
+// Publisher runs the sanitize, push and draft-PR chain for a finished task.
 //
 // The order matters and is not negotiable: nothing is pushed until the commit
 // messages have been rewritten, which is why the agent is told at launch to

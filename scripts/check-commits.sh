@@ -24,6 +24,8 @@ FORBIDDEN_PATTERNS=(
 	'co-authored-by:[[:space:]]*codex'
 	'co-authored-by:[[:space:]]*.*\[bot\]'
 	'generated with \[claude code\]'
+	# The emoji is the pattern, not decoration: it is the literal line the CLIs
+	# emit, so this entry has to carry it.
 	'🤖 generated with'
 	'claude-session:'
 	'assisted-by:[[:space:]]*claude'
@@ -34,7 +36,7 @@ MAX_SUBJECT=72
 
 fail=0
 err() {
-	printf '  ✗ %s\n' "$1"
+	printf '  FAIL %s\n' "$1"
 	fail=1
 }
 

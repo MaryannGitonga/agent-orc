@@ -45,9 +45,9 @@ jobs:
           fail=0
           while IFS=$'\t' read -r sha verified reason; do
             if [ "$verified" = "true" ]; then
-              printf '  ✓ %s signed (%s)\n' "$sha" "$reason"
+              printf '  ok   %s signed (%s)\n' "$sha" "$reason"
             else
-              printf '  ✗ %s unverified signature: %s\n' "$sha" "$reason"
+              printf '  FAIL %s unverified signature: %s\n' "$sha" "$reason"
               fail=1
             fi
           done < commits.tsv
