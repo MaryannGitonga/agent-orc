@@ -45,6 +45,9 @@ type Defaults struct {
 	BudgetCredits *float64 `yaml:"budget_credits"`
 	AutoPR        *bool    `yaml:"auto_pr"`
 	Review        *Review  `yaml:"review"`
+	// Instructions apply to every task in the batch, on top of anything in
+	// ~/.agent-orc/instructions.md.
+	Instructions string `yaml:"instructions"`
 }
 
 // Review is the review block as written in a batch file.
@@ -217,15 +220,16 @@ func (f *File) Resolved(e Entry) task.Task {
 		autoPR = *v
 	}
 	return task.Task{
-		ID:         e.ID,
-		Source:     e.Source,
-		Prompt:     e.Prompt,
-		Repo:       pick(e.Repo, f.Repo),
-		Branch:     e.Branch,
-		BaseBranch: pick(e.BaseBranch, f.BaseBranch),
-		CLI:        cli,
-		Model:      pick(e.Model, f.Defaults.Model),
-		Subagents:  subagents,
+		ID:           e.ID,
+		Source:       e.Source,
+		Prompt:       e.Prompt,
+		Repo:         pick(e.Repo, f.Repo),
+		Branch:       e.Branch,
+		BaseBranch:   pick(e.BaseBranch, f.BaseBranch),
+		CLI:          cli,
+		Model:        pick(e.Model, f.Defaults.Model),
+		Instructions: f.Defaults.Instructions,
+		Subagents:    subagents,
 		Budget: task.Budget{
 			USD:     firstFloat(e.BudgetUSD, f.Defaults.BudgetUSD),
 			Credits: firstFloat(e.BudgetCredits, f.Defaults.BudgetCredits),

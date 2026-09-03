@@ -55,10 +55,16 @@ type Task struct {
 	AutoPR bool `yaml:"auto_pr" json:"auto_pr"`
 	// DCOSignoff adds a Signed-off-by trailer to any commit missing one.
 	DCOSignoff bool `yaml:"dco_signoff" json:"dco_signoff,omitempty"`
-	// Raw suppresses the operating rules Render appends. agent-orc sets it for
-	// its own prompts, such as the reviewer's, which must not be told to commit;
-	// it is not something a task file can ask for.
+	// Raw makes Render return the prompt alone: no standing instructions and no
+	// operating rules. agent-orc sets it for its own prompts, such as the
+	// reviewer's, which is not doing the work and must not be told to commit.
+	// It is not something a task file can ask for.
 	Raw bool `yaml:"-" json:"-"`
+	// Instructions are standing rules that apply to the work rather than
+	// describing it: house style, a command to run before committing. They are
+	// assembled by the dispatcher from the instructions file and the batch
+	// defaults, not written into a task by hand.
+	Instructions string `yaml:"-" json:"instructions,omitempty"`
 	// Review configures the optional agentic review pass.
 	Review Review `yaml:"review" json:"review,omitempty"`
 }
@@ -202,8 +208,19 @@ Operating rules for this run (set by agent-orc, not by the task author):
 
 // Render returns the task's prompt followed by the fixed operating rules.
 func (t Task) Render() string {
+	out := strings.TrimSpace(t.Prompt)
+	// Raw is for agent-orc's own prompts, such as the reviewer's. Those get
+	// neither the standing instructions nor the operating rules: the reviewer
+	// is not doing the work, so rules about how to do it do not apply to it.
 	if t.Raw {
-		return strings.TrimSpace(t.Prompt)
+		return out
 	}
-	return strings.TrimSpace(t.Prompt) + policySuffix
+	if s := strings.TrimSpace(t.Instructions); s != "" {
+		out += instructionsHeader + s
+	}
+	return out + policySuffix
 }
+
+// instructionsHeader separates the task from the standing instructions, so an
+// agent can tell what it was asked to do from how it was asked to do it.
+const instructionsHeader = "\n\n---\nStanding instructions (they apply to every task here):\n"

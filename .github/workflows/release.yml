@@ -1,0 +1,58 @@
+name: release
+
+# Tag-driven. `git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0` is the
+# whole release process; everything below happens on its own.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.22"
+
+jobs:
+  build:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # so `git describe` sees the tag
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Install golangci-lint
+        run: |
+          version=$(make -s print-lint-version)
+          curl -sSfL -o /tmp/golangci-lint.tar.gz \
+            "https://github.com/golangci/golangci-lint/releases/download/$version/golangci-lint-${version#v}-linux-amd64.tar.gz"
+          tar -xzf /tmp/golangci-lint.tar.gz -C /tmp
+          sudo install "/tmp/golangci-lint-${version#v}-linux-amd64/golangci-lint" /usr/local/bin/
+
+      # A tag that cannot pass the PR checks is not a release. commit-check is
+      # the one omission: it reads origin/main..HEAD, which says nothing useful
+      # about a tag.
+      - run: make fmt-check vet lint build test-unit test-integration verify-clean
+
+      - name: Build every target
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            out="dist/agent-orc_${version}_${os}_${arch}"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build \
+              -ldflags "-s -w -X github.com/MaryannGitonga/agent-orc/internal/version.Version=${version}" \
+              -o "$out" ./cmd/agent-orc
+            tar -czf "${out}.tar.gz" -C dist "$(basename "$out")"
+            rm "$out"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --generate-notes --verify-tag

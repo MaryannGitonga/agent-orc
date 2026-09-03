@@ -22,8 +22,12 @@ help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | sort
 
 ## fmt: rewrite sources with gofmt
+# gofmt directly rather than `go fmt ./...`: the latter works package by package
+# and so skips files excluded by a build tag, which is every integration test.
+# fmt-check looks at those files, so fmt has to as well or it cannot fix what
+# the check reports.
 fmt:
-	$(GO) fmt $(PKG)
+	@gofmt -w -l $(shell git ls-files '*.go')
 
 ## fmt-check: fail if any source is not gofmt-clean
 fmt-check:
@@ -62,6 +66,21 @@ test-unit:
 ## test: alias for test-unit
 test: test-unit
 
+## coverage: total coverage across unit and integration tests
+coverage:
+	@rm -rf covdata && mkdir -p covdata
+	@$(GO) test -covermode=atomic -coverprofile=unit.out $(PKG) >/dev/null
+	@# The integration tests drive a separately built binary, so their coverage
+	@# lives in that subprocess. GOCOVERDIR makes the binary write it out.
+	@GOCOVERDIR=$(CURDIR)/covdata $(GO) test -count=1 -tags=integration ./test/... >/dev/null
+	@$(GO) tool covdata textfmt -i=covdata -o=integration.out
+	@{ echo 'mode: atomic'; \
+	   tail -q -n +2 unit.out integration.out \
+	   | awk '{ if (!($$1 in c) || $$3+0 > c[$$1]+0) { c[$$1]=$$3; n[$$1]=$$2 } } \
+	          END { for (k in c) print k, n[k], c[k] }'; \
+	 } > coverage.out
+	@$(GO) tool cover -func=coverage.out | tail -1 | awk '{print "total coverage: " $$3}'
+
 ## test-integration: run tests that shell out to real git/gh
 test-integration:
 	$(GO) test -race -tags=integration ./test/...
@@ -82,7 +101,7 @@ verify-clean: fmt tidy
 ## clean: remove build and test artifacts
 clean:
 	$(GO) clean -testcache
-	rm -rf $(BIN_DIR) $(DIST_DIR) coverage.out
+	rm -rf $(BIN_DIR) $(DIST_DIR) coverage.out unit.out integration.out covdata
 
 ## commit-check: enforce the commit policy over RANGE (default origin/main..HEAD)
 commit-check:
@@ -91,4 +110,4 @@ commit-check:
 ## ci: the ci and commit-policy checks that run locally; do this before pushing
 ci: fmt-check vet lint build test-unit test-integration commit-check
 
-.PHONY: help fmt fmt-check vet lint lint-install print-lint-version build test-unit test test-integration tidy verify-clean clean commit-check ci
+.PHONY: help fmt fmt-check vet lint lint-install print-lint-version build test-unit test test-integration coverage tidy verify-clean clean commit-check ci

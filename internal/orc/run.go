@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,6 +62,9 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	}
 	t, err := d.resolvePrompt(ctx, t)
 	if err != nil {
+		return err
+	}
+	if t.Instructions, err = d.standingInstructions(t); err != nil {
 		return err
 	}
 	if err := t.Validate(); err != nil {
@@ -283,6 +287,24 @@ func (d *Dispatcher) resolvePrompt(ctx context.Context, t task.Task) (task.Task,
 	}
 	t.Prompt = source.Compose(fetched, t.Prompt)
 	return t, nil
+}
+
+// standingInstructions combines the machine-wide instructions file with
+// whatever the batch set, broadest first. They add up rather than override:
+// a global rule and a batch rule are both meant to apply, and a batch that
+// wanted to drop a global one would be better off not setting it globally.
+func (d *Dispatcher) standingInstructions(t task.Task) (string, error) {
+	global, err := os.ReadFile(d.layout.InstructionsFile())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("reading %s: %w", d.layout.InstructionsFile(), err)
+	}
+	parts := make([]string, 0, 2)
+	for _, part := range []string{string(global), t.Instructions} {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // RunBatch dispatches every task in a batch file.

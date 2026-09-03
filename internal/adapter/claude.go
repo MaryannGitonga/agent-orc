@@ -16,7 +16,13 @@ func (Claude) Name() task.CLI { return task.CLIClaude }
 // BuildCommand runs the task in Claude Code's print mode, which executes the
 // prompt to completion and exits with a JSON result carrying the run's cost.
 func (c Claude) BuildCommand(t task.Task) []string {
-	argv := []string{"claude", "-p", t.Render(), "--output-format", "json"}
+	// bypassPermissions because there is nobody to answer a prompt. Without it
+	// Claude Code plans the edit, is denied, and exits zero having changed
+	// nothing, so the task costs money and produces an empty branch. The
+	// worktree is the safety boundary here, the same argument Copilot's
+	// --allow-all-tools and Codex's --sandbox workspace-write rest on.
+	argv := []string{"claude", "-p", t.Render(),
+		"--permission-mode", "bypassPermissions", "--output-format", "json"}
 	if t.Model != "" {
 		argv = append(argv, "--model", t.Model)
 	}

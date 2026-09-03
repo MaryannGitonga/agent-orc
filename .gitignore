@@ -9,6 +9,9 @@
 *.out
 *.test
 coverage.*
+unit.out
+integration.out
+covdata/
 
 # Editor / OS
 .idea/

@@ -290,3 +290,25 @@ func TestClaudeParsesTheSessionIDFromItsOutput(t *testing.T) {
 		t.Errorf("ParseSessionID() = %q, want %q", got, "abc-123")
 	}
 }
+
+// TestEveryAdapterRunsUnattended pins the flag each CLI needs to act without a
+// human. Claude Code plans an edit, is denied, and exits zero having changed
+// nothing if this is missing, so the task costs money and leaves an empty
+// branch. Only a real run catches that: a stubbed CLI has no permission model.
+func TestEveryAdapterRunsUnattended(t *testing.T) {
+	want := map[task.CLI]string{
+		task.CLIClaude:  "bypassPermissions",
+		task.CLICopilot: "--allow-all-tools",
+		task.CLICodex:   "workspace-write",
+	}
+	for cli, flag := range want {
+		a, err := For(cli)
+		if err != nil {
+			t.Fatalf("For(%s) = %v", cli, err)
+		}
+		argv := strings.Join(a.BuildCommand(task.Task{Prompt: "x", CLI: cli}), " ")
+		if !strings.Contains(argv, flag) {
+			t.Errorf("%s argv is missing %q, so it would stop for a permission prompt:\n  %s", cli, flag, argv)
+		}
+	}
+}
