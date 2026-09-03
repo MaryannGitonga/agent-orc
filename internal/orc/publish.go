@@ -22,6 +22,10 @@ const defaultRemote = "origin"
 // own condition rather than as a publish failure.
 var ErrNoRemote = errors.New("the repository has no " + defaultRemote + " remote to push to")
 
+// ErrNoCommits means the agent finished without committing anything. Like
+// ErrNoRemote it is a way a run can legitimately end, not a failure.
+var ErrNoCommits = errors.New("the agent committed nothing")
+
 // Publisher runs the sanitize, push and draft-PR chain for a finished task.
 //
 // The order matters and is not negotiable: nothing is pushed until the commit
@@ -73,17 +77,30 @@ func (p *Publisher) Publish(id string) error {
 	if err != nil {
 		return err
 	}
+	// Read the URL here rather than just before the push. It is a cheap check
+	// that does not depend on anything below it, and sanitization rewrites
+	// history irreversibly: a remote section with no url set should fail while
+	// the branch is still exactly as the agent left it.
+	var remoteURL string
+	if hasRemote {
+		if remoteURL, err = p.opener.RemoteURL(record.Worktree, defaultRemote); err != nil {
+			return err
+		}
+	}
 
 	commits, err := p.countCommits(record)
 	if err != nil {
 		return err
 	}
-	// An agent that committed nothing is only a problem when there was somewhere
-	// to publish to. Locally, it is just a task that did no work, and the
-	// no-remote path below reports it as such.
-	if commits == 0 && hasRemote {
-		return fmt.Errorf("task %q has no commits on %s; there is nothing to open a PR for",
-			id, record.Branch)
+	// An agent that committed nothing is only a failure when there was somewhere
+	// to publish to. Locally it is just a task that did no work, which is worth
+	// saying plainly rather than reporting sanitized work that does not exist.
+	if commits == 0 {
+		if hasRemote {
+			return fmt.Errorf("task %q has no commits on %s; there is nothing to open a PR for",
+				id, record.Branch)
+		}
+		return ErrNoCommits
 	}
 
 	// Only meaningful when there is somewhere to have pushed to.
@@ -112,10 +129,6 @@ func (p *Publisher) Publish(id string) error {
 
 	if !hasRemote {
 		return ErrNoRemote
-	}
-	remoteURL, err := p.opener.RemoteURL(record.Worktree, defaultRemote)
-	if err != nil {
-		return err
 	}
 
 	req := forge.Request{

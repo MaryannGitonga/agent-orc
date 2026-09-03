@@ -329,3 +329,32 @@ func TestSanitizeRunsWithoutARemote(t *testing.T) {
 		t.Error("the rewrite was not recorded in the task state")
 	}
 }
+
+// TestTaskThatCommitsNothingSaysSo covers the honest reporting of an agent that
+// did no work. It is not a failure, but the run must not claim sanitized work
+// on a branch that has none.
+func TestTaskThatCommitsNothingSaysSo(t *testing.T) {
+	repo := initRepo(t) // no remote
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "NOOP-1", "--repo", repo, "--cli", "claude", "--prompt", "do nothing"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	got := waitForStatus(t, home, "NOOP-1", "done", "failed", "publish_failed")
+	if got.Status != "done" {
+		t.Fatalf("status = %q, want done; committing nothing is not a failure", got.Status)
+	}
+	if n := strings.TrimSpace(git(t, repo, "rev-list", "--count", "main..agent-orc/noop-1")); n != "0" {
+		t.Fatalf("branch has %s commits, so this is not the case under test", n)
+	}
+
+	log := readFile(t, filepath.Join(home, "logs", "NOOP-1.supervisor.log"))
+	if !strings.Contains(log, "committed nothing") {
+		t.Errorf("the log does not say the agent committed nothing:\n%s", log)
+	}
+	if strings.Contains(log, "sanitized") {
+		t.Errorf("the log claims sanitized work on an empty branch:\n%s", log)
+	}
+}

@@ -209,7 +209,10 @@ func logsCmd(argv []string, out io.Writer) error {
 	follow := fs.Bool("f", false, "keep printing until the task finishes")
 	id, err := parseAround(fs, argv)
 	if err != nil {
-		return err
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("%w\nusage: agent-orc logs <task-id> [-f]", err)
 	}
 	if id == "" {
 		return errors.New("usage: agent-orc logs <task-id> [-f]")
@@ -227,6 +230,10 @@ func logsCmd(argv []string, out io.Writer) error {
 // is the form the usage lines advertise and the one people type. Parsing what
 // is left over after the positional picks up the trailing flags, and works for
 // flags that take a value as well as boolean ones.
+//
+// That second parse resets the FlagSet's leftover arguments, so callers must
+// use the returned value and not fs.Arg or fs.NArg afterwards: those no longer
+// describe the positional this consumed.
 func parseAround(fs *flag.FlagSet, argv []string) (string, error) {
 	if err := fs.Parse(argv); err != nil {
 		return "", err
@@ -282,7 +289,10 @@ func cleanupCmd(argv []string, out io.Writer) error {
 	force := fs.Bool("force", false, "discard uncommitted work and remove logs too")
 	id, err := parseAround(fs, argv)
 	if err != nil {
-		return err
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("%w\nusage: agent-orc cleanup <task-id|--all> [--force]", err)
 	}
 	layout, err := paths.Resolve()
 	if err != nil {

@@ -151,6 +151,13 @@ func (s *Supervisor) publish(id string, record state.Task) {
 		s.logf("no %s remote; the work is sanitized and on %s, and was not pushed", defaultRemote, record.Branch)
 		return
 	}
+	if errors.Is(err, ErrNoCommits) {
+		// Nothing to sanitize and nothing to publish. Say so, rather than
+		// reporting work on a branch that does not have any.
+		s.mark(id, state.StatusDone, "")
+		s.logf("the agent committed nothing; %s is empty", record.Branch)
+		return
+	}
 
 	s.logf("publish failed: %v", err)
 	s.logf("the work is committed on %s; retry with 'agent-orc pr %s'", record.Branch, id)

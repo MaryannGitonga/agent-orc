@@ -161,7 +161,7 @@ actually have, and checks the binary is on PATH before creating anything.
 | `stop <id>` | terminate a running agent and everything it spawned |
 | `pr <id>` | run the publish chain by hand, or retry one that failed |
 | `review <id>` | run an agentic review round |
-| `cleanup <id> [--all] [--force]` | remove the worktree and state; keep the branch |
+| `cleanup <id\|--all> [--force]` | remove the worktree and state; keep the branch |
 | `version` | print the version |
 
 ## Task sources
