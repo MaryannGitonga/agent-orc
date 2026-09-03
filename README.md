@@ -99,8 +99,8 @@ flowchart LR
     subgraph NET["the network"]
         direction TB
         GHUB["GitHub"]
-        JIRA["JIRA"]
         MODEL["model providers"]
+        JIRA["JIRA"]
     end
 
     ORC --> SESS
@@ -110,7 +110,7 @@ flowchart LR
     ORC -->|"worktree, commit,<br/>rebase --exec, push"| GIT
     ORC -->|"argv built by the adapter"| ACLI
     ORC -->|"pr create --draft,<br/>issue view --json"| FORGE
-    ORC -->|"REST v2/v3, capped at 1 MiB"| JIRA
+    ORC -->|"REST, one request,<br/>response capped at 1 MiB"| JIRA
     GIT --> GHUB
     FORGE --> GHUB
     ACLI --> MODEL
@@ -181,6 +181,14 @@ agent-orc run --id PROJ-1234 --cli claude --source jira://PROJ-1234 \
 GitHub reuses the `gh` login you already have. JIRA needs `JIRA_BASE_URL` and
 `JIRA_API_TOKEN` in the environment, plus `JIRA_USER_EMAIL` on Cloud, which
 authenticates with basic auth rather than a bearer token.
+
+JIRA requests use REST v2, which Server and Data Center use natively and Cloud
+still accepts; set `JIRA_API_VERSION=3` for an instance that requires it. The
+description is read either way: v2 returns a plain string and v3 an Atlassian
+Document Format tree, and both are flattened into the prompt. Only the first
+1 MiB of a response is read, so an enormous issue cannot be loaded into memory
+whole; one that exceeds the cap is refused by size rather than being truncated
+into a parse error.
 
 A source that cannot be fetched fails the launch before anything is created on
 disk, rather than starting an agent on a guess.

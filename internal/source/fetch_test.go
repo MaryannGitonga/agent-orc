@@ -2,8 +2,10 @@ package source
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -191,5 +193,79 @@ func TestJIRAFetcherSeparatesHeadingsFromBodyText(t *testing.T) {
 	}
 	if !strings.Contains(got.Body, "Steps") || !strings.Contains(got.Body, "do the thing") {
 		t.Errorf("Body = %q, want both the heading and the paragraph", got.Body)
+	}
+}
+
+// TestJIRAFetcherRejectsAnOversizedResponse pins the reason a huge response is
+// refused. Reading exactly the cap would truncate the body and surface as
+// "unexpected end of JSON input", which blames the server for malformed output
+// instead of naming the size.
+func TestJIRAFetcherRejectsAnOversizedResponse(t *testing.T) {
+	huge := strings.Repeat("x", 2<<20)
+	body := fmt.Sprintf(`{"fields":{"summary":"T","description":%q}}`, huge)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	_, err := (&JIRAFetcher{BaseURL: srv.URL, Token: "tok"}).Fetch(
+		context.Background(), Ref{Kind: KindJIRA, Key: "PROJ-1"})
+	if err == nil {
+		t.Fatal("Fetch() on an oversized response = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(maxJIRABody)) {
+		t.Errorf("error = %q, want it to name the limit (%d bytes)", err, maxJIRABody)
+	}
+	if strings.Contains(err.Error(), "JSON") {
+		t.Errorf("error = %q, want the size named rather than a parse failure", err)
+	}
+}
+
+// TestJIRAFetcherAcceptsAResponseAtTheLimit checks the extra byte read does not
+// reject a response that merely reaches the cap.
+func TestJIRAFetcherAcceptsAResponseAtTheLimit(t *testing.T) {
+	prefix := `{"fields":{"summary":"T","description":"`
+	suffix := `"}}`
+	fill := strings.Repeat("x", maxJIRABody-len(prefix)-len(suffix))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, prefix+fill+suffix)
+	}))
+	defer srv.Close()
+
+	got, err := (&JIRAFetcher{BaseURL: srv.URL, Token: "tok"}).Fetch(
+		context.Background(), Ref{Kind: KindJIRA, Key: "PROJ-1"})
+	if err != nil {
+		t.Fatalf("Fetch() on a response exactly at the cap = %v, want nil", err)
+	}
+	if got.Title != "T" {
+		t.Errorf("Title = %q, want T", got.Title)
+	}
+}
+
+// TestJIRAFetcherReportsTheStatusOfALargeErrorPage keeps the size guard from
+// masking an HTTP failure. An SSO portal answering 401 with a big HTML page is
+// a routine way for this to break, and the status is what explains it.
+func TestJIRAFetcherReportsTheStatusOfALargeErrorPage(t *testing.T) {
+	page := "<html><body>" + strings.Repeat("Sign in to continue. ", 100000) + "</body></html>"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, page)
+	}))
+	defer srv.Close()
+
+	_, err := (&JIRAFetcher{BaseURL: srv.URL, Token: "tok"}).Fetch(
+		context.Background(), Ref{Kind: KindJIRA, Key: "PROJ-1"})
+	if err == nil {
+		t.Fatal("Fetch() on a 401 = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error = %q, want it to report the status", err)
+	}
+	if strings.Contains(err.Error(), "more than") {
+		t.Errorf("error = %q, want the status rather than a complaint about size", err)
+	}
+	// The page itself must not be dumped into the message.
+	if len(err.Error()) > 600 {
+		t.Errorf("error is %d chars; the body should be trimmed", len(err.Error()))
 	}
 }
