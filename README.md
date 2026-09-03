@@ -33,9 +33,11 @@ flowchart TB
         SUP --> AGENT --> WORK
     end
 
-    subgraph PUBLISH["publish chain, same supervisor process"]
+    SAN["sanitize commit messages<br/>always, remote or not"]
+
+    subgraph PUBLISH["only when the repository has a remote"]
         direction TB
-        SAN["sanitize commit messages"] --> PUSH["push the branch"] --> PR["open a draft PR"]
+        PUSH["push the branch"] --> PR["open a draft PR"]
     end
 
     subgraph REVIEW["agent-orc review, opt-in and run by hand"]
@@ -51,6 +53,7 @@ flowchart TB
 
     RUN --> SUP
     WORK -->|"the agent exits"| SAN
+    SAN --> PUSH
     WORK -.->|"when you ask for it"| REV
     VERDICT -->|"yes"| REVIEWED["status: reviewed"]
     SUP -.->|"status, logs, spend"| STATE
@@ -217,13 +220,18 @@ When the agent exits, the same per-task process sanitizes its commits, pushes
 the branch and opens a **draft** PR. Nothing reaches the remote unsanitized.
 
 `--no-auto-pr` holds off. `agent-orc pr <id>` runs the three steps by hand, and
-is also how you retry a task left at `publish_failed`: it recognises a branch it
-pushed itself, so the retry finishes the job instead of mistaking it for one the
-agent pushed.
+is also how you retry a task whose push landed but whose draft-open did not: it
+recognises a branch it pushed itself, so the retry finishes the job instead of
+mistaking it for one the agent pushed. Retrying a task that committed nothing
+will not help, and the log says so rather than suggesting it.
 
 A repository with no `origin` is a legitimate way to work. Commits are still
-sanitized, and the task ends `done` with its work on the branch rather than as
-a failure.
+sanitized and the task ends `done` on its branch, rather than as a failure.
+
+An agent that committed nothing is not a failure either, and ends `done` with
+the log saying the branch is empty. The same run in a repository that *does*
+have a remote ends `publish_failed` instead, because a draft PR someone is
+waiting for is never going to appear.
 
 ### Statuses
 
@@ -232,8 +240,8 @@ a failure.
 | `pending` | dispatched; the agent has not started yet |
 | `running` | the agent is working |
 | `publishing` | the sanitize, push and draft-PR chain is running |
-| `done` | published, or committed locally if there is no remote |
-| `publish_failed` | committed on its branch, but the chain did not finish |
+| `done` | published as a draft PR, or sanitized and left on the branch when there is no remote |
+| `publish_failed` | no draft PR was opened: the chain stopped part way, or the agent committed nothing |
 | `failed` | the agent exited non-zero, or never launched |
 | `stopped` | you killed it with `agent-orc stop` |
 | `reviewed` | an agentic review round approved the branch |
