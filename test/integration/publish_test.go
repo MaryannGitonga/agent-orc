@@ -234,8 +234,8 @@ func TestPublishRefusesABranchWithNoCommits(t *testing.T) {
 	if err == nil {
 		t.Fatalf("agent-orc pr on an empty branch succeeded, want an error\n%s", out)
 	}
-	if !strings.Contains(out, "no commits") {
-		t.Errorf("error = %q, want it to say there is nothing to open a PR for", out)
+	if !strings.Contains(out, "committed nothing") {
+		t.Errorf("error = %q, want it to say the agent committed nothing", out)
 	}
 }
 
@@ -392,16 +392,16 @@ func TestEmptyBranchWithARemoteIsNotAPublishFailure(t *testing.T) {
 	stubInto(t, stub, "gh", filepath.Join(t.TempDir(), "gh"), `printf 'https://example.com/pr/1\n'`)
 
 	if out, err := orcRun(t, home, stub, "run",
-		"--id", "EMPTY-1", "--repo", repo, "--cli", "claude", "--prompt", "do nothing"); err != nil {
+		"--id", "NOPR-1", "--repo", repo, "--cli", "claude", "--prompt", "do nothing"); err != nil {
 		t.Fatalf("agent-orc run = %v\n%s", err, out)
 	}
 	// Not done: a PR someone is waiting for will never arrive.
-	got := waitForStatus(t, home, "EMPTY-1", "publish_failed", "done", "failed")
+	got := waitForStatus(t, home, "NOPR-1", "publish_failed", "done", "failed")
 	if got.Status != "publish_failed" {
 		t.Fatalf("status = %q, want publish_failed", got.Status)
 	}
 
-	log := readFile(t, filepath.Join(home, "logs", "EMPTY-1.supervisor.log"))
+	log := readFile(t, filepath.Join(home, "logs", "NOPR-1.supervisor.log"))
 	if !strings.Contains(log, "committed nothing") {
 		t.Errorf("the log does not say the agent committed nothing:\n%s", log)
 	}
