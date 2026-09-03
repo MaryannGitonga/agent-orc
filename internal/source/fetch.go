@@ -169,12 +169,16 @@ func (j *JIRAFetcher) Fetch(ctx context.Context, ref Ref) (Issue, error) {
 	if err != nil {
 		return Issue{}, fmt.Errorf("reading response: %w", err)
 	}
+	// Status before size. An SSO portal or proxy answering 401 with a large HTML
+	// page is a routine way for this to fail, and reporting the size would hide
+	// the status that actually explains it. What is shown of an oversized error
+	// body is trimmed, because the point is the status, not the page.
+	if resp.StatusCode != http.StatusOK {
+		return Issue{}, fmt.Errorf("%s returned %s: %s", url, resp.Status, excerpt(body))
+	}
 	if len(body) > maxJIRABody {
 		return Issue{}, fmt.Errorf("%s returned more than %d bytes; refusing to read a response that large into memory",
 			url, maxJIRABody)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return Issue{}, fmt.Errorf("%s returned %s: %s", url, resp.Status, strings.TrimSpace(string(body)))
 	}
 
 	var payload struct {
@@ -187,6 +191,17 @@ func (j *JIRAFetcher) Fetch(ctx context.Context, ref Ref) (Issue, error) {
 		return Issue{}, fmt.Errorf("parsing response: %w", err)
 	}
 	return Issue{Title: payload.Fields.Summary, Body: decodeDescription(payload.Fields.Description)}, nil
+}
+
+// excerpt renders a server's error body for a message: trimmed, and short
+// enough that a large HTML page does not bury the status it accompanies.
+func excerpt(body []byte) string {
+	const max = 200
+	s := strings.TrimSpace(string(body))
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "... (truncated)"
 }
 
 // decodeDescription flattens a JIRA description. v2 returns a plain string; v3
