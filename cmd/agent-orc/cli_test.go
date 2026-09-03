@@ -172,4 +172,17 @@ func TestParseAroundAcceptsFlagsOnEitherSide(t *testing.T) {
 	if _, _, err := parse([]string{"A", "B"}); err == nil {
 		t.Error("parseAround with two positionals = nil, want an error")
 	}
+
+	// An explicit -- means everything after it is positional, which is the only
+	// way to name a task whose id starts with a dash.
+	if id, f, err := parse([]string{"--", "-weird-id"}); err != nil || id != "-weird-id" || f {
+		t.Errorf("parseAround(-- -weird-id) = %q, %v, %v; want -weird-id, false, nil", id, f, err)
+	}
+	if id, f, err := parse([]string{"-f", "--", "-weird-id"}); err != nil || id != "-weird-id" || !f {
+		t.Errorf("parseAround(-f -- -weird-id) = %q, %v, %v; want -weird-id, true, nil", id, f, err)
+	}
+	// After --, a dash argument is a stray positional, not a flag to obey.
+	if _, f, err := parse([]string{"--", "-weird-id", "-f"}); err == nil || f {
+		t.Errorf("parseAround(-- -weird-id -f) = f %v, err %v; want an error and no flag set", f, err)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/MaryannGitonga/agent-orc/internal/config"
@@ -233,7 +234,8 @@ func logsCmd(argv []string, out io.Writer) error {
 //
 // That second parse resets the FlagSet's leftover arguments, so callers must
 // use the returned value and not fs.Arg or fs.NArg afterwards: those no longer
-// describe the positional this consumed.
+// describe the positional this consumed. An explicit -- is honoured: after one,
+// nothing is reparsed, so an id beginning with a dash can still be passed.
 func parseAround(fs *flag.FlagSet, argv []string) (string, error) {
 	if err := fs.Parse(argv); err != nil {
 		return "", err
@@ -241,6 +243,15 @@ func parseAround(fs *flag.FlagSet, argv []string) (string, error) {
 	rest := fs.Args()
 	if len(rest) == 0 {
 		return "", nil
+	}
+	// An explicit -- means everything after it is positional. Re-parsing those
+	// as flags would override what the caller just said, so the second pass is
+	// only for the case where no marker was given.
+	if slices.Contains(argv, "--") {
+		if len(rest) > 1 {
+			return "", fmt.Errorf("unexpected argument %q", rest[1])
+		}
+		return rest[0], nil
 	}
 	positional := rest[0]
 	if err := fs.Parse(rest[1:]); err != nil {
