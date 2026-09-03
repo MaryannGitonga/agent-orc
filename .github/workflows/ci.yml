@@ -73,6 +73,23 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - run: make test-unit
 
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Reported rather than gated. The integration tests drive a separately
+      # built binary, so this merges their subprocess coverage with the unit
+      # profile; unit coverage alone understates it by about thirty points.
+      - name: Coverage
+        run: |
+          total=$(make -s coverage)
+          echo "$total"
+          echo "### ${total}" >> "$GITHUB_STEP_SUMMARY"
+
   integration-tests:
     name: integration tests
     runs-on: ubuntu-latest

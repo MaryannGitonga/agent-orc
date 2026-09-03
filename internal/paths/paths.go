@@ -79,6 +79,13 @@ func (l Layout) TrailerPatternsFile() string {
 	return filepath.Join(l.Root, "trailers.txt")
 }
 
+// InstructionsFile is where a user may put standing instructions that every
+// task's prompt carries, the same way TrailerPatternsFile extends the strip
+// patterns. Absent is the normal case.
+func (l Layout) InstructionsFile() string {
+	return filepath.Join(l.Root, "instructions.md")
+}
+
 // Worktree returns the worktree directory for a task.
 func (l Layout) Worktree(id string) string {
 	return filepath.Join(l.Worktrees, id)

@@ -31,10 +31,6 @@ var gitEnv = []string{
 	// these tests push to. Zero discards any GIT_CONFIG_KEY_n/VALUE_n pairs
 	// the surrounding shell set.
 	"GIT_CONFIG_COUNT=0",
-	// Config can also arrive through the environment, and a setting such as
-	// safe.bareRepository=explicit injected that way breaks the bare remote
-	// these tests push to. Zero discards any GIT_CONFIG_KEY_n/VALUE_n pairs
-	// the surrounding shell set.
 }
 
 // git runs a git command in dir and fails the test if it errors.
@@ -94,7 +90,18 @@ func buildBinary(t *testing.T) string {
 			return
 		}
 		binPath = filepath.Join(dir, "agent-orc")
-		cmd := exec.Command("go", "build", "-o", binPath, "github.com/MaryannGitonga/agent-orc/cmd/agent-orc")
+		// -cover so a run of this binary reports what it executed. These tests
+		// drive a subprocess, which ordinary profile coverage cannot see, so
+		// without it the packages they exercise hardest read as untested.
+		// GOCOVERDIR in the environment turns collection on; unset, the flag
+		// costs nothing but a slightly larger binary.
+		args := []string{"build", "-o", binPath}
+		if os.Getenv("GOCOVERDIR") != "" {
+			args = append(args, "-cover", "-covermode=atomic",
+				"-coverpkg=github.com/MaryannGitonga/agent-orc/...")
+		}
+		args = append(args, "github.com/MaryannGitonga/agent-orc/cmd/agent-orc")
+		cmd := exec.Command("go", args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			buildErr = &buildFailure{err: err, output: string(out)}
 		}

@@ -162,3 +162,44 @@ func TestRawIsNotConfigurable(t *testing.T) {
 		t.Errorf("Raw json tag = %q, want \"-\" so it is never persisted", got)
 	}
 }
+
+// TestRenderPlacesInstructionsBetweenTaskAndRules pins the prompt's shape: what
+// to do, then how it is done here, then the rules agent-orc imposes.
+func TestRenderPlacesInstructionsBetweenTaskAndRules(t *testing.T) {
+	got := Task{Prompt: "fix the retry handler", Instructions: "run gofmt before committing"}.Render()
+
+	task := strings.Index(got, "fix the retry handler")
+	standing := strings.Index(got, "run gofmt before committing")
+	rules := strings.Index(got, "Operating rules for this run")
+	if task < 0 || standing < 0 || rules < 0 {
+		t.Fatalf("Render() lost a section:\n%s", got)
+	}
+	if !(task < standing && standing < rules) {
+		t.Errorf("sections are out of order (task %d, standing %d, rules %d):\n%s", task, standing, rules, got)
+	}
+}
+
+// TestRenderWithoutInstructionsIsUnchanged keeps the common case clean: no
+// empty header for a task that has no standing instructions.
+func TestRenderWithoutInstructionsIsUnchanged(t *testing.T) {
+	got := Task{Prompt: "do the thing"}.Render()
+	if strings.Contains(got, "Standing instructions") {
+		t.Errorf("Render() added an empty instructions section:\n%s", got)
+	}
+	if !strings.Contains(got, "Operating rules for this run") {
+		t.Error("Render() dropped the operating rules")
+	}
+	// Whitespace-only instructions count as absent too.
+	if blank := (Task{Prompt: "do the thing", Instructions: "   \n  "}).Render(); blank != got {
+		t.Errorf("blank instructions changed the prompt:\n%s", blank)
+	}
+}
+
+// TestRawSkipsInstructionsToo covers the reviewer: it is not doing the work, so
+// rules about how the work is done do not apply to it.
+func TestRawSkipsInstructionsToo(t *testing.T) {
+	got := Task{Prompt: "review this diff", Instructions: "run gofmt before committing", Raw: true}.Render()
+	if got != "review this diff" {
+		t.Errorf("Render() with Raw = %q, want the prompt untouched", got)
+	}
+}

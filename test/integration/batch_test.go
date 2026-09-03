@@ -218,3 +218,63 @@ func TestStubReceiptPathWithSpaces(t *testing.T) {
 		t.Errorf("nothing was written to a receipt path containing spaces:\n%q", r)
 	}
 }
+
+// TestStandingInstructionsReachTheAgent covers both sources at once: the
+// machine-wide instructions file and a batch default, which add up rather than
+// override, so a global rule and a batch rule both apply.
+func TestStandingInstructionsReachTheAgent(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	receipt := filepath.Join(t.TempDir(), "receipt")
+	stub := stubAgent(t, "claude", receipt, "true")
+
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(home, "instructions.md"), "Always run gofmt before committing.")
+
+	batch := filepath.Join(t.TempDir(), "tasks.yaml")
+	write(t, batch, fmt.Sprintf(`repo: %s
+defaults:
+  cli: claude
+  instructions: Prefer the standard library.
+tasks:
+  - id: SI-1
+    prompt: fix the retry handler
+`, repo))
+
+	if out, err := orcRun(t, home, stub, "run", batch); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "SI-1", "done", "failed")
+
+	got := readFile(t, receipt)
+	for _, want := range []string{
+		"fix the retry handler",        // the task itself
+		"Always run gofmt",             // from the instructions file
+		"Prefer the standard library",  // from the batch defaults
+		"Operating rules for this run", // agent-orc's own policy
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the agent never received %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestNoInstructionsFileIsNormal keeps the common case working: no file, no
+// batch default, and nothing extra in the prompt.
+func TestNoInstructionsFileIsNormal(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	receipt := filepath.Join(t.TempDir(), "receipt")
+	stub := stubAgent(t, "claude", receipt, "true")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "SI-2", "--repo", repo, "--cli", "claude", "--prompt", "do the thing"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "SI-2", "done", "failed")
+	if got := readFile(t, receipt); strings.Contains(got, "Standing instructions") {
+		t.Errorf("an empty instructions section reached the agent:\n%s", got)
+	}
+}

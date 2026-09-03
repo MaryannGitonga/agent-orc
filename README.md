@@ -3,6 +3,7 @@
 [![ci](https://github.com/MaryannGitonga/agent-orc/actions/workflows/ci.yml/badge.svg)](https://github.com/MaryannGitonga/agent-orc/actions/workflows/ci.yml)
 [![commit-policy](https://github.com/MaryannGitonga/agent-orc/actions/workflows/commit-policy.yml/badge.svg)](https://github.com/MaryannGitonga/agent-orc/actions/workflows/commit-policy.yml)
 ![go](https://img.shields.io/badge/go-1.22%2B-00ADD8)
+![version](https://img.shields.io/badge/version-v0.1.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 Run several agentic coding CLIs at once, each on its own task, each in its own
@@ -320,6 +321,40 @@ is. It cannot hide one that landed on a path the repository already tracks,
 because git does not consult `.gitignore` for tracked files. agent-orc warns at
 launch when that happens rather than letting it pass quietly.
 
+## Standing instructions
+
+A task's prompt says what to do. Standing instructions say how work is done
+here, and are added to every task rather than repeated in each one:
+
+```sh
+cat ~/.agent-orc/instructions.md
+```
+```
+Run `make ci` before committing.
+Prefer the standard library; justify any new dependency in the commit body.
+```
+
+A batch can add its own on top, for rules that apply to that run rather than to
+the machine:
+
+```yaml
+defaults:
+  cli: claude
+  instructions: |
+    This service is on the 2.x API. Do not use the deprecated v1 client.
+```
+
+The two add up, broadest first, and land between the task and agent-orc's own
+operating rules, so an agent can tell what it was asked to do from how it is
+expected to do it. Neither is given to a reviewer: it is not doing the work, so
+rules about how the work is done do not apply to it.
+
+Repository-level instruction files that a CLI already reads keep working
+untouched, because the agent runs in a worktree of your repository: `CLAUDE.md`
+for Claude Code, `AGENTS.md` for Codex, `.github/copilot-instructions.md` for
+Copilot. Use those for anything that belongs to the repository, and
+`instructions.md` for anything that belongs to you.
+
 ## Files on disk
 
 Everything lives under `~/.agent-orc`, overridable with `AGENT_ORC_HOME`:
@@ -332,6 +367,7 @@ Everything lives under `~/.agent-orc`, overridable with `AGENT_ORC_HOME`:
   worktrees/PROJ-1234/          the isolated checkout
   reviews/PROJ-1234/            a review round's disposable checkout
   agents/claude/*.md            your subagent definitions, seeded on request
+  instructions.md               standing instructions added to every prompt
   trailers.txt                  extra sanitization patterns, one per line
 ```
 
@@ -346,6 +382,7 @@ make ci               # everything the workflows check; run before pushing
 make build            # compile to bin/agent-orc
 make test-unit        # unit tests
 make test-integration # the tests that shell out to real git and gh
+make coverage         # total coverage, unit and integration merged
 ```
 
 Requires Go 1.22+ and `golangci-lint` (`make lint-install` fetches the pinned
