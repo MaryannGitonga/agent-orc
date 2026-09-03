@@ -22,9 +22,15 @@ const defaultRemote = "origin"
 // own condition rather than as a publish failure.
 var ErrNoRemote = errors.New("the repository has no " + defaultRemote + " remote to push to")
 
-// ErrNoCommits means the agent finished without committing anything. Like
-// ErrNoRemote it is a way a run can legitimately end, not a failure.
+// ErrNoCommits means the agent finished without committing anything, in a
+// repository with nowhere to publish to. Like ErrNoRemote it is a way a run can
+// legitimately end, not a failure.
 var ErrNoCommits = errors.New("the agent committed nothing")
+
+// ErrNothingToPublish is the same fact in a repository that does have a remote.
+// It is not a publish failure, since nothing was attempted, but it is not done
+// either: a draft PR someone is waiting for will never appear.
+var ErrNothingToPublish = errors.New("the agent committed nothing to publish")
 
 // Publisher runs the sanitize, push and draft-PR chain for a finished task.
 //
@@ -92,22 +98,24 @@ func (p *Publisher) Publish(id string) error {
 	if err != nil {
 		return err
 	}
-	// An agent that committed nothing is only a failure when there was somewhere
-	// to publish to. Locally it is just a task that did no work, which is worth
-	// saying plainly rather than reporting sanitized work that does not exist.
-	if commits == 0 {
-		if hasRemote {
-			return fmt.Errorf("task %q has no commits on %s; there is nothing to open a PR for",
-				id, record.Branch)
-		}
-		return ErrNoCommits
-	}
-
+	// Ahead of the commit count on purpose. An agent that pushed its own branch
+	// is a trust problem, and that diagnosis should not be hidden behind "you
+	// committed nothing" just because the local branch happens to be empty.
 	// Only meaningful when there is somewhere to have pushed to.
 	if hasRemote {
 		if err := p.checkAgentDidNotPublish(&record); err != nil {
 			return err
 		}
+	}
+
+	// An agent that committed nothing is only a failure when there was somewhere
+	// to publish to. Locally it is just a task that did no work; with a remote,
+	// someone is waiting for a PR that will never arrive.
+	if commits == 0 {
+		if hasRemote {
+			return ErrNothingToPublish
+		}
+		return ErrNoCommits
 	}
 
 	// Sanitization is about the history, not about the push, so it runs whether

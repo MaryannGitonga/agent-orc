@@ -358,3 +358,57 @@ func TestTaskThatCommitsNothingSaysSo(t *testing.T) {
 		t.Errorf("the log claims sanitized work on an empty branch:\n%s", log)
 	}
 }
+
+// TestPolicyViolationBeatsAnEmptyBranch keeps the trust check ahead of the
+// commit count. An agent that pushed its own branch is a policy violation even
+// when it left nothing committed locally, and that is the diagnosis that
+// matters: "you committed nothing" would hide an unsanitized branch already
+// sitting on the remote.
+func TestPolicyViolationBeatsAnEmptyBranch(t *testing.T) {
+	repo, _ := initRepoWithRemote(t)
+	home := t.TempDir()
+	// Pushes the branch without committing anything to it.
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"),
+		"git push -q origin HEAD:agent-orc/pv-1 2>/dev/null")
+	stubInto(t, stub, "gh", filepath.Join(t.TempDir(), "gh"), `printf 'https://example.com/pr/1\n'`)
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "PV-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	got := waitForStatus(t, home, "PV-1", "policy_violation", "done", "failed", "publish_failed")
+	if got.Status != "policy_violation" {
+		t.Errorf("status = %q, want policy_violation; the agent pushed its own branch", got.Status)
+	}
+}
+
+// TestEmptyBranchWithARemoteIsNotAPublishFailure covers the wording. Nothing
+// was attempted, so the log must not talk about a failed publish or offer a
+// retry that cannot help.
+func TestEmptyBranchWithARemoteIsNotAPublishFailure(t *testing.T) {
+	repo, _ := initRepoWithRemote(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	stubInto(t, stub, "gh", filepath.Join(t.TempDir(), "gh"), `printf 'https://example.com/pr/1\n'`)
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "EMPTY-1", "--repo", repo, "--cli", "claude", "--prompt", "do nothing"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	// Not done: a PR someone is waiting for will never arrive.
+	got := waitForStatus(t, home, "EMPTY-1", "publish_failed", "done", "failed")
+	if got.Status != "publish_failed" {
+		t.Fatalf("status = %q, want publish_failed", got.Status)
+	}
+
+	log := readFile(t, filepath.Join(home, "logs", "EMPTY-1.supervisor.log"))
+	if !strings.Contains(log, "committed nothing") {
+		t.Errorf("the log does not say the agent committed nothing:\n%s", log)
+	}
+	if strings.Contains(log, "retry with") {
+		t.Errorf("the log offers a retry that cannot help:\n%s", log)
+	}
+	if strings.Contains(log, "the work is committed") {
+		t.Errorf("the log claims committed work on an empty branch:\n%s", log)
+	}
+}

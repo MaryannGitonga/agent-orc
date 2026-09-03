@@ -151,6 +151,14 @@ func (s *Supervisor) publish(id string, record state.Task) {
 		s.logf("no %s remote; the work is sanitized and on %s, and was not pushed", defaultRemote, record.Branch)
 		return
 	}
+	if errors.Is(err, ErrNothingToPublish) {
+		// Not a publish failure: nothing was attempted, because there was
+		// nothing to attempt it with. Still not done, because the PR a human is
+		// waiting on is never going to arrive.
+		s.mark(id, state.StatusPublishFailed, err.Error())
+		s.logf("the agent committed nothing; %s is empty and no PR was opened", record.Branch)
+		return
+	}
 	if errors.Is(err, ErrNoCommits) {
 		// Nothing to sanitize and nothing to publish. Say so, rather than
 		// reporting work on a branch that does not have any.
