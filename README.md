@@ -185,9 +185,10 @@ authenticates with basic auth rather than a bearer token.
 JIRA requests use REST v2, which Server and Data Center use natively and Cloud
 still accepts; set `JIRA_API_VERSION=3` for an instance that requires it. The
 description is read either way: v2 returns a plain string and v3 an Atlassian
-Document Format tree, and both are flattened into the prompt. The response body
-is capped at 1 MiB, so an enormous issue fails cleanly instead of being read
-into memory whole.
+Document Format tree, and both are flattened into the prompt. Only the first
+1 MiB of a response is read, so an enormous issue cannot be loaded into memory
+whole; one that exceeds the cap is refused by size rather than being truncated
+into a parse error.
 
 A source that cannot be fetched fails the launch before anything is created on
 disk, rather than starting an agent on a guess.

@@ -110,6 +110,9 @@ const (
 	EnvJIRAAPIVersion = "JIRA_API_VERSION"
 )
 
+// maxJIRABody bounds how much of a JIRA response is read into memory.
+const maxJIRABody = 1 << 20
+
 // JIRAFetcher reads an issue over the JIRA REST API.
 type JIRAFetcher struct {
 	Client *http.Client
@@ -159,9 +162,16 @@ func (j *JIRAFetcher) Fetch(ctx context.Context, ref Ref) (Issue, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// One byte past the cap, so an oversized response is detectable. Reading
+	// exactly the cap would truncate it into a JSON parse error that blames the
+	// server for malformed output instead of naming the real cause.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJIRABody+1))
 	if err != nil {
 		return Issue{}, fmt.Errorf("reading response: %w", err)
+	}
+	if len(body) > maxJIRABody {
+		return Issue{}, fmt.Errorf("%s returned more than %d bytes; refusing to read a response that large into memory",
+			url, maxJIRABody)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return Issue{}, fmt.Errorf("%s returned %s: %s", url, resp.Status, strings.TrimSpace(string(body)))
