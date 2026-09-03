@@ -55,9 +55,10 @@ type Task struct {
 	AutoPR bool `yaml:"auto_pr" json:"auto_pr"`
 	// DCOSignoff adds a Signed-off-by trailer to any commit missing one.
 	DCOSignoff bool `yaml:"dco_signoff" json:"dco_signoff,omitempty"`
-	// Raw suppresses the operating rules Render appends. agent-orc sets it for
-	// its own prompts, such as the reviewer's, which must not be told to commit;
-	// it is not something a task file can ask for.
+	// Raw makes Render return the prompt alone: no standing instructions and no
+	// operating rules. agent-orc sets it for its own prompts, such as the
+	// reviewer's, which is not doing the work and must not be told to commit.
+	// It is not something a task file can ask for.
 	Raw bool `yaml:"-" json:"-"`
 	// Instructions are standing rules that apply to the work rather than
 	// describing it: house style, a command to run before committing. They are

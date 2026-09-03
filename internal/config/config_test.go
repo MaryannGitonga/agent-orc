@@ -205,3 +205,29 @@ func TestParseRejectsABadReviewBlock(t *testing.T) {
 		})
 	}
 }
+
+// TestShippedExampleIsValid keeps examples/tasks.yaml honest. It is
+// documentation people copy, and nothing else parses it, so a stray character
+// or a field that has since been renamed would sit there unnoticed. Strict
+// decoding means this also catches drift between the example and the schema.
+func TestShippedExampleIsValid(t *testing.T) {
+	f, err := Load(filepath.Join("..", "..", "examples", "tasks.yaml"))
+	if err != nil {
+		t.Fatalf("the shipped example does not load: %v", err)
+	}
+	if len(f.Tasks) == 0 {
+		t.Fatal("the shipped example has no tasks")
+	}
+	for i, e := range f.Tasks {
+		got := f.Resolved(e)
+		if !got.CLI.Known() {
+			t.Errorf("tasks[%d] resolves to cli %q, which is not dispatchable", i, got.CLI)
+		}
+		// A # inside a block scalar is literal text, not a comment, so a stray
+		// one lands in every prompt this batch sends.
+		if strings.Contains(got.Instructions, "#") {
+			t.Errorf("tasks[%d] instructions carry a literal #, which would reach the agent:\n%s",
+				i, got.Instructions)
+		}
+	}
+}

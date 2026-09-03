@@ -8,10 +8,11 @@ base_branch: main               # default for the batch; any task can override i
 dco_signoff: false              # set true if this repo requires DCO sign-off
 
 defaults:
-  cli: claude
+  cli: claude                   # claude | copilot | codex
   # Added to every task's prompt, on top of ~/.agent-orc/instructions.md.
+  # Inside a block scalar a # is literal text, so keep comments outside it.
   instructions: |
-    Prefer the standard library. Run the tests before committing.                   # claude | copilot | codex
+    Prefer the standard library. Run the tests before committing.
   model: sonnet-4-6
   subagents: false
   budget_usd: 2.00              # applied as the CLI's own native cap at launch
