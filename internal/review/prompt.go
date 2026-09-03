@@ -21,6 +21,13 @@ import (
 const LGTM = "LGTM"
 
 // ReviewerPrompt builds the prompt handed to the reviewing session.
+//
+// It must be sent on a task with Raw set. Otherwise Task.Render appends the
+// worker operating rules, which tell the agent to commit its work, and a
+// reviewer that has just been told not to edit anything would be handed the
+// opposite instruction while sitting in a checkout of the branch under review.
+// The caller in internal/orc sets Raw for exactly this reason; that coupling is
+// covered by TestReviewerIsNotToldToCommit.
 func ReviewerPrompt(taskPrompt, baseBranch string) string {
 	var b strings.Builder
 	b.WriteString("You are reviewing a change on the branch checked out in this worktree.\n")

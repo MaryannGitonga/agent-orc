@@ -189,15 +189,17 @@ func (r *Reviewer) resumeWorker(record state.Task, comments []string) error {
 
 // capture runs a command, appends its output to a log, and returns it.
 func (r *Reviewer) capture(id, dir string, argv []string, logPath string) (string, error) {
+	// Before anything else: argv[0] below would panic on an empty command, and
+	// there is no point opening a log for a run that cannot start.
+	if len(argv) == 0 {
+		return "", fmt.Errorf("task %q: the adapter produced an empty command", id)
+	}
+
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return "", fmt.Errorf("opening %s: %w", logPath, err)
 	}
 	defer logFile.Close()
-
-	if len(argv) == 0 {
-		return "", fmt.Errorf("task %q: the adapter produced an empty command", id)
-	}
 
 	var buf bytes.Buffer
 	cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- argv comes from an adapter
