@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"io"
 	"strings"
 	"testing"
 
@@ -136,5 +138,51 @@ func TestRunRejectsFlagsAlongsideABatchFile(t *testing.T) {
 		if !strings.Contains(err.Error(), flags[0]) {
 			t.Errorf("dispatch(%v) = %q, want it to name %s", argv, err, flags[0])
 		}
+	}
+}
+
+// TestParseAroundAcceptsFlagsOnEitherSide covers the form the usage lines have
+// always advertised. Go's flag package stops parsing at the first positional,
+// so `logs <id> -f` was rejected while `logs -f <id>` worked.
+func TestParseAroundAcceptsFlagsOnEitherSide(t *testing.T) {
+	parse := func(argv []string) (string, bool, error) {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		f := fs.Bool("f", false, "")
+		id, err := parseAround(fs, argv)
+		return id, *f, err
+	}
+
+	for _, argv := range [][]string{{"TASK-1", "-f"}, {"-f", "TASK-1"}} {
+		id, f, err := parse(argv)
+		if err != nil {
+			t.Errorf("parseAround(%v) = %v", argv, err)
+		}
+		if id != "TASK-1" || !f {
+			t.Errorf("parseAround(%v) = id %q, f %v; want TASK-1, true", argv, id, f)
+		}
+	}
+
+	if id, f, err := parse([]string{"TASK-1"}); err != nil || id != "TASK-1" || f {
+		t.Errorf("parseAround with no flag = %q, %v, %v; want TASK-1, false, nil", id, f, err)
+	}
+	if id, _, err := parse(nil); err != nil || id != "" {
+		t.Errorf("parseAround with nothing = %q, %v; want an empty id and no error", id, err)
+	}
+	if _, _, err := parse([]string{"A", "B"}); err == nil {
+		t.Error("parseAround with two positionals = nil, want an error")
+	}
+
+	// An explicit -- means everything after it is positional, which is the only
+	// way to name a task whose id starts with a dash.
+	if id, f, err := parse([]string{"--", "-weird-id"}); err != nil || id != "-weird-id" || f {
+		t.Errorf("parseAround(-- -weird-id) = %q, %v, %v; want -weird-id, false, nil", id, f, err)
+	}
+	if id, f, err := parse([]string{"-f", "--", "-weird-id"}); err != nil || id != "-weird-id" || !f {
+		t.Errorf("parseAround(-f -- -weird-id) = %q, %v, %v; want -weird-id, true, nil", id, f, err)
+	}
+	// After --, a dash argument is a stray positional, not a flag to obey.
+	if _, f, err := parse([]string{"--", "-weird-id", "-f"}); err == nil || f {
+		t.Errorf("parseAround(-- -weird-id -f) = f %v, err %v; want an error and no flag set", f, err)
 	}
 }

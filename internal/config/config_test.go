@@ -25,7 +25,7 @@ tasks:
     model: opus-4-6
 
   - id: PROJ-1240
-    source: github://canonical/data-mesh#87
+    source: github://acme/data-mesh#87
     branch: chore/proj-1240
     base_branch: release/2.4
     cli: copilot

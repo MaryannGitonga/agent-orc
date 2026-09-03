@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/MaryannGitonga/agent-orc/internal/config"
@@ -207,17 +208,59 @@ func logsCmd(argv []string, out io.Writer) error {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	fs.SetOutput(out)
 	follow := fs.Bool("f", false, "keep printing until the task finishes")
-	if err := fs.Parse(argv); err != nil {
-		return err
+	id, err := parseAround(fs, argv)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("%w\nusage: agent-orc logs <task-id> [-f]", err)
 	}
-	if fs.NArg() != 1 {
+	if id == "" {
 		return errors.New("usage: agent-orc logs <task-id> [-f]")
 	}
 	layout, err := paths.Resolve()
 	if err != nil {
 		return err
 	}
-	return orc.NewReporter(layout.State, out).Logs(fs.Arg(0), *follow)
+	return orc.NewReporter(layout.State, out).Logs(id, *follow)
+}
+
+// parseAround parses flags that appear on either side of a single positional
+// argument, and returns that argument. Go's flag package stops parsing at the
+// first non-flag, so `logs <id> -f` would otherwise be rejected even though it
+// is the form the usage lines advertise and the one people type. Parsing what
+// is left over after the positional picks up the trailing flags, and works for
+// flags that take a value as well as boolean ones.
+//
+// That second parse resets the FlagSet's leftover arguments, so callers must
+// use the returned value and not fs.Arg or fs.NArg afterwards: those no longer
+// describe the positional this consumed. An explicit -- is honoured: after one,
+// nothing is reparsed, so an id beginning with a dash can still be passed.
+func parseAround(fs *flag.FlagSet, argv []string) (string, error) {
+	if err := fs.Parse(argv); err != nil {
+		return "", err
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return "", nil
+	}
+	// An explicit -- means everything after it is positional. Re-parsing those
+	// as flags would override what the caller just said, so the second pass is
+	// only for the case where no marker was given.
+	if slices.Contains(argv, "--") {
+		if len(rest) > 1 {
+			return "", fmt.Errorf("unexpected argument %q", rest[1])
+		}
+		return rest[0], nil
+	}
+	positional := rest[0]
+	if err := fs.Parse(rest[1:]); err != nil {
+		return "", err
+	}
+	if fs.NArg() != 0 {
+		return "", fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	return positional, nil
 }
 
 // prCmd runs the sanitize, push and draft-PR chain by hand.
@@ -255,8 +298,12 @@ func cleanupCmd(argv []string, out io.Writer) error {
 	fs.SetOutput(out)
 	all := fs.Bool("all", false, "clean up every task that is not running")
 	force := fs.Bool("force", false, "discard uncommitted work and remove logs too")
-	if err := fs.Parse(argv); err != nil {
-		return err
+	id, err := parseAround(fs, argv)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("%w\nusage: agent-orc cleanup <task-id|--all> [--force]", err)
 	}
 	layout, err := paths.Resolve()
 	if err != nil {
@@ -264,15 +311,15 @@ func cleanupCmd(argv []string, out io.Writer) error {
 	}
 	c := orc.NewCleaner(layout, out)
 	if *all {
-		if fs.NArg() != 0 {
+		if id != "" {
 			return errors.New("pass either a task id or --all, not both")
 		}
 		return c.CleanAll(*force)
 	}
-	if fs.NArg() != 1 {
+	if id == "" {
 		return errors.New("usage: agent-orc cleanup <task-id|--all> [--force]")
 	}
-	return c.Clean(fs.Arg(0), *force)
+	return c.Clean(id, *force)
 }
 
 // sanitizeCommitCmd applies the commit policy to HEAD. The sanitization rebase

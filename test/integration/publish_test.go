@@ -234,8 +234,8 @@ func TestPublishRefusesABranchWithNoCommits(t *testing.T) {
 	if err == nil {
 		t.Fatalf("agent-orc pr on an empty branch succeeded, want an error\n%s", out)
 	}
-	if !strings.Contains(out, "no commits") {
-		t.Errorf("error = %q, want it to say there is nothing to open a PR for", out)
+	if !strings.Contains(out, "committed nothing") {
+		t.Errorf("error = %q, want it to say the agent committed nothing", out)
 	}
 }
 
@@ -294,5 +294,121 @@ func TestPRRetriesAfterAPushThatSucceeded(t *testing.T) {
 	}
 	if got.PRURL == "" {
 		t.Error("no pr_url recorded after the retry")
+	}
+}
+
+// TestSanitizeRunsWithoutARemote covers history, not publishing. A repository
+// with no origin still gets its commits rewritten: keeping the attribution
+// would carry exactly what the pass exists to remove, and hand it to whoever
+// adds a remote later.
+func TestSanitizeRunsWithoutARemote(t *testing.T) {
+	repo := initRepo(t) // deliberately no remote
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), dirtyCommit)
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "LOCAL-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	// Local-only work is a legitimate way to run, so it still ends done.
+	got := waitForStatus(t, home, "LOCAL-1", "done", "failed", "publish_failed")
+	if got.Status != "done" {
+		t.Fatalf("status = %q, want done for a repository with no remote", got.Status)
+	}
+
+	msg := git(t, repo, "log", "-1", "--format=%B", "agent-orc/local-1")
+	for _, gone := range []string{"Co-Authored-By", "Claude-Session"} {
+		if strings.Contains(msg, gone) {
+			t.Errorf("%q survived in a repository with no remote:\n%s", gone, msg)
+		}
+	}
+	if !strings.Contains(msg, "feat: do the thing") {
+		t.Errorf("the subject did not survive the rewrite:\n%s", msg)
+	}
+	if loadRecord(t, home, "LOCAL-1").RewrittenCommits != 1 {
+		t.Error("the rewrite was not recorded in the task state")
+	}
+}
+
+// TestTaskThatCommitsNothingSaysSo covers the honest reporting of an agent that
+// did no work. It is not a failure, but the run must not claim sanitized work
+// on a branch that has none.
+func TestTaskThatCommitsNothingSaysSo(t *testing.T) {
+	repo := initRepo(t) // no remote
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "NOOP-1", "--repo", repo, "--cli", "claude", "--prompt", "do nothing"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	got := waitForStatus(t, home, "NOOP-1", "done", "failed", "publish_failed")
+	if got.Status != "done" {
+		t.Fatalf("status = %q, want done; committing nothing is not a failure", got.Status)
+	}
+	if n := strings.TrimSpace(git(t, repo, "rev-list", "--count", "main..agent-orc/noop-1")); n != "0" {
+		t.Fatalf("branch has %s commits, so this is not the case under test", n)
+	}
+
+	log := readFile(t, filepath.Join(home, "logs", "NOOP-1.supervisor.log"))
+	if !strings.Contains(log, "committed nothing") {
+		t.Errorf("the log does not say the agent committed nothing:\n%s", log)
+	}
+	if strings.Contains(log, "sanitized") {
+		t.Errorf("the log claims sanitized work on an empty branch:\n%s", log)
+	}
+}
+
+// TestPolicyViolationBeatsAnEmptyBranch keeps the trust check ahead of the
+// commit count. An agent that pushed its own branch is a policy violation even
+// when it left nothing committed locally, and that is the diagnosis that
+// matters: "you committed nothing" would hide an unsanitized branch already
+// sitting on the remote.
+func TestPolicyViolationBeatsAnEmptyBranch(t *testing.T) {
+	repo, _ := initRepoWithRemote(t)
+	home := t.TempDir()
+	// Pushes the branch without committing anything to it.
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"),
+		"git push -q origin HEAD:agent-orc/pv-1 2>/dev/null")
+	stubInto(t, stub, "gh", filepath.Join(t.TempDir(), "gh"), `printf 'https://example.com/pr/1\n'`)
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "PV-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	got := waitForStatus(t, home, "PV-1", "policy_violation", "done", "failed", "publish_failed")
+	if got.Status != "policy_violation" {
+		t.Errorf("status = %q, want policy_violation; the agent pushed its own branch", got.Status)
+	}
+}
+
+// TestEmptyBranchWithARemoteIsNotAPublishFailure covers the wording. Nothing
+// was attempted, so the log must not talk about a failed publish or offer a
+// retry that cannot help.
+func TestEmptyBranchWithARemoteIsNotAPublishFailure(t *testing.T) {
+	repo, _ := initRepoWithRemote(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	stubInto(t, stub, "gh", filepath.Join(t.TempDir(), "gh"), `printf 'https://example.com/pr/1\n'`)
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "NOPR-1", "--repo", repo, "--cli", "claude", "--prompt", "do nothing"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	// Not done: a PR someone is waiting for will never arrive.
+	got := waitForStatus(t, home, "NOPR-1", "publish_failed", "done", "failed")
+	if got.Status != "publish_failed" {
+		t.Fatalf("status = %q, want publish_failed", got.Status)
+	}
+
+	log := readFile(t, filepath.Join(home, "logs", "NOPR-1.supervisor.log"))
+	if !strings.Contains(log, "committed nothing") {
+		t.Errorf("the log does not say the agent committed nothing:\n%s", log)
+	}
+	if strings.Contains(log, "retry with") {
+		t.Errorf("the log offers a retry that cannot help:\n%s", log)
+	}
+	if strings.Contains(log, "the work is committed") {
+		t.Errorf("the log claims committed work on an empty branch:\n%s", log)
 	}
 }
