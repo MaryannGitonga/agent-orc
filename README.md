@@ -119,11 +119,29 @@ flowchart LR
 
 ## Install
 
+Download a binary from the [latest release](https://github.com/MaryannGitonga/agent-orc/releases/latest):
+
+```sh
+VERSION=v0.1.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # linux or darwin
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+gh release download "$VERSION" --repo MaryannGitonga/agent-orc \
+  --pattern "agent-orc_${VERSION}_${OS}_${ARCH}.tar.gz"
+tar -xzf agent-orc_${VERSION}_${OS}_${ARCH}.tar.gz
+sudo install agent-orc_${VERSION}_${OS}_${ARCH} /usr/local/bin/agent-orc
+```
+
+Each release also ships `checksums.txt`. Or build it yourself:
+
 ```sh
 git clone https://github.com/MaryannGitonga/agent-orc
 cd agent-orc
 make build          # produces bin/agent-orc
 ```
+
+While the repository is private, `go install` needs
+`GOPRIVATE=github.com/MaryannGitonga/*` and a credential helper, so the release
+binary or a local build is the easier route.
 
 You also need at least one agentic CLI on PATH (`claude`, `copilot` or
 `codex`), and `gh` if you want GitHub sources or draft PRs.

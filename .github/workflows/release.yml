@@ -1,0 +1,49 @@
+name: release
+
+# Tag-driven. `git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0` is the
+# whole release process; everything below happens on its own.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.22"
+
+jobs:
+  build:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # so `git describe` sees the tag
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # The same checks a PR gets. A tag that cannot pass them is not a release.
+      - run: make fmt-check vet build test-unit
+
+      - name: Build every target
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            out="dist/agent-orc_${version}_${os}_${arch}"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build \
+              -ldflags "-s -w -X github.com/MaryannGitonga/agent-orc/internal/version.Version=${version}" \
+              -o "$out" ./cmd/agent-orc
+            tar -czf "${out}.tar.gz" -C dist "$(basename "$out")"
+            rm "$out"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --generate-notes --verify-tag
