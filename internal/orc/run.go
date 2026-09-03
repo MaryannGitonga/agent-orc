@@ -125,13 +125,16 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	// The session ID is assigned here rather than discovered afterwards, so a
 	// CLI that accepts one is resumable even if it says nothing about its own
 	// session. That is what lets review feedback go back to this session.
-	sessionID, err := adapter.NewSessionID()
-	if err != nil {
-		_ = repo.RemoveWorktree(worktree, true)
-		return err
-	}
-	if len(a.SessionArgs(sessionID)) == 0 {
-		sessionID = ""
+	// Only mint an ID for a CLI that can actually pin a session to one. The
+	// probe value is discarded; it just asks the adapter whether it emits
+	// session flags at all, so a CLI like Codex neither carries an unusable id
+	// nor can fail a launch on generating one.
+	var sessionID string
+	if len(a.SessionArgs("probe")) > 0 {
+		if sessionID, err = adapter.NewSessionID(); err != nil {
+			_ = repo.RemoveWorktree(worktree, true)
+			return err
+		}
 	}
 
 	_, budgetNote := a.BudgetArgs(t.Budget)

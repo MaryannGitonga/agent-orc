@@ -248,5 +248,12 @@ func buildCommand(t task.Task, sessionID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(a.BuildCommand(t), a.SessionArgs(sessionID)...), nil
+	argv := append(a.BuildCommand(t), a.SessionArgs(sessionID)...)
+	// Supervise runs from persisted state, so it can be reached with an adapter
+	// that agentBinary never vetted at dispatch. Fail with a message rather
+	// than panicking on argv[0].
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("the %s adapter produced an empty command", t.CLI)
+	}
+	return argv, nil
 }

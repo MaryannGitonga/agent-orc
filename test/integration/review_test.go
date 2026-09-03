@@ -286,3 +286,54 @@ func TestReviewRecoversFromAKilledPreviousRound(t *testing.T) {
 		t.Errorf("review output = %q, want the approval reported", out)
 	}
 }
+
+// TestReviewerIsNotToldToCommit covers the contradiction end to end: the
+// reviewer prompt forbids editing, so the worker operating rules must not be
+// appended to it. They tell the agent to commit, and the reviewer is sitting in
+// a checkout of the branch under review.
+func TestReviewerIsNotToldToCommit(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	reviewerReceipt := filepath.Join(t.TempDir(), "reviewer")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "worker"), workerCommit)
+	stubInto(t, stub, "copilot", reviewerReceipt, `printf 'LGTM\n'`)
+
+	runWorker(t, home, stub, repo, "RAW-1")
+	if out, err := orcRun(t, home, stub, "review", "RAW-1"); err != nil {
+		t.Fatalf("agent-orc review = %v\n%s", err, out)
+	}
+
+	got := readFile(t, reviewerReceipt)
+	for _, rule := range []string{"Commit your work locally", "Operating rules for this run"} {
+		if strings.Contains(got, rule) {
+			t.Errorf("the reviewer was given the worker rule %q:\n%s", rule, got)
+		}
+	}
+	// It still received its own instructions.
+	if !strings.Contains(got, "LGTM") {
+		t.Errorf("the reviewer prompt lost its own instructions:\n%s", got)
+	}
+}
+
+// TestReviewRefusesWhilePublishing keeps a review off a moving target: the
+// publish chain is still rewriting and pushing the branch.
+func TestReviewRefusesWhilePublishing(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "worker"), workerCommit)
+	stubInto(t, stub, "copilot", filepath.Join(t.TempDir(), "reviewer"), `printf 'LGTM\n'`)
+
+	rec := runWorker(t, home, stub, repo, "PUB-REV-1")
+	// Put the record back into the publishing state the chain runs in.
+	statePath := filepath.Join(home, "state", "PUB-REV-1.json")
+	raw := readFile(t, statePath)
+	write(t, statePath, strings.Replace(raw, `"status": "`+rec.Status+`"`, `"status": "publishing"`, 1))
+
+	out, err := orcRun(t, home, stub, "review", "PUB-REV-1")
+	if err == nil {
+		t.Fatalf("review during publishing succeeded, want a refusal\n%s", out)
+	}
+	if !strings.Contains(out, "publishing") {
+		t.Errorf("error = %q, want it to name the publishing status", out)
+	}
+}

@@ -55,6 +55,10 @@ type Task struct {
 	AutoPR bool `yaml:"auto_pr" json:"auto_pr"`
 	// DCOSignoff adds a Signed-off-by trailer to any commit missing one.
 	DCOSignoff bool `yaml:"dco_signoff" json:"dco_signoff,omitempty"`
+	// Raw suppresses the operating rules Render appends. agent-orc sets it for
+	// its own prompts, such as the reviewer's, which must not be told to commit;
+	// it is not something a task file can ask for.
+	Raw bool `yaml:"-" json:"-"`
 	// Review configures the optional agentic review pass.
 	Review Review `yaml:"review" json:"review,omitempty"`
 }
@@ -198,5 +202,8 @@ Operating rules for this run (set by agent-orc, not by the task author):
 
 // Render returns the task's prompt followed by the fixed operating rules.
 func (t Task) Render() string {
+	if t.Raw {
+		return strings.TrimSpace(t.Prompt)
+	}
 	return strings.TrimSpace(t.Prompt) + policySuffix
 }

@@ -1,6 +1,7 @@
 package task
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -123,5 +124,41 @@ func TestValidateRejectsABadReviewBlock(t *testing.T) {
 	tk.Review = Review{Enabled: true, MaxRounds: -2}
 	if err := tk.Validate(); err == nil || !strings.Contains(err.Error(), "max_rounds") {
 		t.Errorf("Validate() = %v, want an error naming max_rounds", err)
+	}
+}
+
+// TestRenderRawOmitsTheOperatingRules covers agent-orc's own prompts. The
+// reviewer is told not to edit anything, so appending rules that tell it to
+// commit would contradict its instructions inside a checkout of the branch it
+// is reviewing.
+func TestRenderRawOmitsTheOperatingRules(t *testing.T) {
+	raw := Task{Prompt: "review this diff", Raw: true}.Render()
+	if raw != "review this diff" {
+		t.Errorf("Render() with Raw = %q, want the prompt untouched", raw)
+	}
+	for _, rule := range []string{"Commit your work locally", "Operating rules for this run"} {
+		if strings.Contains(raw, rule) {
+			t.Errorf("Render() with Raw still carries %q", rule)
+		}
+	}
+	// A worker still gets them; Raw is not a way to opt out of the policy.
+	worker := Task{Prompt: "do the thing"}.Render()
+	if !strings.Contains(worker, "Commit your work locally") {
+		t.Error("Render() without Raw dropped the operating rules")
+	}
+}
+
+// TestRawIsNotConfigurable keeps Raw an internal switch: a task file must not
+// be able to shed the operating rules.
+func TestRawIsNotConfigurable(t *testing.T) {
+	f, ok := reflect.TypeOf(Task{}).FieldByName("Raw")
+	if !ok {
+		t.Fatal("Task has no Raw field")
+	}
+	if got := f.Tag.Get("yaml"); got != "-" {
+		t.Errorf("Raw yaml tag = %q, want \"-\" so a batch file cannot set it", got)
+	}
+	if got := f.Tag.Get("json"); got != "-" {
+		t.Errorf("Raw json tag = %q, want \"-\" so it is never persisted", got)
 	}
 }

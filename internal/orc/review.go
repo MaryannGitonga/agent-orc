@@ -38,7 +38,10 @@ func (r *Reviewer) Review(id string) error {
 	if !record.Review.Enabled {
 		return fmt.Errorf("task %q does not have review enabled", id)
 	}
-	if record.Status.HasProcess() {
+	// Active, not HasProcess: publishing means the sanitize, push and draft-PR
+	// chain is still rewriting and pushing this branch, so a review then would
+	// be reading a moving target.
+	if record.Status.Active() {
 		return fmt.Errorf("task %q is still %s; review it once the agent has finished", id, record.Status)
 	}
 	if _, err := os.Stat(record.Worktree); err != nil {
@@ -148,14 +151,17 @@ func (r *Reviewer) runReviewer(record state.Task) (string, error) {
 	}
 	reviewTask := task.Task{
 		Prompt: review.ReviewerPrompt(record.Prompt, record.BaseBranch),
-		Model:  record.Review.Model,
-		CLI:    cli,
+		// Raw, because the worker operating rules Render would otherwise append
+		// tell the agent to commit its work. Handing those to a reviewer that
+		// has just been told not to edit anything is a direct contradiction,
+		// and the reviewer sits in a checkout of the branch under review.
+		Raw:   true,
+		Model: record.Review.Model,
+		CLI:   cli,
 		// The reviewer draws on the same per-task budget as the worker, so
 		// there is one number to watch, not two.
 		Budget: record.Budget,
 	}
-	// The reviewer must see the diff, not the worker's reasoning, so its
-	// prompt goes in raw rather than through the worker's operating rules.
 	argv := a.BuildCommand(reviewTask)
 
 	fmt.Fprintf(r.out, "%s  reviewing with %s", record.ID, cli)
@@ -188,6 +194,10 @@ func (r *Reviewer) capture(id, dir string, argv []string, logPath string) (strin
 		return "", fmt.Errorf("opening %s: %w", logPath, err)
 	}
 	defer logFile.Close()
+
+	if len(argv) == 0 {
+		return "", fmt.Errorf("task %q: the adapter produced an empty command", id)
+	}
 
 	var buf bytes.Buffer
 	cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- argv comes from an adapter
