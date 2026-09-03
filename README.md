@@ -1,5 +1,10 @@
 # agent-orc
 
+[![ci](https://github.com/MaryannGitonga/agent-orc/actions/workflows/ci.yml/badge.svg)](https://github.com/MaryannGitonga/agent-orc/actions/workflows/ci.yml)
+[![commit-policy](https://github.com/MaryannGitonga/agent-orc/actions/workflows/commit-policy.yml/badge.svg)](https://github.com/MaryannGitonga/agent-orc/actions/workflows/commit-policy.yml)
+![go](https://img.shields.io/badge/go-1.22%2B-00ADD8)
+![license](https://img.shields.io/badge/license-MIT-blue)
+
 A single installable CLI that takes one or more tasks (JIRA tickets, GitHub
 issues, or raw prompts) and, for each one, creates an isolated git worktree and
 branch, launches a configured agentic CLI (Claude Code, Copilot CLI, Codex)
@@ -9,18 +14,6 @@ the agent finishes.
 It is a thin dispatcher and tracker, not a new agent runtime. It never talks to
 a model directly; it only shells out to CLIs that already exist. Worktrees do
 the isolation, the OS does the concurrency, files do the state keeping.
-
-## Status
-
-Early. Built in phases:
-
-| Phase | Scope | State |
-| ----- | ----- | ----- |
-| 0 | `run` for a single task; worktree lifecycle; Claude adapter | done |
-| 1 | Multi-CLI adapters, YAML batch config, JIRA/GitHub source fetching | done |
-| 2 | Subagent seeding, budget caps, `status` | done |
-| 3 | Draft PR chain, commit sanitization, `cleanup`, `logs` | done |
-| 4 | Agentic review with a capped worker and reviewer loop | done |
 
 ## Usage
 
@@ -34,7 +27,7 @@ A ticket reference can stand in for the prompt. It is fetched once, at launch,
 and the task's own prompt is layered on top as extra instructions:
 
 ```sh
-agent-orc run --id PROJ-1240 --cli claude --source github://canonical/data-mesh#87
+agent-orc run --id PROJ-1240 --cli claude --source github://acme/data-mesh#87
 agent-orc run --id PROJ-1234 --cli claude --source jira://PROJ-1234 --prompt "Only the retry handler"
 ```
 
@@ -207,9 +200,10 @@ make test-integration # the tests that shell out to real git and gh
 Requires Go 1.22+ and `golangci-lint` (`make lint-install` fetches the pinned
 version).
 
-### Commit policy
+### Contributing
 
-Every commit must:
+Conventions for commits, pull requests and tests are in
+[CONTRIBUTING.md](CONTRIBUTING.md). In short, every commit must:
 
 - carry a **one-line conventional subject** (`feat:`, `fix:`, `ci:`, `docs:`,
   `test:`, `refactor:`, `chore:`, `perf:`, `build:`, `revert:`), at most 72
