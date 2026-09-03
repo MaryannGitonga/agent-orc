@@ -296,3 +296,36 @@ func TestPRRetriesAfterAPushThatSucceeded(t *testing.T) {
 		t.Error("no pr_url recorded after the retry")
 	}
 }
+
+// TestSanitizeRunsWithoutARemote covers history, not publishing. A repository
+// with no origin still gets its commits rewritten: keeping the attribution
+// would carry exactly what the pass exists to remove, and hand it to whoever
+// adds a remote later.
+func TestSanitizeRunsWithoutARemote(t *testing.T) {
+	repo := initRepo(t) // deliberately no remote
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), dirtyCommit)
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "LOCAL-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	// Local-only work is a legitimate way to run, so it still ends done.
+	got := waitForStatus(t, home, "LOCAL-1", "done", "failed", "publish_failed")
+	if got.Status != "done" {
+		t.Fatalf("status = %q, want done for a repository with no remote", got.Status)
+	}
+
+	msg := git(t, repo, "log", "-1", "--format=%B", "agent-orc/local-1")
+	for _, gone := range []string{"Co-Authored-By", "Claude-Session"} {
+		if strings.Contains(msg, gone) {
+			t.Errorf("%q survived in a repository with no remote:\n%s", gone, msg)
+		}
+	}
+	if !strings.Contains(msg, "feat: do the thing") {
+		t.Errorf("the subject did not survive the rewrite:\n%s", msg)
+	}
+	if loadRecord(t, home, "LOCAL-1").RewrittenCommits != 1 {
+		t.Error("the rewrite was not recorded in the task state")
+	}
+}

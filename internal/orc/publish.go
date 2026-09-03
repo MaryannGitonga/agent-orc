@@ -73,26 +73,30 @@ func (p *Publisher) Publish(id string) error {
 	if err != nil {
 		return err
 	}
-	if !hasRemote {
-		return ErrNoRemote
-	}
-	remoteURL, err := p.opener.RemoteURL(record.Worktree, defaultRemote)
-	if err != nil {
-		return err
-	}
-	if err := p.checkAgentDidNotPublish(&record); err != nil {
-		return err
-	}
 
 	commits, err := p.countCommits(record)
 	if err != nil {
 		return err
 	}
-	if commits == 0 {
+	// An agent that committed nothing is only a problem when there was somewhere
+	// to publish to. Locally, it is just a task that did no work, and the
+	// no-remote path below reports it as such.
+	if commits == 0 && hasRemote {
 		return fmt.Errorf("task %q has no commits on %s; there is nothing to open a PR for",
 			id, record.Branch)
 	}
 
+	// Only meaningful when there is somewhere to have pushed to.
+	if hasRemote {
+		if err := p.checkAgentDidNotPublish(&record); err != nil {
+			return err
+		}
+	}
+
+	// Sanitization is about the history, not about the push, so it runs whether
+	// or not there is a remote. A local-only repository that kept its AI
+	// attribution would be carrying exactly what this pass exists to remove,
+	// and would hand it to whoever adds a remote later.
 	rewritten, err := p.sanitize(record)
 	if err != nil {
 		return err
@@ -104,6 +108,14 @@ func (p *Publisher) Publish(id string) error {
 			return err
 		}
 		fmt.Fprintf(p.out, "%s  rewrote %d commit message(s)\n", id, rewritten)
+	}
+
+	if !hasRemote {
+		return ErrNoRemote
+	}
+	remoteURL, err := p.opener.RemoteURL(record.Worktree, defaultRemote)
+	if err != nil {
+		return err
 	}
 
 	req := forge.Request{
