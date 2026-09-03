@@ -55,6 +55,53 @@ type Task struct {
 	AutoPR bool `yaml:"auto_pr" json:"auto_pr"`
 	// DCOSignoff adds a Signed-off-by trailer to any commit missing one.
 	DCOSignoff bool `yaml:"dco_signoff" json:"dco_signoff,omitempty"`
+	// Raw suppresses the operating rules Render appends. agent-orc sets it for
+	// its own prompts, such as the reviewer's, which must not be told to commit;
+	// it is not something a task file can ask for.
+	Raw bool `yaml:"-" json:"-"`
+	// Review configures the optional agentic review pass.
+	Review Review `yaml:"review" json:"review,omitempty"`
+}
+
+// Review configures the optional, manually triggered review pass.
+//
+// It is off by default and hard-capped on purpose: unlike opening a draft PR,
+// a review round costs real money and real time, and an uncapped loop between
+// worker and reviewer is exactly the kind of thing that runs until someone
+// notices.
+type Review struct {
+	// Enabled allows `agent-orc review` to run for this task.
+	Enabled bool `yaml:"enabled" json:"enabled,omitempty"`
+	// CLI runs the review. Empty means a different CLI from the worker's, so
+	// the reviewer is less likely to share the worker's blind spots.
+	CLI CLI `yaml:"cli" json:"cli,omitempty"`
+	// Model is the reviewer's model; empty means that CLI's default.
+	Model string `yaml:"model" json:"model,omitempty"`
+	// MaxRounds caps worker and reviewer round-trips. Zero means one round.
+	MaxRounds int `yaml:"max_rounds" json:"max_rounds,omitempty"`
+}
+
+// Rounds returns the effective cap on review round-trips.
+func (r Review) Rounds() int {
+	if r.MaxRounds <= 0 {
+		return 1
+	}
+	return r.MaxRounds
+}
+
+// ReviewerCLI returns the CLI that should run the review for a worker task.
+// With nothing configured it picks a CLI other than the worker's, so the two
+// sessions are less likely to make the same mistake.
+func (t Task) ReviewerCLI() CLI {
+	if t.Review.CLI != "" {
+		return t.Review.CLI
+	}
+	for _, c := range KnownCLIs {
+		if c != t.CLI {
+			return c
+		}
+	}
+	return t.CLI
 }
 
 // Budget caps a task's spend. Each CLI caps cost in its own unit and agent-orc
@@ -124,6 +171,12 @@ func (t Task) validateCommon() error {
 	if err := t.Budget.Validate(); err != nil {
 		errs = append(errs, err)
 	}
+	if t.Review.CLI != "" && !t.Review.CLI.Known() {
+		errs = append(errs, fmt.Errorf("unsupported review cli %q, want one of %v", t.Review.CLI, KnownCLIs))
+	}
+	if t.Review.MaxRounds < 0 {
+		errs = append(errs, fmt.Errorf("review max_rounds must not be negative, got %d", t.Review.MaxRounds))
+	}
 	return errors.Join(errs...)
 }
 
@@ -149,5 +202,8 @@ Operating rules for this run (set by agent-orc, not by the task author):
 
 // Render returns the task's prompt followed by the fixed operating rules.
 func (t Task) Render() string {
+	if t.Raw {
+		return strings.TrimSpace(t.Prompt)
+	}
 	return strings.TrimSpace(t.Prompt) + policySuffix
 }

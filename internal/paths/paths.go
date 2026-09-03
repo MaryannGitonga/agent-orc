@@ -17,6 +17,7 @@ type Layout struct {
 	State     string // ~/.agent-orc/state
 	Logs      string // ~/.agent-orc/logs
 	Worktrees string // ~/.agent-orc/worktrees
+	Reviews   string // ~/.agent-orc/reviews
 }
 
 // Resolve returns the layout without creating anything; see [Layout.Ensure].
@@ -43,12 +44,13 @@ func New(root string) Layout {
 		State:     filepath.Join(root, "state"),
 		Logs:      filepath.Join(root, "logs"),
 		Worktrees: filepath.Join(root, "worktrees"),
+		Reviews:   filepath.Join(root, "reviews"),
 	}
 }
 
 // Ensure creates every directory in the layout.
 func (l Layout) Ensure() error {
-	for _, dir := range []string{l.Root, l.State, l.Logs, l.Worktrees} {
+	for _, dir := range []string{l.Root, l.State, l.Logs, l.Worktrees, l.Reviews} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
@@ -80,4 +82,16 @@ func (l Layout) TrailerPatternsFile() string {
 // Worktree returns the worktree directory for a task.
 func (l Layout) Worktree(id string) string {
 	return filepath.Join(l.Worktrees, id)
+}
+
+// ReviewWorktree returns the reviewer's own checkout for a task. It is
+// separate from the worker's, which may still be in use, and is deleted after
+// each round.
+func (l Layout) ReviewWorktree(id string) string {
+	return filepath.Join(l.Reviews, id)
+}
+
+// ReviewLogFile returns the log for a task's review rounds.
+func (l Layout) ReviewLogFile(id string) string {
+	return filepath.Join(l.Logs, id+".review.log")
 }

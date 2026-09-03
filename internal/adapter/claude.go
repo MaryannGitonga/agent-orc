@@ -76,3 +76,34 @@ func (Claude) ParseUsage(logPath string) (*Usage, error) {
 	}
 	return &u, nil
 }
+
+// SessionArgs pins the run to a session ID so it can be resumed later.
+func (Claude) SessionArgs(sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	return []string{"--session-id", sessionID}
+}
+
+// ParseSessionID reads the session ID out of Claude Code's JSON result. It is
+// only a fallback: agent-orc normally assigns the ID at launch.
+func (Claude) ParseSessionID(logPath string) (string, error) {
+	obj, err := lastJSONObject(logPath)
+	if err != nil {
+		return "", err
+	}
+	id, _ := obj["session_id"].(string)
+	return id, nil
+}
+
+// ResumeCommand continues an existing Claude Code session.
+func (Claude) ResumeCommand(sessionID, prompt, model string) ([]string, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("no session id recorded for this task; it cannot be resumed")
+	}
+	argv := []string{"claude", "--resume", sessionID, "-p", prompt, "--output-format", "json"}
+	if model != "" {
+		argv = append(argv, "--model", model)
+	}
+	return argv, nil
+}

@@ -29,6 +29,7 @@ const (
 	StatusPublishFailed Status = "publish_failed" // committed but unpublished; retry with `agent-orc pr`
 	StatusFailed        Status = "failed"         // exited non-zero, or never launched
 	StatusStopped       Status = "stopped"        // killed by `agent-orc stop`
+	StatusReviewed      Status = "reviewed"       // a review round found nothing to change
 	// StatusPolicyViolation means the agent did something it was told not to
 	// by pushing its branch or opening its own PR, so the change did not go
 	// through agent-orc's sanitize-then-draft path.
@@ -72,6 +73,11 @@ type Task struct {
 	PushedSHA string `json:"pushed_sha,omitempty"`
 	// RewrittenCommits counts the commits the sanitization pass changed.
 	RewrittenCommits int `json:"rewritten_commits,omitempty"`
+	// SessionID identifies the worker's session, so review feedback can be
+	// handed back to it rather than starting over.
+	SessionID string `json:"session_id,omitempty"`
+	// ReviewRound counts completed worker-reviewer round-trips.
+	ReviewRound int `json:"review_round"`
 }
 
 // ErrNotFound is returned when no state file exists for a task ID.

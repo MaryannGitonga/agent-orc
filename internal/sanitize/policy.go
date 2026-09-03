@@ -33,6 +33,8 @@ var DefaultPatterns = []string{
 	`(?i)^assisted-by:\s*(claude|copilot|codex)\b`,
 	`(?i)^claude-session:`,
 	`(?i)^generated-with:`,
+	// The emoji is the pattern, not decoration: this is the literal line the
+	// CLIs emit. Removing it would stop that trailer being stripped.
 	`(?i)^🤖 generated with`,
 	`(?i)^generated with \[claude code\]`,
 }

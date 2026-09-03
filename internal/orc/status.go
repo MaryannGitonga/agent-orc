@@ -41,12 +41,12 @@ func (r *Reporter) Status() error {
 	}
 
 	w := tabwriter.NewWriter(r.out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCLI\tMODEL\tSTATUS\tSPEND\tBRANCH\tELAPSED")
+	fmt.Fprintln(w, "ID\tCLI\tMODEL\tSTATUS\tSPEND\tROUNDS\tBRANCH\tELAPSED")
 	var notes []string
 	for _, t := range tasks {
 		t = reconcile(r.store, t)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			t.ID, t.CLI, orUnknown(t.Model), t.Status, spend(t), t.Branch, elapsed(t))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			t.ID, t.CLI, orUnknown(t.Model), t.Status, spend(t), rounds(t), t.Branch, elapsed(t))
 		if t.BudgetNote != "" {
 			notes = append(notes, fmt.Sprintf("%s: %s", t.ID, t.BudgetNote))
 		}
@@ -124,6 +124,14 @@ func spend(t state.Task) string {
 	default:
 		return spent
 	}
+}
+
+// rounds renders review progress against the task's cap.
+func rounds(t state.Task) string {
+	if !t.Review.Enabled {
+		return unknown
+	}
+	return strconv.Itoa(t.ReviewRound) + "/" + strconv.Itoa(t.Review.Rounds())
 }
 
 // elapsed renders how long a task ran, or has been running.

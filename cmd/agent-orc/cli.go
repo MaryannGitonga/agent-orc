@@ -28,6 +28,7 @@ Usage:
   agent-orc logs <task-id> [-f] print a task's log
   agent-orc stop <task-id>      kill a running task
   agent-orc pr <task-id>        sanitize, push and open the draft PR by hand
+  agent-orc review <task-id>    run an independent review round, if enabled
   agent-orc cleanup <task-id|--all>
                                 remove a task's worktree and local state
   agent-orc version             print the version
@@ -51,6 +52,8 @@ func dispatch(argv []string, out io.Writer) error {
 		return stopCmd(argv[1:], out)
 	case "pr":
 		return prCmd(argv[1:], out)
+	case "review":
+		return reviewCmd(argv[1:], out)
 	case "cleanup":
 		return cleanupCmd(argv[1:], out)
 	case "sanitize-commit":
@@ -85,6 +88,10 @@ func runCmd(argv []string, out io.Writer) error {
 		usd     = fs.Float64("budget-usd", 0, "cap spend in dollars, where the CLI supports it")
 		credits = fs.Float64("budget-credits", 0, "cap spend in the CLI's own credit unit, where it supports it")
 		noPR    = fs.Bool("no-auto-pr", false, "do not open a draft PR when the agent finishes")
+		rev     = fs.Bool("review", false, "allow 'agent-orc review' to run for this task")
+		revCLI  = fs.String("review-cli", "", "CLI to review with (default: one other than --cli)")
+		revMdl  = fs.String("review-model", "", "model to review with")
+		revMax  = fs.Int("review-max-rounds", 0, "cap on worker-reviewer round-trips (default 1)")
 		dco     = fs.Bool("dco-signoff", false, "add a Signed-off-by trailer to commits missing one")
 	)
 	fs.Usage = func() {
@@ -128,6 +135,9 @@ func runCmd(argv []string, out io.Writer) error {
 		branch: *branch, base: *base, cli: *cliName, model: *model,
 		subagents: *subs, budgetUSD: *usd, budgetCredits: *credits,
 		autoPR: !*noPR, dcoSignoff: *dco,
+		review: task.Review{
+			Enabled: *rev, CLI: task.CLI(*revCLI), Model: *revMdl, MaxRounds: *revMax,
+		},
 	})
 	if err != nil {
 		return err
@@ -149,6 +159,7 @@ type flags struct {
 	id, source, prompt, repo, branch, base, cli, model string
 	subagents, autoPR, dcoSignoff                      bool
 	budgetUSD, budgetCredits                           float64
+	review                                             task.Review
 }
 
 // buildTask applies the defaults for a single command-line task.
@@ -187,6 +198,7 @@ func buildTask(f flags) (task.Task, error) {
 		Budget:     budget,
 		AutoPR:     f.autoPR,
 		DCOSignoff: f.dcoSignoff,
+		Review:     f.review,
 	})
 }
 
@@ -222,6 +234,19 @@ func prCmd(argv []string, out io.Writer) error {
 		return err
 	}
 	return p.Publish(argv[0])
+}
+
+// reviewCmd runs review rounds for a task until the reviewer approves the
+// branch or the task's cap is reached.
+func reviewCmd(argv []string, out io.Writer) error {
+	if len(argv) != 1 {
+		return errors.New("usage: agent-orc review <task-id>")
+	}
+	layout, err := paths.Resolve()
+	if err != nil {
+		return err
+	}
+	return orc.NewReviewer(layout, out).Review(argv[0])
 }
 
 // cleanupCmd removes a task's worktree and local state.
