@@ -16,6 +16,43 @@ It is a dispatcher, not an agent runtime. It never talks to a model: it shells
 out to CLIs you already have. Worktrees do the isolation, the OS does the
 concurrency, files do the state keeping. No daemon, no database.
 
+## How it works
+
+One process per task, no daemon and no database. `run` returns as soon as each
+task is dispatched; a detached supervisor drives the agent from there.
+
+```mermaid
+flowchart TB
+    RUN["agent-orc run<br/>one task, or a batch file"]
+
+    subgraph TASK["per task: its own branch, worktree and process"]
+        direction TB
+        SUP["detached supervisor"]
+        AGENT["claude / copilot / codex<br/>budget-capped, run in the worktree"]
+        WORK["commits land on agent-orc/&lt;id&gt;"]
+        SUP --> AGENT --> WORK
+    end
+
+    subgraph PUBLISH["publish chain, same supervisor process"]
+        direction TB
+        SAN["sanitize commit messages"] --> PUSH["push the branch"] --> PR["open a draft PR"]
+    end
+
+    RUN --> SUP
+    WORK -->|"the agent exits"| SAN
+    SUP -.->|"status, logs, spend"| STATE
+    PUSH -.-> STATE
+    STATE[("~/.agent-orc")]
+```
+
+Several tasks run this way at once, each with its own branch, worktree and
+supervisor, so one that fails does not touch the others. The publish chain
+hangs off the process that was already running for that task, which is what
+makes it automatic without anything running in the background.
+
+Sanitization runs whether or not there is a remote: it is about the history,
+not about the push.
+
 ## Install
 
 ```sh
@@ -124,8 +161,9 @@ is also how you retry a task left at `publish_failed`: it recognises a branch it
 pushed itself, so the retry finishes the job instead of mistaking it for one the
 agent pushed.
 
-A repository with no `origin` is a legitimate way to work. The task ends `done`
-with its commits on the branch, not as a failure.
+A repository with no `origin` is a legitimate way to work. Commits are still
+sanitized, and the task ends `done` with its work on the branch rather than as
+a failure.
 
 ### Statuses
 
@@ -143,7 +181,8 @@ with its commits on the branch, not as a failure.
 
 ## Commit sanitization
 
-Before anything is pushed, every commit the task added is rewritten in one pass:
+When a task finishes, every commit it added is rewritten in one pass, before
+anything is pushed and whether or not there is anywhere to push to:
 
 - **AI attribution trailers are removed**: `Co-authored-by:` naming Claude,
   Copilot, Codex or any `[bot]`, plus `Claude-Session:`, `Assisted-by:`,
