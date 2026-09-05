@@ -182,7 +182,7 @@ actually have, and checks the binary is on PATH before creating anything.
 | `run <tasks.yaml>` | dispatch a batch |
 | `status` | one row per task: status, spend, branch, elapsed |
 | `logs <id> [-f] [--raw]` | print the agent's output, or follow it until the task ends |
-| `stop <id>` | terminate a running agent and everything it spawned |
+| `stop <id>` | terminate whatever the task is running, and everything it spawned |
 | `pr <id>` | run the publish chain by hand, or retry one that failed |
 | `review <id>` | run an agentic review round |
 | `cleanup <id\|--all> [--force] [--delete-branch]` | remove the worktree and state; keep the branch unless told otherwise |
@@ -376,7 +376,10 @@ and the branch looks finished. Running the suite is what makes the difference
 between an agent that says the tests pass and a branch where they do.
 
 There is no attempt cap. Getting the suite green is part of the work, not an
-optional extra with a quota, so the loop runs until it is. Three real conditions
+optional extra with a quota, so the loop runs until it is. `agent-orc stop`
+reaches it: the test command runs in its own process group with its pid on the
+record, so a suite that hangs is still something you can end, and the task stays
+stopped rather than going round again on the killed command. Three real conditions
 end it instead:
 
 - **the tests pass**, and the branch goes on to be published;

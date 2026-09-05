@@ -138,14 +138,18 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	// suite is red, and no point opening a PR over a branch the review is
 	// still changing.
 	if err := s.verify(record); err != nil {
-		s.mark(id, state.StatusFailed, err.Error())
+		s.failUnlessStopped(id, err)
 		s.logf("not publishing: %v", err)
 		return nil
 	}
 	if record.Review.Enabled && record.Review.Auto {
 		s.mark(id, state.StatusReviewing, "")
 		if err := s.autoReview(&record); err != nil {
-			s.mark(id, state.StatusReviewFailed, err.Error())
+			if s.wasStopped(id) {
+				s.logf("task was stopped during review: %v", err)
+			} else {
+				s.mark(id, state.StatusReviewFailed, err.Error())
+			}
 			s.logf("not publishing: %v", err)
 			return nil
 		}
@@ -286,6 +290,24 @@ func (s *Supervisor) update(id string, mutate func(*state.Task)) error {
 func (s *Supervisor) owns(id string) bool {
 	current, err := s.store.Load(id)
 	return err == nil && current.StartedAt.Equal(s.startedAt)
+}
+
+// wasStopped reports whether a human has stopped the task since it was loaded.
+// The phases that run after the agent exits are long, and a stop lands as a
+// killed child rather than as anything the loop can see for itself.
+func (s *Supervisor) wasStopped(id string) bool {
+	current, err := s.store.Load(id)
+	return err == nil && current.Status == state.StatusStopped
+}
+
+// failUnlessStopped records a phase's failure, unless a human stopped the task,
+// in which case the stop is the reason it failed and stays the record of it.
+func (s *Supervisor) failUnlessStopped(id string, cause error) {
+	if s.wasStopped(id) {
+		s.logf("task was stopped: %v", cause)
+		return
+	}
+	s.mark(id, state.StatusFailed, cause.Error())
 }
 
 // mark sets a task's terminal status.

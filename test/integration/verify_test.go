@@ -4,8 +4,11 @@ package integration
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // TestVerifyBlocksAPublishOnRedTests covers the gate that makes "iterate until
@@ -132,6 +135,89 @@ func TestVerifyHandsFailuresBackToTheAgent(t *testing.T) {
 	}
 	if !strings.Contains(r, "test command for this project failed") {
 		t.Errorf("the agent was not told what failed:\n%s", r)
+	}
+}
+
+// TestStopReachesAHangingTestCommand covers the phases that run after the agent
+// has exited. Both loops run until they succeed, so a test command that never
+// returns would hang the task forever; before the child was given a process
+// group and a recorded pid there was nothing for `stop` to signal, and it
+// refused outright because the status carried no process.
+func TestStopReachesAHangingTestCommand(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "grandchild.pid")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	// The test command hangs, and spawns a child of its own that has to go with
+	// it: signalling only the leader would leave the child running.
+	write(t, filepath.Join(repo, ".agent-orc.yaml"),
+		"test_command: 'sleep 300 & echo $! > "+marker+"; sleep 300'\n")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "HANG-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	got := waitForStatus(t, home, "HANG-1", "verifying")
+	if got.PID == 0 {
+		t.Fatal("no pid recorded while the test command runs, so stop has nothing to signal")
+	}
+	grandchild := strings.TrimSpace(readFile(t, marker))
+	if grandchild == "" {
+		t.Fatal("the test command did not report its child")
+	}
+
+	out, err := orcRun(t, home, stub, "stop", "HANG-1")
+	if err != nil {
+		t.Fatalf("agent-orc stop = %v\n%s", err, out)
+	}
+	if got := waitForStatus(t, home, "HANG-1", "stopped"); got.PID != 0 {
+		t.Errorf("pid = %d, want it cleared once the task is stopped", got.PID)
+	}
+
+	// The whole group went, not just the leader.
+	pid, err := strconv.Atoi(grandchild)
+	if err != nil {
+		t.Fatalf("parsing the child pid %q: %v", grandchild, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Errorf("the test command's own child (pid %d) survived the stop", pid)
+}
+
+// TestStopDoesNotRestartAStoppedTask checks the loop notices the stop. A killed
+// test command exits non-zero, which on its own reads as a failing suite and
+// would send the task round again against the agent it just stopped.
+func TestStopDoesNotRestartAStoppedTask(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	receipt := filepath.Join(t.TempDir(), "receipt")
+	stub := stubAgent(t, "claude", receipt, "true")
+	write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_command: sleep 300\n")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "HANG-2", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "HANG-2", "verifying")
+	if out, err := orcRun(t, home, stub, "stop", "HANG-2"); err != nil {
+		t.Fatalf("agent-orc stop = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "HANG-2", "stopped")
+
+	// Give the supervisor time to do the wrong thing if it is going to.
+	time.Sleep(2 * time.Second)
+	got := loadRecord(t, home, "HANG-2")
+	if got.Status != "stopped" {
+		t.Errorf("status = %q, want a stopped task to stay stopped", got.Status)
+	}
+	if n := strings.Count(readFile(t, receipt), "arg=--resume"); n != 0 {
+		t.Errorf("the agent was resumed %d time(s) after the stop; the loop should have ended", n)
 	}
 }
 

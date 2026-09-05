@@ -48,8 +48,17 @@ func (s Status) Active() bool {
 		s == StatusVerifying || s == StatusReviewing || s == StatusPublishing
 }
 
-// HasProcess reports whether a live agent process should back this status.
-func (s Status) HasProcess() bool { return s == StatusPending || s == StatusRunning }
+// HasProcess reports whether a live process should back this status.
+//
+// It covers the phases that run after the agent has exited as well as the
+// agent itself. Those phases run children of their own, for as long as it
+// takes the tests to pass or the reviewer to approve, and both `stop` and the
+// reconciliation in `status` key off this: leaving them out is what made a task
+// with a hung test command impossible to stop and impossible to correct.
+func (s Status) HasProcess() bool {
+	return s == StatusPending || s == StatusRunning ||
+		s == StatusVerifying || s == StatusReviewing
+}
 
 // Task is the persisted record of one dispatched task.
 type Task struct {

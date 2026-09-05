@@ -260,7 +260,9 @@ func (r *Reviewer) capture(id, dir string, argv []string, logPath string) (strin
 	cmd.Stderr = io.MultiWriter(&buf, logFile)
 	cmd.Env = os.Environ()
 
-	if err := cmd.Run(); err != nil {
+	// In its own process group with its pid on the record, so an automatic
+	// review, which runs with no agent process left to stop, can still be.
+	if err := (tracker{id: id, update: r.update}).run(cmd); err != nil {
 		return buf.String(), fmt.Errorf("task %q: %s exited with an error: %w: %s",
 			id, argv[0], err, strings.TrimSpace(lastLines(buf.String(), 5)))
 	}

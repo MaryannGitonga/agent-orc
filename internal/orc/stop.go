@@ -23,6 +23,9 @@ func (r *Reporter) Stop(id string) error {
 		return fmt.Errorf("task %q is %s, not running", id, t.Status)
 	}
 	if t.PID == 0 {
+		if t.Status == state.StatusVerifying || t.Status == state.StatusReviewing {
+			return fmt.Errorf("task %q is %s but is between commands right now; try again in a moment", id, t.Status)
+		}
 		return fmt.Errorf("task %q has no recorded process; it may not have started yet", id)
 	}
 	// Record the stop before signalling, not after. The supervisor sits in
@@ -63,16 +66,50 @@ func (r *Reporter) Stop(id string) error {
 	return nil
 }
 
-// signalGroup terminates the agent and everything it spawned. An agent runs
-// compilers, test runners and git of its own, and signalling only the leader
-// would orphan them. The supervisor starts it with Setpgid, so the negative
-// pid addresses exactly that agent's descendants and nothing else. Records
+// stopGrace is how long a process is given to exit on SIGTERM before it is
+// killed outright. Long enough for an agent to finish the write it is in the
+// middle of, short enough that `agent-orc stop` still feels like a command
+// rather than a wait.
+const stopGrace = 5 * time.Second
+
+// signalGroup terminates the agent and everything it spawned, and makes sure it
+// is actually gone.
+//
+// An agent runs compilers, test runners and git of its own, and signalling only
+// the leader would orphan them. It is started with Setpgid, so the negative pid
+// addresses exactly that process's descendants and nothing else. Records
 // written before agents were given their own group have no such group, so a
-// missing one falls back to signalling the agent itself.
+// missing one falls back to signalling the process itself.
+//
+// SIGTERM is a request, and a process is free to ignore it. Returning as soon
+// as it was sent would record a task as stopped while it carried on running, so
+// this waits for the process to go and escalates to SIGKILL if it does not.
 func signalGroup(pid int) error {
-	err := syscall.Kill(-pid, syscall.SIGTERM)
+	if err := signal(pid, syscall.SIGTERM); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(stopGrace)
+	for processAlive(pid) {
+		if time.Now().After(deadline) {
+			// Not going to honour the request. SIGKILL cannot be ignored, and
+			// ESRCH from here is the process having exited in the meantime,
+			// which is the outcome that was wanted.
+			if err := signal(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				return err
+			}
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil
+}
+
+// signal sends sig to a process group, falling back to the process alone for
+// records written before agents were given a group of their own.
+func signal(pid int, sig syscall.Signal) error {
+	err := syscall.Kill(-pid, sig)
 	if errors.Is(err, syscall.ESRCH) {
-		return syscall.Kill(pid, syscall.SIGTERM)
+		return syscall.Kill(pid, sig)
 	}
 	return err
 }

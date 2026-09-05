@@ -20,6 +20,7 @@ type record struct {
 	Worktree    string `json:"worktree"`
 	LogPath     string `json:"log_path"`
 	ExitCode    *int   `json:"exit_code"`
+	PID         int    `json:"pid"`
 	Error       string `json:"error"`
 	CLI         string `json:"cli"`
 	Model       string `json:"model"`

@@ -55,7 +55,7 @@ func (s *Supervisor) verify(record state.Task) error {
 
 	for attempt := 1; ; attempt++ {
 		s.logf("running the test command (attempt %d): %s", attempt, command)
-		output, runErr := runTestCommand(record.Worktree, command)
+		output, runErr := s.runTestCommand(record.ID, record.Worktree, command)
 		if runErr == nil {
 			s.logf("the test command passed")
 			s.recordTests(record.ID, attempt, true)
@@ -64,12 +64,21 @@ func (s *Supervisor) verify(record state.Task) error {
 		s.logf("the test command failed: %v", runErr)
 		s.recordTests(record.ID, attempt, false)
 
+		// The failure may be the stop itself: `agent-orc stop` kills whatever
+		// child is running, and a non-zero exit from a killed test command is
+		// not a reason to hand it back to the agent and try again.
+		if s.wasStopped(record.ID) {
+			return fmt.Errorf("task %q was stopped while its tests were running", record.ID)
+		}
 		if !resumable {
 			return fmt.Errorf("%w: %s", ErrTestsFailed, strings.TrimSpace(lastLines(output, 5)))
 		}
 		before := headSHA(record.Worktree)
 		if err := s.handBackFailure(record, command, output); err != nil {
 			return err
+		}
+		if s.wasStopped(record.ID) {
+			return fmt.Errorf("task %q was stopped while the agent was fixing its tests", record.ID)
 		}
 		// A round that committed nothing has not changed the code under test,
 		// so running it again would fail in exactly the same way. Stopping
@@ -123,7 +132,7 @@ func (s *Supervisor) handBackFailure(record state.Task, command, output string) 
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
+	if err := s.tracker(record.ID).run(cmd); err != nil {
 		return fmt.Errorf("task %q: %s exited with an error while fixing the tests: %w",
 			record.ID, argv[0], err)
 	}
@@ -148,15 +157,21 @@ func testFailurePrompt(command, output string) string {
 // runTestCommand runs the command through a shell in dir. A shell because a
 // test command is written the way it is typed, pipes and all, and quoting it
 // into an argv here would only be a worse shell.
-func runTestCommand(dir, command string) (string, error) {
+func (s *Supervisor) runTestCommand(id, dir, command string) (string, error) {
 	cmd := exec.Command("sh", "-c", command) // #nosec G204 -- the command is the user's own config
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	err := cmd.Run()
+	err := s.tracker(id).run(cmd)
 	return buf.String(), err
+}
+
+// tracker runs a child on this task's behalf, in its own process group and
+// with its pid on the record while it runs.
+func (s *Supervisor) tracker(id string) tracker {
+	return tracker{id: id, update: s.update}
 }
 
 // recordTests notes how the verification went, so 'agent-orc status' can say
