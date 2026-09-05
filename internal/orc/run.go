@@ -107,8 +107,9 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		// an id that was cleaned up. Name the command that clears it: by now
 		// the state file is gone, so 'agent-orc cleanup' no longer knows the
 		// branch and cannot be the answer.
-		return fmt.Errorf("branch %q already exists in %s; delete it with 'git -C %s branch -d %s' if it holds nothing you want, or pick another --branch",
-			t.Branch, repo.Dir, repo.Dir, t.Branch)
+		return fmt.Errorf("branch %q already exists in %s; delete it with %s if it holds nothing you want, or pick another --branch",
+			t.Branch, repo.Dir,
+			shellCommand("git", "-C", repo.Dir, "branch", "-D", "--", t.Branch))
 	}
 
 	worktree := d.layout.Worktree(t.ID)
@@ -163,7 +164,7 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		// The branch has to go too: left behind, it is an empty branch at base
 		// that makes a retry with the same id fail on the collision check.
 		_ = repo.RemoveWorktree(worktree, true)
-		_ = repo.DeleteBranch(t.Branch, true)
+		_ = repo.DeleteBranch(t.Branch)
 		return err
 	}
 
@@ -173,6 +174,14 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	// output. Everything within one task still appends: the review rounds
 	// write into the same files as the worker.
 	if err := d.truncateLogs(t.ID); err != nil {
+		// The record already exists, so returning here without marking it
+		// would leave a task that is pending forever: nothing to stop, since
+		// there is no pid, and an id that is taken. Fail it the way the
+		// startSupervisor path below does, so ordinary cleanup can recover it.
+		_ = d.store.Update(t.ID, func(k *state.Task) {
+			k.Status = state.StatusFailed
+			k.Error = err.Error()
+		})
 		return err
 	}
 
@@ -302,6 +311,32 @@ func (d *Dispatcher) resolvePrompt(ctx context.Context, t task.Task) (task.Task,
 	}
 	t.Prompt = source.Compose(fetched, t.Prompt)
 	return t, nil
+}
+
+// shellCommand renders argv as a command that can be pasted into a shell.
+//
+// Neither of the values this is used on is safe to interpolate raw: a
+// repository path may contain spaces, and git allows characters in a branch
+// name that a shell would treat as syntax, so an unquoted suggestion could
+// fail or run something else entirely when copied.
+func shellCommand(argv ...string) string {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// shellQuote wraps s in single quotes, which a POSIX shell takes literally,
+// ending and reopening them around any single quote of its own.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(s, " \t\n\"'\\$`&;|<>()*?[]#~!{}") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // truncateLogs empties whatever a previous task of the same id left behind. It

@@ -176,13 +176,13 @@ func TestDeleteBranch(t *testing.T) {
 	if !r.BranchExists("feat/gone") {
 		t.Fatal("BranchExists(feat/gone) = false before delete, want true")
 	}
-	if err := r.DeleteBranch("feat/gone", true); err != nil {
+	if err := r.DeleteBranch("feat/gone"); err != nil {
 		t.Fatalf("DeleteBranch() = %v", err)
 	}
 	if r.BranchExists("feat/gone") {
 		t.Error("BranchExists(feat/gone) = true after delete, want false")
 	}
-	if err := r.DeleteBranch("never-existed", true); err == nil {
+	if err := r.DeleteBranch("never-existed"); err == nil {
 		t.Error("DeleteBranch(never-existed) = nil, want an error")
 	}
 }

@@ -66,10 +66,13 @@ func (c *Cleaner) Clean(id string, force, deleteBranch bool) error {
 	// here has to leave the record behind for another attempt.
 	branch := "left in place"
 	if deleteBranch {
-		if err := repo.DeleteBranch(record.Branch, force); err != nil {
-			if !force {
-				return fmt.Errorf("%w\ngit refuses to delete a branch whose commits are not merged or pushed anywhere; pass --force to delete it regardless", err)
+		if !force {
+			if reason := unsafeToDelete(repo, record); reason != "" {
+				return fmt.Errorf("branch %q %s; pass --force to delete it regardless",
+					record.Branch, reason)
 			}
+		}
+		if err := repo.DeleteBranch(record.Branch); err != nil {
 			return err
 		}
 		branch = "deleted"
@@ -90,6 +93,31 @@ func (c *Cleaner) Clean(id string, force, deleteBranch bool) error {
 
 	fmt.Fprintf(c.out, "%s  cleaned up; branch %s %s\n", id, record.Branch, branch)
 	return nil
+}
+
+// unsafeToDelete says why a task's branch still holds work, or "" when it does
+// not and can go.
+//
+// The question is asked against the base the task was cut from, not against
+// whatever the main checkout happens to have checked out. git's own safe
+// delete asks the latter, which is the wrong question here: a task branch that
+// added nothing at all is refused whenever the repository sits on a branch
+// that does not contain its base, and the only way past that refusal is
+// --force, which would then also throw away branches that do hold work.
+func unsafeToDelete(repo *gitx.Repo, record state.Task) string {
+	// Nothing of its own: the branch is already contained in its base.
+	if repo.IsAncestor(record.Branch, record.BaseBranch) {
+		return ""
+	}
+	// Or its commits are on the remote, where deleting the local branch loses
+	// nothing. PushedSHA is what agent-orc last pushed for this task, so it
+	// only counts while the branch has not moved since.
+	if record.PushedSHA != "" {
+		if sha, err := repo.SHA(record.Branch); err == nil && sha == record.PushedSHA {
+			return ""
+		}
+	}
+	return fmt.Sprintf("holds commits that are not in %s and were not pushed", record.BaseBranch)
 }
 
 // CleanAll removes every task that is no longer running.

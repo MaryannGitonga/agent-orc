@@ -415,8 +415,11 @@ Everything lives under `~/.agent-orc`, overridable with `AGENT_ORC_HOME`:
 
 `agent-orc cleanup <id>` removes the worktree and state but keeps the branch,
 because the branch is the work. Logs go only with `--force`, and the branch only
-with `--delete-branch`, which refuses a branch whose commits are not merged or
-pushed anywhere unless `--force` says otherwise.
+with `--delete-branch`, which refuses a branch holding commits that are neither
+in its base branch nor pushed, unless `--force` says otherwise. That question is
+asked against the base the task was cut from rather than whatever the repository
+currently has checked out, which is what `git branch -d` would ask and is the
+wrong question for a task branch.
 
 Reusing a task id is fine once its predecessor is cleaned up: the new task
 starts with empty logs. The branch is what stands in the way, since cleanup

@@ -222,7 +222,7 @@ func TestCleanupDeleteBranchFreesTheID(t *testing.T) {
 	}
 	// The refusal has to name a remedy that works. By this point the state
 	// file is gone, so cleanup no longer knows the branch and cannot be it.
-	if !strings.Contains(out, "branch -d agent-orc/reuse-1") {
+	if !strings.Contains(out, "branch -D -- agent-orc/reuse-1") {
 		t.Errorf("run = %q, want it to name the command that clears the branch", out)
 	}
 
@@ -251,6 +251,40 @@ func TestCleanupDeleteBranchFreesTheID(t *testing.T) {
 	waitForStatus(t, home, "REUSE-1", "done", "failed")
 }
 
+// TestCleanupDeleteBranchJudgesAgainstTheBase covers a branch that added
+// nothing being deleted even when the main checkout is somewhere else.
+//
+// git's own safe delete asks whether a branch is merged into the current HEAD,
+// which is the wrong question for a task branch: cut from a base that has
+// diverged from whatever the repository is sitting on, a branch with no
+// commits of its own is refused, and the only way past that refusal would be
+// --force, which throws away branches that do hold work.
+func TestCleanupDeleteBranchJudgesAgainstTheBase(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	// A base branch that has diverged from main, and a checkout left on main.
+	git(t, repo, "checkout", "-q", "-b", "develop")
+	git(t, repo, "commit", "--no-gpg-sign", "--allow-empty", "-m", "chore: develop only")
+	git(t, repo, "checkout", "-q", "main")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "BASE-1", "--repo", repo, "--cli", "claude", "--prompt", "do it",
+		"--base-branch", "develop", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "BASE-1", "done", "failed")
+
+	// git branch -d would refuse this, since develop is not reachable from main.
+	if out, err := orcRun(t, home, stub, "cleanup", "BASE-1", "--delete-branch"); err != nil {
+		t.Fatalf("cleanup --delete-branch = %v\n%s", err, out)
+	}
+	if strings.Contains(git(t, repo, "branch", "--list", "agent-orc/base-1"), "base-1") {
+		t.Error("a branch with no commits of its own survived --delete-branch")
+	}
+}
+
 // TestCleanupDeleteBranchKeepsUnmergedWork checks the guard on the flag: a
 // branch holding commits that are nowhere else is work, and only --force says
 // to throw it away.
@@ -269,6 +303,9 @@ func TestCleanupDeleteBranchKeepsUnmergedWork(t *testing.T) {
 	out, err := orcRun(t, home, stub, "cleanup", "KEEP-1", "--delete-branch")
 	if err == nil {
 		t.Fatalf("cleanup --delete-branch = nil, want it to refuse unmerged work\n%s", out)
+	}
+	if !strings.Contains(out, "were not pushed") {
+		t.Errorf("cleanup = %q, want it to say why the branch is not safe to delete", out)
 	}
 	if !strings.Contains(out, "--force") {
 		t.Errorf("cleanup = %q, want it to name --force", out)

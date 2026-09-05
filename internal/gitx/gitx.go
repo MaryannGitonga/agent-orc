@@ -86,20 +86,31 @@ func (r *Repo) AddWorktree(dir, branch, base string) error {
 
 // DeleteBranch removes a local branch.
 //
-// Unforced it is git's safe delete, which refuses a branch holding commits
-// that are not merged or pushed anywhere. That refusal is the point: a task's
-// branch is where its work lives, so the only branch this removes on its own
-// is one that turned out to hold nothing worth keeping. Forced, it is the
-// caller saying the work goes too.
-func (r *Repo) DeleteBranch(branch string, force bool) error {
-	flag := "-d"
-	if force {
-		flag = "-D"
-	}
-	if out, err := run(r.Dir, "branch", flag, branch); err != nil {
+// It is always git's unconditional delete. git's own safe delete asks whether
+// the branch is merged into the current HEAD, which is not the question here:
+// a task branch is judged against the base it was cut from, and whoever calls
+// this has already decided. See the check in the cleanup path.
+func (r *Repo) DeleteBranch(branch string) error {
+	if out, err := run(r.Dir, "branch", "-D", branch); err != nil {
 		return fmt.Errorf("deleting branch %q: %w: %s", branch, err, out)
 	}
 	return nil
+}
+
+// IsAncestor reports whether rev is reachable from other, which is how a task
+// branch that added nothing of its own is told from one that did.
+func (r *Repo) IsAncestor(rev, other string) bool {
+	_, err := run(r.Dir, "merge-base", "--is-ancestor", rev, other)
+	return err == nil
+}
+
+// SHA resolves a revision to its commit id.
+func (r *Repo) SHA(rev string) (string, error) {
+	out, err := run(r.Dir, "rev-parse", rev+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolving %q: %w", rev, err)
+	}
+	return out, nil
 }
 
 // RemoveWorktree deletes the worktree at dir. Its branch is left alone: that

@@ -102,6 +102,21 @@ func TestLogFormatterReassemblesSplitLines(t *testing.T) {
 	}
 }
 
+// TestLogFormatterDoesNotInventANewline covers the promise that prose passes
+// through untouched: a log whose last line was never terminated is the agent's
+// output as it was written, and printing it must not add to it.
+func TestLogFormatterDoesNotInventANewline(t *testing.T) {
+	const in = "no trailing newline"
+	if got := format(t, in); got != in {
+		t.Errorf("format(%q) = %q, want it byte for byte", in, got)
+	}
+	// A whole log of prose keeps its own terminators and gains none.
+	const lines = "first\nsecond\n"
+	if got := format(t, lines); got != lines {
+		t.Errorf("format(%q) = %q, want it byte for byte", lines, got)
+	}
+}
+
 // TestLogFormatterHoldsAnUnterminatedLine checks that a partial line is not
 // printed early. Following a running task writes whatever the agent has
 // flushed so far, and rendering half a JSON object as prose would be wrong.

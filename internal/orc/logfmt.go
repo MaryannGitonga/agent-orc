@@ -62,7 +62,14 @@ func (f *logFormatter) Flush() error {
 	}
 	line := string(f.buf)
 	f.buf = f.buf[:0]
-	return f.line(line)
+	if obj, ok := decodeObject(line); ok {
+		return f.object(obj)
+	}
+	// Verbatim, and with no newline added. This is the end of the log, so a
+	// line the agent left unterminated is the last thing it wrote, and passing
+	// prose through untouched has to mean untouched.
+	_, err := io.WriteString(f.out, line)
+	return err
 }
 
 // line renders one complete line of log.
