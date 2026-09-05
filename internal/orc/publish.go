@@ -55,6 +55,13 @@ type Publisher struct {
 // would stamp the finished run's push and PR onto a task that is still working.
 // `agent-orc pr` leaves it unset, since a human invoking it is acting on
 // whatever the id names now.
+//
+// It scopes the writes, not the read Publish opens with. A record loaded before
+// an id was reused would still be acted on in git, and only its state writes
+// dropped. That is left alone deliberately: the supervisor calls Publish inline
+// the moment the gates pass, so nothing can be dispatched under the id between
+// the two, and widening the guard to cover the read would mean holding a lock
+// across a push for a window that the normal flow cannot open.
 func (p *Publisher) OwnRun(startedAt time.Time) { p.owns = startedAt }
 
 // update applies mutate, skipping the write when the record no longer belongs

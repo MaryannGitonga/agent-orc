@@ -339,16 +339,23 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// truncateLogs empties whatever a previous task of the same id left behind. It
+// truncateLogs clears whatever a previous task of the same id left behind. It
 // is called once the launch is certain, so a run that fails its checks leaves
 // the earlier task's record readable.
+//
+// The files are unlinked rather than truncated in place. An orphaned supervisor
+// from the previous task can still hold one of them open, and its handle is in
+// append mode, so truncating would leave that writer appending into the file
+// the new run is using and interleave two tasks' output. Unlinking leaves the
+// old handle writing into an inode nobody can reach, which goes away when it
+// closes, and the new run opens a file of its own.
 func (d *Dispatcher) truncateLogs(id string) error {
 	for _, path := range []string{
 		d.layout.LogFile(id),
 		d.layout.SupervisorLogFile(id),
 		d.layout.ReviewLogFile(id),
 	} {
-		if err := os.Truncate(path, 0); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("clearing %s: %w", path, err)
 		}
 	}
