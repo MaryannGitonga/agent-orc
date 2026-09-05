@@ -168,6 +168,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 // whoever started reading it.
 func (s *Supervisor) autoReview(record *state.Task) error {
 	r := NewReviewer(s.layout, s.out)
+	r.OwnRun(s.startedAt)
 	approved, err := r.Rounds(record)
 	if err != nil {
 		return err

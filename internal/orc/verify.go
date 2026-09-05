@@ -162,7 +162,7 @@ func runTestCommand(dir, command string) (string, error) {
 // recordTests notes how the verification went, so 'agent-orc status' can say
 // whether a branch was checked and what came of it.
 func (s *Supervisor) recordTests(id string, attempts int, passed bool) {
-	if err := s.store.Update(id, func(k *state.Task) {
+	if err := s.update(id, func(k *state.Task) {
 		k.TestRuns = attempts
 		k.TestsPassed = &passed
 	}); err != nil {

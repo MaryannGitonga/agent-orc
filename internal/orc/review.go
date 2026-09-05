@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
 	"github.com/MaryannGitonga/agent-orc/internal/gitx"
@@ -21,11 +22,31 @@ type Reviewer struct {
 	layout paths.Layout
 	store  *state.Store
 	out    io.Writer
+	// owns scopes writes to one dispatch; see OwnRun.
+	owns time.Time
 }
 
 // NewReviewer returns a reviewer writing progress to out.
 func NewReviewer(layout paths.Layout, out io.Writer) *Reviewer {
 	return &Reviewer{layout: layout, store: state.NewStore(layout.State), out: out}
+}
+
+// OwnRun scopes this reviewer's writes to one dispatch of the task, the way the
+// publisher's are. An automatic review runs inside the supervisor after the
+// agent has exited, by which point the task can have been cleaned up and its id
+// dispatched again. `agent-orc review` leaves it unset: a human invoking it is
+// acting on whatever the id names now.
+func (r *Reviewer) OwnRun(startedAt time.Time) { r.owns = startedAt }
+
+// update applies mutate, skipping the write when the record no longer belongs
+// to the run this reviewer was scoped to.
+func (r *Reviewer) update(id string, mutate func(*state.Task)) error {
+	return r.store.Update(id, func(k *state.Task) {
+		if !r.owns.IsZero() && !k.StartedAt.Equal(r.owns) {
+			return
+		}
+		mutate(k)
+	})
 }
 
 // Review runs review rounds until the reviewer approves the branch.
@@ -52,7 +73,7 @@ func (r *Reviewer) Review(id string) error {
 		return err
 	}
 	if approved {
-		return r.store.Update(id, func(k *state.Task) { k.Status = state.StatusReviewed })
+		return r.update(id, func(k *state.Task) { k.Status = state.StatusReviewed })
 	}
 	return nil
 }
@@ -143,7 +164,7 @@ func (r *Reviewer) round(record *state.Task) (bool, error) {
 // bump records a completed round.
 func (r *Reviewer) bump(record *state.Task, round int) error {
 	record.ReviewRound = round
-	return r.store.Update(record.ID, func(k *state.Task) { k.ReviewRound = round })
+	return r.update(record.ID, func(k *state.Task) { k.ReviewRound = round })
 }
 
 // runReviewer checks the branch out into a fresh worktree, runs the reviewing
