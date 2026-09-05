@@ -46,6 +46,10 @@ func (Codex) SubagentDir() string { return "" }
 // output.
 func (Codex) ParseUsage(string) (*Usage, error) { return nil, ErrNoUsage }
 
+// ParseResult returns the output unchanged: the codex CLI answers in prose, so
+// what it wrote is what it said.
+func (Codex) ParseResult(output string) string { return output }
+
 // SessionArgs returns nothing: Codex takes no session ID at launch.
 func (Codex) SessionArgs(string) []string { return nil }
 

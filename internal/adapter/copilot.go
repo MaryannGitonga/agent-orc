@@ -57,6 +57,10 @@ func (Copilot) SubagentDir() string { return ".github/agents" }
 // cost to its output, and a made-up number would be worse than none.
 func (Copilot) ParseUsage(string) (*Usage, error) { return nil, ErrNoUsage }
 
+// ParseResult returns the output unchanged: the copilot CLI answers in prose, so
+// what it wrote is what it said.
+func (Copilot) ParseResult(output string) string { return output }
+
 // SessionArgs pins the run to a session ID so it can be resumed later.
 func (Copilot) SessionArgs(sessionID string) []string {
 	if sessionID == "" {

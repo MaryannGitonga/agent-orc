@@ -83,6 +83,16 @@ func (Claude) ParseUsage(logPath string) (*Usage, error) {
 	return &u, nil
 }
 
+// ParseResult digs the agent's message out of Claude Code's JSON envelope.
+// Output that holds no such envelope is returned as it came, which is what a
+// run that failed before producing a result writes.
+func (Claude) ParseResult(output string) string {
+	if text := jsonResultField(output); text != "" {
+		return text
+	}
+	return output
+}
+
 // SessionArgs pins the run to a session ID so it can be resumed later.
 func (Claude) SessionArgs(sessionID string) []string {
 	if sessionID == "" {

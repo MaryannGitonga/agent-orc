@@ -84,11 +84,20 @@ func (r *Repo) AddWorktree(dir, branch, base string) error {
 	return nil
 }
 
-// DeleteBranch removes a local branch. It exists to undo a branch agent-orc
-// created moments earlier, not to throw away a user's work.
-func (r *Repo) DeleteBranch(branch string) error {
-	if _, err := run(r.Dir, "branch", "-D", branch); err != nil {
-		return fmt.Errorf("deleting branch %q: %w", branch, err)
+// DeleteBranch removes a local branch.
+//
+// Unforced it is git's safe delete, which refuses a branch holding commits
+// that are not merged or pushed anywhere. That refusal is the point: a task's
+// branch is where its work lives, so the only branch this removes on its own
+// is one that turned out to hold nothing worth keeping. Forced, it is the
+// caller saying the work goes too.
+func (r *Repo) DeleteBranch(branch string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	if out, err := run(r.Dir, "branch", flag, branch); err != nil {
+		return fmt.Errorf("deleting branch %q: %w: %s", branch, err, out)
 	}
 	return nil
 }

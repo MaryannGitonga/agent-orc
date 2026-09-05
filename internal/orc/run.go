@@ -102,7 +102,13 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		return fmt.Errorf("base branch %q does not exist in %s", t.BaseBranch, repo.Dir)
 	}
 	if repo.BranchExists(t.Branch) {
-		return fmt.Errorf("branch %q already exists in %s; pick another --branch", t.Branch, repo.Dir)
+		// The branch outliving its task is the normal case, since cleanup
+		// leaves it behind on purpose, so this fires most often on a retry of
+		// an id that was cleaned up. Name the command that clears it: by now
+		// the state file is gone, so 'agent-orc cleanup' no longer knows the
+		// branch and cannot be the answer.
+		return fmt.Errorf("branch %q already exists in %s; delete it with 'git -C %s branch -d %s' if it holds nothing you want, or pick another --branch",
+			t.Branch, repo.Dir, repo.Dir, t.Branch)
 	}
 
 	worktree := d.layout.Worktree(t.ID)
@@ -157,7 +163,16 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		// The branch has to go too: left behind, it is an empty branch at base
 		// that makes a retry with the same id fail on the collision check.
 		_ = repo.RemoveWorktree(worktree, true)
-		_ = repo.DeleteBranch(t.Branch)
+		_ = repo.DeleteBranch(t.Branch, true)
+		return err
+	}
+
+	// A task id is reusable once its predecessor has been cleaned up, and the
+	// log paths are derived from the id alone, so a stale log would otherwise
+	// be appended to and 'agent-orc logs' would open with the previous run's
+	// output. Everything within one task still appends: the review rounds
+	// write into the same files as the worker.
+	if err := d.truncateLogs(t.ID); err != nil {
 		return err
 	}
 
@@ -287,6 +302,22 @@ func (d *Dispatcher) resolvePrompt(ctx context.Context, t task.Task) (task.Task,
 	}
 	t.Prompt = source.Compose(fetched, t.Prompt)
 	return t, nil
+}
+
+// truncateLogs empties whatever a previous task of the same id left behind. It
+// is called once the launch is certain, so a run that fails its checks leaves
+// the earlier task's record readable.
+func (d *Dispatcher) truncateLogs(id string) error {
+	for _, path := range []string{
+		d.layout.LogFile(id),
+		d.layout.SupervisorLogFile(id),
+		d.layout.ReviewLogFile(id),
+	} {
+		if err := os.Truncate(path, 0); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("clearing %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 // standingInstructions combines the machine-wide instructions file with

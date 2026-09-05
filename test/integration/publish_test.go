@@ -195,6 +195,136 @@ func TestCleanupRemovesTheWorktreeAndKeepsTheBranch(t *testing.T) {
 	}
 }
 
+// TestCleanupDeleteBranchFreesTheID covers the loop a reused id used to get
+// stuck in: cleanup leaves the branch behind on purpose, and the next run with
+// the same id then collides with it.
+func TestCleanupDeleteBranchFreesTheID(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	run := func(id string) (string, error) {
+		return orcRun(t, home, stub, "run",
+			"--id", id, "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+	}
+	if out, err := run("REUSE-1"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "REUSE-1", "done", "failed")
+
+	// Plain cleanup keeps the branch, so the id is still taken.
+	if out, err := orcRun(t, home, stub, "cleanup", "REUSE-1"); err != nil {
+		t.Fatalf("agent-orc cleanup = %v\n%s", err, out)
+	}
+	out, err := run("REUSE-1")
+	if err == nil {
+		t.Fatalf("agent-orc run = nil, want a refusal while the branch is still there\n%s", out)
+	}
+	// The refusal has to name a remedy that works. By this point the state
+	// file is gone, so cleanup no longer knows the branch and cannot be it.
+	if !strings.Contains(out, "branch -d agent-orc/reuse-1") {
+		t.Errorf("run = %q, want it to name the command that clears the branch", out)
+	}
+
+	// With the branch deleted the id is free again.
+	if out, err := orcRun(t, home, stub, "cleanup", "REUSE-1"); err == nil {
+		t.Fatalf("agent-orc cleanup = nil, want it to refuse a task it no longer tracks\n%s", out)
+	}
+	git(t, repo, "branch", "-D", "agent-orc/reuse-1")
+	if out, err := run("REUSE-1"); err != nil {
+		t.Fatalf("agent-orc run after deleting the branch = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "REUSE-1", "done", "failed")
+
+	// And the one-step form does both at once.
+	if out, err := orcRun(t, home, stub, "cleanup", "REUSE-1", "--delete-branch"); err != nil {
+		t.Fatalf("agent-orc cleanup --delete-branch = %v\n%s", err, out)
+	} else if !strings.Contains(out, "deleted") {
+		t.Errorf("cleanup = %q, want it to say the branch was deleted", out)
+	}
+	if strings.Contains(git(t, repo, "branch", "--list", "agent-orc/reuse-1"), "reuse-1") {
+		t.Error("the branch survived --delete-branch")
+	}
+	if out, err := run("REUSE-1"); err != nil {
+		t.Fatalf("agent-orc run after --delete-branch = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "REUSE-1", "done", "failed")
+}
+
+// TestCleanupDeleteBranchKeepsUnmergedWork checks the guard on the flag: a
+// branch holding commits that are nowhere else is work, and only --force says
+// to throw it away.
+func TestCleanupDeleteBranchKeepsUnmergedWork(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"),
+		"printf 'work\\n' > out.txt\ngit add . && git commit --no-gpg-sign -m 'feat: work' >/dev/null")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "KEEP-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "KEEP-1", "done", "failed")
+
+	out, err := orcRun(t, home, stub, "cleanup", "KEEP-1", "--delete-branch")
+	if err == nil {
+		t.Fatalf("cleanup --delete-branch = nil, want it to refuse unmerged work\n%s", out)
+	}
+	if !strings.Contains(out, "--force") {
+		t.Errorf("cleanup = %q, want it to name --force", out)
+	}
+	if !strings.Contains(git(t, repo, "log", "--oneline", "agent-orc/keep-1"), "feat: work") {
+		t.Fatal("the branch was deleted despite the refusal")
+	}
+	// The state has to survive the refusal too, or the task becomes
+	// untrackable and the branch unreachable by name.
+	if out, err := orcRun(t, home, stub, "cleanup", "KEEP-1", "--delete-branch", "--force"); err != nil {
+		t.Fatalf("cleanup --delete-branch --force = %v\n%s", err, out)
+	}
+	if strings.Contains(git(t, repo, "branch", "--list", "agent-orc/keep-1"), "keep-1") {
+		t.Error("--force did not delete the branch")
+	}
+}
+
+// TestRunClearsAPreviousTaskLog covers a reused id starting clean: the log
+// paths come from the id alone, so without this the first thing 'agent-orc
+// logs' shows is the output of a task that was cleaned up.
+func TestRunClearsAPreviousTaskLog(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	dir := t.TempDir()
+	stubInto(t, dir, "claude", filepath.Join(t.TempDir(), "receipt"), "echo first run")
+
+	run := func() (string, error) {
+		return orcRun(t, home, dir, "run",
+			"--id", "FRESH-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+	}
+	if out, err := run(); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "FRESH-1", "done", "failed")
+	if out, err := orcRun(t, home, dir, "cleanup", "FRESH-1", "--delete-branch"); err != nil {
+		t.Fatalf("agent-orc cleanup = %v\n%s", err, out)
+	}
+
+	stubInto(t, dir, "claude", filepath.Join(t.TempDir(), "receipt"), "echo second run")
+	if out, err := run(); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "FRESH-1", "done", "failed")
+
+	out, err := orcRun(t, home, dir, "logs", "FRESH-1")
+	if err != nil {
+		t.Fatalf("agent-orc logs = %v\n%s", err, out)
+	}
+	if strings.Contains(out, "first run") {
+		t.Errorf("logs = %q, want the previous task's output gone", out)
+	}
+	if !strings.Contains(out, "second run") {
+		t.Errorf("logs = %q, want the current task's output", out)
+	}
+}
+
 // TestLogsPrintsTheAgentOutput covers §11's logs command.
 func TestLogsPrintsTheAgentOutput(t *testing.T) {
 	repo := initRepo(t)
@@ -213,6 +343,49 @@ func TestLogsPrintsTheAgentOutput(t *testing.T) {
 	}
 	if !strings.Contains(out, "hello from the agent") {
 		t.Errorf("logs = %q, want the agent's output", out)
+	}
+}
+
+// TestLogsSummarizesAJSONResult covers the other half of the logs command: a
+// CLI that reports its result as JSON gets summarized by default, and --raw
+// still yields the exact bytes the agent wrote.
+func TestLogsSummarizesAJSONResult(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	result := `{"subtype":"success","num_turns":3,"duration_ms":1500,` +
+		`"total_cost_usd":0.25,"session_id":"sess-42","result":"Fixed the retry handler."}`
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"),
+		"cat <<'JSON'\n"+result+"\nJSON")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "LOG-2", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "LOG-2", "done", "failed")
+
+	out, err := orcRun(t, home, stub, "logs", "LOG-2")
+	if err != nil {
+		t.Fatalf("agent-orc logs = %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"Fixed the retry handler.", "status   success, 3 turns, 1.5s",
+		"cost     $0.2500", "session  sess-42",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("logs = %q, want it to contain %q", out, want)
+		}
+	}
+	if strings.Contains(out, "total_cost_usd") {
+		t.Errorf("logs = %q, want the raw json summarized away", out)
+	}
+
+	// The flag comes after the id, which is the form the usage line advertises.
+	raw, err := orcRun(t, home, stub, "logs", "LOG-2", "--raw")
+	if err != nil {
+		t.Fatalf("agent-orc logs --raw = %v\n%s", err, raw)
+	}
+	if !strings.Contains(raw, result) {
+		t.Errorf("logs --raw = %q, want the agent's line verbatim", raw)
 	}
 }
 
