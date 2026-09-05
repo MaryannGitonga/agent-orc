@@ -28,8 +28,7 @@ func NewReviewer(layout paths.Layout, out io.Writer) *Reviewer {
 	return &Reviewer{layout: layout, store: state.NewStore(layout.State), out: out}
 }
 
-// Review runs review rounds until the reviewer approves the branch or the
-// per-task cap is reached, whichever comes first.
+// Review runs review rounds until the reviewer approves the branch.
 func (r *Reviewer) Review(id string) error {
 	record, err := r.store.Load(id)
 	if err != nil {
@@ -48,36 +47,60 @@ func (r *Reviewer) Review(id string) error {
 		return fmt.Errorf("task %q has no worktree left to resume the worker in: %w", id, err)
 	}
 
-	maxRounds := record.Review.Rounds()
-	if record.ReviewRound >= maxRounds {
-		return fmt.Errorf("task %q has already used its %d review round(s); the rest is for a human",
-			id, maxRounds)
+	approved, err := r.Rounds(&record)
+	if err != nil {
+		return err
 	}
+	if approved {
+		return r.store.Update(id, func(k *state.Task) { k.Status = state.StatusReviewed })
+	}
+	return nil
+}
 
-	for record.ReviewRound < maxRounds {
-		approved, err := r.round(&record)
+// Rounds runs review rounds until the reviewer approves, and reports whether
+// it did.
+//
+// There is no round cap. A change that was reviewed but not approved is not a
+// reviewed change, and stopping at an arbitrary count would only publish it
+// anyway. What bounds the loop instead is the same pair that bounds the test
+// gate: the budget, enforced by the CLIs themselves, and a worker that has
+// stopped acting on the comments, which is a fixed point rather than a quota.
+//
+// It is also the loop without the guards Review applies first, because the
+// caller that skips them is the supervisor: it runs this the moment the agent
+// exits, when the task is still mid-flight by every check a human invocation
+// makes, and it is itself the thing that would otherwise be moving the branch.
+func (r *Reviewer) Rounds(record *state.Task) (bool, error) {
+	for {
+		before := headSHA(record.Worktree)
+		approved, err := r.round(record)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if approved {
-			return r.store.Update(id, func(k *state.Task) { k.Status = state.StatusReviewed })
+			return true, nil
+		}
+		// The worker was handed comments and committed nothing, so the branch
+		// the reviewer would read next is the branch it just read, and it
+		// would raise the same comments again. Stopping is the only thing left
+		// that is not a repeat.
+		if after := headSHA(record.Worktree); after == before {
+			fmt.Fprintf(r.out, "%s  the worker committed nothing in response; leaving the rest to a human\n",
+				record.ID)
+			return false, nil
 		}
 	}
-
-	fmt.Fprintf(r.out, "%s  review cap of %d round(s) reached; leaving the rest to a human\n", id, maxRounds)
-	return nil
 }
 
 // round runs one review, and hands any comments back to the worker.
 func (r *Reviewer) round(record *state.Task) (bool, error) {
 	round := record.ReviewRound + 1
-	fmt.Fprintf(r.out, "%s  review round %d of %d\n", record.ID, round, record.Review.Rounds())
+	fmt.Fprintf(r.out, "%s  review round %d\n", record.ID, round)
 
 	output, err := r.runReviewer(*record)
 	if err != nil {
 		return false, err
 	}
-
 	// What the reviewer *said*, not what its CLI printed around it: a CLI that
 	// answers in JSON buries the verdict in a field of a very large object,
 	// and parsing the envelope as prose finds neither an approval nor a list.

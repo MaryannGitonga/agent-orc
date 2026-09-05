@@ -23,6 +23,7 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/source"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
+	"github.com/MaryannGitonga/agent-orc/internal/testcmd"
 )
 
 // fetchTimeout bounds resolving a task's source at launch.
@@ -98,6 +99,7 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	if err != nil {
 		return err
 	}
+	t, testNote := resolveTestCommand(t)
 	if !repo.RevExists(t.BaseBranch) {
 		return fmt.Errorf("base branch %q does not exist in %s", t.BaseBranch, repo.Dir)
 	}
@@ -197,6 +199,7 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	fmt.Fprintf(d.out, "  branch    %s (from %s)\n", t.Branch, t.BaseBranch)
 	fmt.Fprintf(d.out, "  worktree  %s\n", worktree)
 	fmt.Fprintf(d.out, "  log       %s\n", record.LogPath)
+	fmt.Fprintf(d.out, "  tests     %s\n", testNote)
 	if len(seeded) > 0 {
 		fmt.Fprintf(d.out, "  subagents %s\n", strings.Join(seeded, ", "))
 	}
@@ -337,6 +340,32 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// resolveTestCommand fills in how the repository runs its tests when the task
+// did not say.
+//
+// Nobody should have to tell agent-orc something the repository already
+// states: a project that has a make test target, or a go.mod, or a pytest
+// layout has said how it is tested, and reading that is better than asking for
+// it again in a config file. The explicit setting stays for the projects those
+// conventions do not describe, and "none" is how a repository whose tests
+// agent-orc should not run says so.
+func resolveTestCommand(t task.Task) (task.Task, string) {
+	switch strings.TrimSpace(t.TestCommand) {
+	case testcmd.None:
+		t.TestCommand = ""
+		return t, "not run for this task"
+	case "":
+		command, reason := testcmd.Discover(t.Repo)
+		if command == "" {
+			return t, "none found; the agent is asked to find them itself"
+		}
+		t.TestCommand = command
+		return t, fmt.Sprintf("%s (from %s)", command, reason)
+	default:
+		return t, t.TestCommand + " (set for this task)"
+	}
 }
 
 // truncateLogs clears whatever a previous task of the same id left behind. It

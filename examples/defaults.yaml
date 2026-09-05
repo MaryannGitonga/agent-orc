@@ -1,0 +1,37 @@
+# Task defaults, so the same flags are not retyped on every run.
+#
+# Copy to ~/.agent-orc/defaults.yaml for settings that are true of every task
+# on this machine, or to <repo>/.agent-orc.yaml, checked in, for settings that
+# are true of one codebase. The repository file wins over the machine-wide one,
+# a batch file wins over both, and a flag you type wins over everything.
+#
+# The keys are the run flags with dashes swapped for underscores. Every one is
+# optional, and unknown keys are rejected rather than ignored. What is
+# inherently per-task cannot be set here: the id, the prompt or source, the
+# branch, and the repository.
+
+cli: claude                     # claude | copilot | codex
+model: claude-sonnet-5          # the CLI's own name for the model, unvalidated
+base_branch: main
+subagents: false
+dco_signoff: true               # for a repository that requires DCO sign-off
+auto_pr: true                   # open a draft PR when the agent finishes
+
+# Caps are applied as the CLI's own native flag, never converted between units,
+# so set the one the CLI you dispatch to actually enforces.
+budget_usd: 2.00
+
+# How this project runs its tests. Normally there is no need to set it:
+# agent-orc reads a make test target, go.mod, a package.json test script,
+# Cargo.toml or a pytest layout and uses what it finds. Set it when those
+# conventions do not describe your project, or to "none" for a suite agent-orc
+# should not be running.
+# test_command: pytest -q -m "not slow"
+
+review:
+  enabled: true
+  auto: true                    # review on finishing, before the PR is opened
+  cli: claude                   # a CLI other than the worker's by default
+  # The loop runs until the reviewer approves. What bounds it is the budget
+  # above, and a worker that stops acting on the comments.
+  model: claude-opus-5

@@ -67,14 +67,19 @@ type Task struct {
 	Instructions string `yaml:"-" json:"instructions,omitempty"`
 	// Review configures the optional agentic review pass.
 	Review Review `yaml:"review" json:"review,omitempty"`
+	// TestCommand is the project's own test command, run in the worktree once
+	// the agent has finished. Empty means agent-orc checks nothing, which is
+	// the default: there is no way to guess how a repository runs its tests.
+	TestCommand string `yaml:"test_command" json:"test_command,omitempty"`
 }
 
-// Review configures the optional, manually triggered review pass.
+// Review configures the optional agentic review pass.
 //
-// It is off by default and hard-capped on purpose: unlike opening a draft PR,
-// a review round costs real money and real time, and an uncapped loop between
-// worker and reviewer is exactly the kind of thing that runs until someone
-// notices.
+// It is off by default because it costs real money and real time. Once on, it
+// runs until the reviewer approves: a change that has been reviewed but not
+// approved is not a reviewed change, and stopping at an arbitrary count would
+// only publish it anyway. What bounds it is the budget, and a worker that has
+// stopped acting on the comments.
 type Review struct {
 	// Enabled allows `agent-orc review` to run for this task.
 	Enabled bool `yaml:"enabled" json:"enabled,omitempty"`
@@ -83,16 +88,9 @@ type Review struct {
 	CLI CLI `yaml:"cli" json:"cli,omitempty"`
 	// Model is the reviewer's model; empty means that CLI's default.
 	Model string `yaml:"model" json:"model,omitempty"`
-	// MaxRounds caps worker and reviewer round-trips. Zero means one round.
-	MaxRounds int `yaml:"max_rounds" json:"max_rounds,omitempty"`
-}
-
-// Rounds returns the effective cap on review round-trips.
-func (r Review) Rounds() int {
-	if r.MaxRounds <= 0 {
-		return 1
-	}
-	return r.MaxRounds
+	// Auto runs the review automatically when the agent finishes, before the
+	// branch is published, so the PR that opens has already been through it.
+	Auto bool `yaml:"auto" json:"auto,omitempty"`
 }
 
 // ReviewerCLI returns the CLI that should run the review for a worker task.
@@ -190,9 +188,6 @@ func (t Task) validateCommon() error {
 	if t.Review.CLI != "" && !t.Review.CLI.Known() {
 		errs = append(errs, fmt.Errorf("unsupported review cli %q, want one of %v", t.Review.CLI, KnownCLIs))
 	}
-	if t.Review.MaxRounds < 0 {
-		errs = append(errs, fmt.Errorf("review max_rounds must not be negative, got %d", t.Review.MaxRounds))
-	}
 	return errors.Join(errs...)
 }
 
@@ -216,6 +211,19 @@ Operating rules for this run (set by agent-orc, not by the task author):
   Pushing and opening a draft PR is handled for you after this session ends.
 - Do not add any Co-authored-by or "Generated with" trailer to your commits.`
 
+// testRule names the command when one is known, so the agent runs the same
+// thing agent-orc is about to run rather than something adjacent to it.
+const testRule = "\n- Before committing, run `%s` in this worktree and make it pass.\n" +
+	"  Do not finish with it failing; agent-orc runs it after you and will not\n" +
+	"  publish a branch that leaves it red."
+
+// genericTestRule is the fallback when no command could be found. Asking the
+// agent to look is still worth doing: it is sitting in the repository and can
+// read the build files, which is more than agent-orc's own conventions cover.
+// Nothing verifies this one, so it is phrased as the instruction it is.
+const genericTestRule = "\n- If this project has a test suite, run it before committing and make it\n" +
+	"  pass. Do not commit work that leaves it failing."
+
 // Render returns the task's prompt followed by the fixed operating rules.
 func (t Task) Render() string {
 	out := strings.TrimSpace(t.Prompt)
@@ -228,7 +236,14 @@ func (t Task) Render() string {
 	if s := strings.TrimSpace(t.Instructions); s != "" {
 		out += instructionsHeader + s
 	}
-	return out + policySuffix
+	out += policySuffix
+	switch cmd := strings.TrimSpace(t.TestCommand); cmd {
+	case "":
+		out += genericTestRule
+	default:
+		out += fmt.Sprintf(testRule, cmd)
+	}
+	return out
 }
 
 // instructionsHeader separates the task from the standing instructions, so an

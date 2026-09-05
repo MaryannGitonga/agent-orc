@@ -45,6 +45,8 @@ type Defaults struct {
 	BudgetCredits *float64 `yaml:"budget_credits"`
 	AutoPR        *bool    `yaml:"auto_pr"`
 	Review        *Review  `yaml:"review"`
+	// TestCommand is run in each task's worktree once its agent has finished.
+	TestCommand string `yaml:"test_command"`
 	// Instructions apply to every task in the batch, on top of anything in
 	// ~/.agent-orc/instructions.md.
 	Instructions string `yaml:"instructions"`
@@ -52,10 +54,10 @@ type Defaults struct {
 
 // Review is the review block as written in a batch file.
 type Review struct {
-	Enabled   *bool    `yaml:"enabled"`
-	CLI       task.CLI `yaml:"cli"`
-	Model     string   `yaml:"model"`
-	MaxRounds *int     `yaml:"max_rounds"`
+	Enabled *bool    `yaml:"enabled"`
+	Auto    *bool    `yaml:"auto"`
+	CLI     task.CLI `yaml:"cli"`
+	Model   string   `yaml:"model"`
 }
 
 // Entry is one task as written in the batch file. Every field is optional
@@ -78,6 +80,8 @@ type Entry struct {
 	BudgetCredits *float64 `yaml:"budget_credits"`
 	AutoPR        *bool    `yaml:"auto_pr"`
 	Review        *Review  `yaml:"review"`
+
+	TestCommand string `yaml:"test_command"`
 }
 
 // Load reads and validates a batch file. Paths inside it are resolved relative
@@ -182,9 +186,6 @@ func (f *File) validate() error {
 			if r.CLI != "" && !r.CLI.Known() {
 				errs = append(errs, fmt.Errorf("%s: unsupported review cli %q, want one of %v", where, r.CLI, task.KnownCLIs))
 			}
-			if r.MaxRounds != nil && *r.MaxRounds < 0 {
-				errs = append(errs, fmt.Errorf("%s: review max_rounds must not be negative", where))
-			}
 		}
 	}
 	if f.Defaults.CLI != "" && !f.Defaults.CLI.Known() {
@@ -234,9 +235,10 @@ func (f *File) Resolved(e Entry) task.Task {
 			USD:     firstFloat(e.BudgetUSD, f.Defaults.BudgetUSD),
 			Credits: firstFloat(e.BudgetCredits, f.Defaults.BudgetCredits),
 		},
-		AutoPR:     autoPR,
-		DCOSignoff: f.DCOSignoff,
-		Review:     mergeReview(e.Review, f.Defaults.Review),
+		AutoPR:      autoPR,
+		DCOSignoff:  f.DCOSignoff,
+		Review:      mergeReview(e.Review, f.Defaults.Review),
+		TestCommand: pick(e.TestCommand, f.Defaults.TestCommand),
 	}
 }
 
@@ -251,14 +253,14 @@ func mergeReview(entry, defaults *Review) task.Review {
 		if r.Enabled != nil {
 			out.Enabled = *r.Enabled
 		}
+		if r.Auto != nil {
+			out.Auto = *r.Auto
+		}
 		if r.CLI != "" {
 			out.CLI = r.CLI
 		}
 		if r.Model != "" {
 			out.Model = r.Model
-		}
-		if r.MaxRounds != nil {
-			out.MaxRounds = *r.MaxRounds
 		}
 	}
 	return out

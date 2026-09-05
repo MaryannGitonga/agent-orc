@@ -86,6 +86,13 @@ func (l Layout) InstructionsFile() string {
 	return filepath.Join(l.Root, "instructions.md")
 }
 
+// DefaultsFile is where a user may put machine-wide task defaults, so the same
+// flags are not retyped on every run. A repository can carry its own file
+// alongside its code; see config.RepoFile. Absent is the normal case.
+func (l Layout) DefaultsFile() string {
+	return filepath.Join(l.Root, "defaults.yaml")
+}
+
 // Worktree returns the worktree directory for a task.
 func (l Layout) Worktree(id string) string {
 	return filepath.Join(l.Worktrees, id)

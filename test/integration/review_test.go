@@ -34,6 +34,20 @@ const workerCommit = `printf 'work\n' >> out.txt
 git add .
 git diff --cached --quiet || git commit --no-gpg-sign -m 'feat: do the thing' >/dev/null`
 
+// workerCommitsTwice commits on its first run and its first resume, then stops.
+// The review loop has no round cap, so a worker that commits every time it is
+// handed comments loops forever against a reviewer that always has some. This
+// stub does real work for one round and then reaches the fixed point that ends
+// the loop, which is what tests about the feedback path need.
+const workerCommitsTwice = `n=$(cat .rounds 2>/dev/null || echo 0)
+n=$((n + 1))
+echo $n > .rounds
+if [ $n -le 2 ]; then
+  printf 'work %s\n' "$n" >> out.txt
+  git add .
+  git commit --no-gpg-sign -m "feat: round $n" >/dev/null
+fi`
+
 // runWorker dispatches a task with review enabled and waits for it to finish.
 func runWorker(t *testing.T, home, stub, repo, id string, extra ...string) reviewRecord {
 	t.Helper()
@@ -116,7 +130,7 @@ func TestReviewReadsCommentsOutOfAJSONEnvelope(t *testing.T) {
 	repo := initRepo(t)
 	home := t.TempDir()
 	workerReceipt := filepath.Join(t.TempDir(), "receipt")
-	stub := stubAgent(t, "copilot", workerReceipt, workerCommit)
+	stub := stubAgent(t, "copilot", workerReceipt, workerCommitsTwice)
 	stubInto(t, stub, "claude", filepath.Join(t.TempDir(), "reviewer"),
 		`printf '{"type":"result","subtype":"success","result":"- greeter.py: farewell() has no test\\n- README.md: document the new function"}\n'`)
 
@@ -184,13 +198,14 @@ func TestReviewApprovesAndStops(t *testing.T) {
 }
 
 // TestReviewLoopsFeedbackBackToTheWorker covers the long path: comments are
-// handed to the original session, and the cap stops the loop.
+// handed to the original session, and the loop ends when the worker stops
+// acting on them.
 func TestReviewLoopsFeedbackBackToTheWorker(t *testing.T) {
 	repo := initRepo(t)
 	home := t.TempDir()
 	workerReceipt := filepath.Join(t.TempDir(), "worker")
 
-	stub := stubAgent(t, "claude", workerReceipt, workerCommit)
+	stub := stubAgent(t, "claude", workerReceipt, workerCommitsTwice)
 	stubInto(t, stub, "copilot", filepath.Join(t.TempDir(), "reviewer"),
 		`printf -- '- handler.go: the retry never backs off\n- add a test for the timeout path\n'`)
 
@@ -205,8 +220,10 @@ func TestReviewLoopsFeedbackBackToTheWorker(t *testing.T) {
 			t.Errorf("review output is missing %q:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(out, "cap of 1 round(s) reached") {
-		t.Errorf("review output = %q, want the cap to stop the loop", out)
+	// The worker committed nothing in response, so the reviewer would read the
+	// same branch and raise the same comments; there is nothing left to try.
+	if !strings.Contains(out, "committed nothing in response") {
+		t.Errorf("review output = %q, want the loop to stop at the fixed point", out)
 	}
 
 	// The worker was resumed in its own session, not a fresh one, and given
@@ -224,9 +241,11 @@ func TestReviewLoopsFeedbackBackToTheWorker(t *testing.T) {
 		t.Errorf("branch has %d commits, want 2 (the original plus the follow-up)", n)
 	}
 
+	// Two rounds: the first the worker acted on, the second it did not, which
+	// is what stopped the loop.
 	got := loadReviewRecord(t, home, "REV-2")
-	if got.ReviewRound != 1 {
-		t.Errorf("review_round = %d, want 1", got.ReviewRound)
+	if got.ReviewRound != 2 {
+		t.Errorf("review_round = %d, want 2", got.ReviewRound)
 	}
 	if got.Status == "reviewed" {
 		t.Error("status = reviewed, want it left unreviewed when comments were raised")
@@ -276,31 +295,42 @@ func TestReviewRefusesATaskThatDidNotEnableIt(t *testing.T) {
 	}
 }
 
-// TestReviewHonoursAHigherCap checks that max_rounds actually raises the cap.
-func TestReviewHonoursAHigherCap(t *testing.T) {
+// TestReviewLoopsUntilApproved is what replaced the round cap: as long as the
+// worker keeps acting on the comments, the loop keeps going, and it ends on the
+// approval rather than on a number.
+func TestReviewLoopsUntilApproved(t *testing.T) {
 	repo := initRepo(t)
 	home := t.TempDir()
 	reviewerReceipt := filepath.Join(t.TempDir(), "reviewer")
+	counter := filepath.Join(t.TempDir(), "rounds")
 
 	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "worker"), workerCommit)
-	stubInto(t, stub, "copilot", reviewerReceipt, `printf -- '- keep going\n'`)
+	// Three rounds of comments before the reviewer is satisfied, which is past
+	// anything the old default cap of one would have allowed.
+	stubInto(t, stub, "copilot", reviewerReceipt,
+		"n=$(cat '"+counter+"' 2>/dev/null || echo 0)\n"+
+			"n=$((n + 1))\n"+
+			"echo $n > '"+counter+"'\n"+
+			"if [ $n -ge 3 ]; then printf 'LGTM\\n'; else printf -- '- keep going\\n'; fi")
 
-	runWorker(t, home, stub, repo, "REV-5", "--review-max-rounds", "2")
+	runWorker(t, home, stub, repo, "REV-5")
 
 	out, err := orcRun(t, home, stub, "review", "REV-5")
 	if err != nil {
 		t.Fatalf("agent-orc review = %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "round 2 of 2") {
-		t.Errorf("review output = %q, want two rounds to run", out)
+	if !strings.Contains(out, "round 3") || !strings.Contains(out, "approved") {
+		t.Errorf("review output = %q, want three rounds ending in an approval", out)
 	}
-	if got := loadReviewRecord(t, home, "REV-5"); got.ReviewRound != 2 {
-		t.Errorf("review_round = %d, want 2", got.ReviewRound)
+	got := loadReviewRecord(t, home, "REV-5")
+	if got.ReviewRound != 3 {
+		t.Errorf("review_round = %d, want 3", got.ReviewRound)
 	}
-
-	// Two rounds means two reviewer invocations, each in a fresh session.
-	if n := strings.Count(readFile(t, reviewerReceipt), "arg=-p"); n != 2 {
-		t.Errorf("the reviewer ran %d time(s), want 2", n)
+	if got.Status != "reviewed" {
+		t.Errorf("status = %q, want reviewed", got.Status)
+	}
+	if n := strings.Count(readFile(t, reviewerReceipt), "arg=-p"); n != 3 {
+		t.Errorf("the reviewer ran %d time(s), want 3", n)
 	}
 }
 

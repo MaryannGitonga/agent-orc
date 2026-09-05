@@ -92,6 +92,14 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	case runErr != nil:
 		status = state.StatusFailed
 		message = runErr.Error()
+	// A gate that is about to run is what the task is doing, and has to be
+	// recorded before it starts rather than after. Otherwise the window where
+	// the suite is running, or the reviewer is, reads as "done" to anyone
+	// looking, on a branch that may still end up failing or being changed.
+	case record.TestCommand != "":
+		status = state.StatusVerifying
+	case record.Review.Enabled && record.Review.Auto:
+		status = state.StatusReviewing
 	case record.AutoPR:
 		status = state.StatusPublishing
 	}
@@ -124,11 +132,54 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	if runErr != nil {
 		return fmt.Errorf("task %s failed: %w", id, runErr)
 	}
-	if status == state.StatusPublishing {
-		s.publish(id, record)
-	} else {
-		s.logf("auto_pr is off; run 'agent-orc pr %s' when you want the draft opened", id)
+
+	// Tests first, then review, then publish. Each gate is there to stop the
+	// next one being wasted: no point paying a reviewer to read a branch whose
+	// suite is red, and no point opening a PR over a branch the review is
+	// still changing.
+	if err := s.verify(record); err != nil {
+		s.mark(id, state.StatusFailed, err.Error())
+		s.logf("not publishing: %v", err)
+		return nil
 	}
+	if record.Review.Enabled && record.Review.Auto {
+		s.mark(id, state.StatusReviewing, "")
+		if err := s.autoReview(&record); err != nil {
+			s.mark(id, state.StatusReviewFailed, err.Error())
+			s.logf("not publishing: %v", err)
+			return nil
+		}
+	}
+
+	if !record.AutoPR {
+		s.mark(id, state.StatusDone, "")
+		s.logf("auto_pr is off; run 'agent-orc pr %s' when you want the draft opened", id)
+		return nil
+	}
+	s.mark(id, state.StatusPublishing, "")
+	s.publish(id, record)
+	return nil
+}
+
+// autoReview runs the review pass inline, before the branch is published, when
+// the task asked for it. Doing it here rather than leaving it to a later
+// `agent-orc review` is the point of the flag: the draft PR that opens has
+// already been through a round, instead of being opened and then changed under
+// whoever started reading it.
+func (s *Supervisor) autoReview(record *state.Task) error {
+	r := NewReviewer(s.layout, s.out)
+	approved, err := r.Rounds(record)
+	if err != nil {
+		return err
+	}
+	if approved {
+		s.logf("the reviewer approved the branch after %d round(s)", record.ReviewRound)
+		return nil
+	}
+	// Not an error: the cap is a deliberate stop, and the work is still worth
+	// publishing for a human to pick up. It is only recorded so status can say
+	// the review ended on the cap rather than on an approval.
+	s.logf("the review cap was reached without an approval; publishing anyway")
 	return nil
 }
 

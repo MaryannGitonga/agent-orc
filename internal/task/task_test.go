@@ -104,26 +104,11 @@ func TestReviewerCLIHonoursAnExplicitChoice(t *testing.T) {
 	}
 }
 
-func TestReviewRoundsDefaultsToOne(t *testing.T) {
-	tests := map[int]int{0: 1, -1: 1, 3: 3}
-	for set, want := range tests {
-		if got := (Review{MaxRounds: set}).Rounds(); got != want {
-			t.Errorf("Review{MaxRounds: %d}.Rounds() = %d, want %d", set, got, want)
-		}
-	}
-}
-
 func TestValidateRejectsABadReviewBlock(t *testing.T) {
 	tk := valid()
 	tk.Review = Review{Enabled: true, CLI: "gemini"}
 	if err := tk.Validate(); err == nil || !strings.Contains(err.Error(), "review cli") {
 		t.Errorf("Validate() = %v, want an error naming the review cli", err)
-	}
-
-	tk = valid()
-	tk.Review = Review{Enabled: true, MaxRounds: -2}
-	if err := tk.Validate(); err == nil || !strings.Contains(err.Error(), "max_rounds") {
-		t.Errorf("Validate() = %v, want an error naming max_rounds", err)
 	}
 }
 

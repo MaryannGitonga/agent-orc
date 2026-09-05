@@ -24,12 +24,18 @@ type Status string
 const (
 	StatusPending       Status = "pending" // the supervisor has not started the agent
 	StatusRunning       Status = "running"
+	StatusVerifying     Status = "verifying" // running the task's own test command
+	StatusReviewing     Status = "reviewing" // an automatic review round is under way
 	StatusPublishing    Status = "publishing"
 	StatusDone          Status = "done"
 	StatusPublishFailed Status = "publish_failed" // committed but unpublished; retry with `agent-orc pr`
 	StatusFailed        Status = "failed"         // exited non-zero, or never launched
 	StatusStopped       Status = "stopped"        // killed by `agent-orc stop`
 	StatusReviewed      Status = "reviewed"       // a review round found nothing to change
+	// StatusReviewFailed means an automatic review could not be completed: the
+	// reviewer errored or its verdict was unreadable. The work is committed on
+	// its branch either way, and `agent-orc review` retries.
+	StatusReviewFailed Status = "review_failed"
 	// StatusPolicyViolation means the agent did something it was told not to
 	// by pushing its branch or opening its own PR, so the change did not go
 	// through agent-orc's sanitize-then-draft path.
@@ -38,7 +44,8 @@ const (
 
 // Active reports whether work is still in flight for the task.
 func (s Status) Active() bool {
-	return s == StatusPending || s == StatusRunning || s == StatusPublishing
+	return s == StatusPending || s == StatusRunning ||
+		s == StatusVerifying || s == StatusReviewing || s == StatusPublishing
 }
 
 // HasProcess reports whether a live agent process should back this status.
@@ -78,6 +85,11 @@ type Task struct {
 	SessionID string `json:"session_id,omitempty"`
 	// ReviewRound counts completed worker-reviewer round-trips.
 	ReviewRound int `json:"review_round"`
+	// TestRuns counts how many times the task's test command was run.
+	TestRuns int `json:"test_runs,omitempty"`
+	// TestsPassed is whether the last of those runs passed. Nil means the
+	// suite was never run, which is what a task with no test command gets.
+	TestsPassed *bool `json:"tests_passed,omitempty"`
 }
 
 // ErrNotFound is returned when no state file exists for a task ID.

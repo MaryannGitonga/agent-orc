@@ -1,7 +1,9 @@
 # A batch of tasks for `agent-orc run examples/tasks.yaml`.
 #
 # `defaults` applies to every task; any task can override any field. Paths are
-# resolved relative to this file.
+# resolved relative to this file. Anything the batch leaves unset falls back to
+# the repository's own .agent-orc.yaml and then to ~/.agent-orc/defaults.yaml;
+# see examples/defaults.yaml.
 
 repo: /home/me/code/data-mesh
 base_branch: main               # default for the batch; any task can override it
@@ -13,10 +15,11 @@ defaults:
   # Inside a block scalar a # is literal text, so keep comments outside it.
   instructions: |
     Prefer the standard library. Run the tests before committing.
-  model: sonnet-4-6
+  model: claude-sonnet-5
   subagents: false
   budget_usd: 2.00              # applied as the CLI's own native cap at launch
   auto_pr: true                 # open a draft PR when the agent finishes
+  test_command: pytest -q       # normally discovered; set it to override
   review:
     enabled: false              # off unless a task turns it on
 
@@ -25,13 +28,13 @@ tasks:
     source: jira://PROJ-1234    # fetched at launch and used as the base prompt
     prompt: "Focus on the retry handler, not the whole sync module"
     branch: fix/proj-1234
-    model: opus-4-6             # override the default; this one's tricky
+    model: claude-opus-5        # override the default; this one's tricky
     subagents: true             # complex task, let it delegate
     review:
       enabled: true
+      auto: true                # review on finishing, before the PR is opened
       cli: copilot              # a different CLI and model from the worker's,
       model: gpt-5.1            # so the reviewer has different blind spots
-      max_rounds: 1             # cap on worker-reviewer round-trips
 
   - id: PROJ-1240
     source: github://acme/data-mesh#87  # no prompt: the issue says it all

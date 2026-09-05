@@ -126,12 +126,13 @@ func spend(t state.Task) string {
 	}
 }
 
-// rounds renders review progress against the task's cap.
+// rounds renders how many review round-trips a task has been through. There is
+// no cap to render it against: the loop runs until the reviewer approves.
 func rounds(t state.Task) string {
 	if !t.Review.Enabled {
 		return unknown
 	}
-	return strconv.Itoa(t.ReviewRound) + "/" + strconv.Itoa(t.Review.Rounds())
+	return strconv.Itoa(t.ReviewRound)
 }
 
 // elapsed renders how long a task ran, or has been running.

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/MaryannGitonga/agent-orc/internal/config"
@@ -93,7 +94,7 @@ func runCmd(argv []string, out io.Writer) error {
 		rev     = fs.Bool("review", false, "allow 'agent-orc review' to run for this task")
 		revCLI  = fs.String("review-cli", "", "CLI to review with (default: one other than --cli)")
 		revMdl  = fs.String("review-model", "", "model to review with")
-		revMax  = fs.Int("review-max-rounds", 0, "cap on worker-reviewer round-trips (default 1)")
+		revAuto = fs.Bool("auto-review", false, "review automatically when the agent finishes, before the PR is opened")
 		dco     = fs.Bool("dco-signoff", false, "add a Signed-off-by trailer to commits missing one")
 	)
 	fs.Usage = func() {
@@ -120,27 +121,44 @@ func runCmd(argv []string, out io.Writer) error {
 		return err
 	}
 
+	// Only the flags actually typed count as set: a bool left at false and a
+	// bool passed as false are the same value, and defaults must not be able
+	// to overrule the second.
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+
 	if path := fs.Arg(0); path != "" {
 		// A batch file carries every setting itself, so any flag given
 		// alongside it would be silently dropped. Visit reports only the flags
 		// actually passed, so a default like --repo does not trip this.
-		var given []string
-		fs.Visit(func(f *flag.Flag) { given = append(given, "--"+f.Name) })
-		if len(given) > 0 {
-			return fmt.Errorf("a batch file takes its settings from the file; drop %s", strings.Join(given, ", "))
+		var names []string
+		for name := range given {
+			names = append(names, "--"+name)
 		}
-		return runBatch(ctx, d, path)
+		if len(names) > 0 {
+			sort.Strings(names)
+			return fmt.Errorf("a batch file takes its settings from the file; drop %s", strings.Join(names, ", "))
+		}
+		return runBatch(ctx, d, layout, path)
 	}
 
-	t, err := buildTask(flags{
+	f := flags{
 		id: *id, source: *src, prompt: *prompt, repo: *repo,
 		branch: *branch, base: *base, cli: *cliName, model: *model,
 		subagents: *subs, budgetUSD: *usd, budgetCredits: *credits,
 		autoPR: !*noPR, dcoSignoff: *dco,
 		review: task.Review{
-			Enabled: *rev, CLI: task.CLI(*revCLI), Model: *revMdl, MaxRounds: *revMax,
+			Enabled: *rev || *revAuto, Auto: *revAuto,
+			CLI: task.CLI(*revCLI), Model: *revMdl,
 		},
-	})
+	}
+	settings, err := loadSettings(layout, f.repo)
+	if err != nil {
+		return err
+	}
+	f.applyDefaults(settings, given)
+
+	t, err := buildTask(f)
 	if err != nil {
 		return err
 	}
@@ -148,12 +166,33 @@ func runCmd(argv []string, out io.Writer) error {
 }
 
 // runBatch loads a batch file and dispatches every task in it.
-func runBatch(ctx context.Context, d *orc.Dispatcher, path string) error {
+func runBatch(ctx context.Context, d *orc.Dispatcher, layout paths.Layout, path string) error {
 	f, err := config.Load(path)
 	if err != nil {
 		return err
 	}
+	// The repository layer comes from the batch file's own repo, which is
+	// resolved to an absolute path by Load.
+	settings, err := loadSettings(layout, f.Repo)
+	if err != nil {
+		return err
+	}
+	f.LayerUnder(settings)
 	return d.RunBatch(ctx, f, resolveGitDefaults)
+}
+
+// loadSettings returns the defaults a task inherits, broadest first: the
+// machine-wide file, then the repository's own. Neither has to exist.
+func loadSettings(layout paths.Layout, repo string) (config.Settings, error) {
+	global, err := config.LoadSettings(layout.DefaultsFile())
+	if err != nil {
+		return config.Settings{}, err
+	}
+	local, err := config.LoadRepoSettings(repo)
+	if err != nil {
+		return config.Settings{}, err
+	}
+	return global.Merge(local), nil
 }
 
 // flags carries the single-task run flags as parsed.
@@ -161,7 +200,68 @@ type flags struct {
 	id, source, prompt, repo, branch, base, cli, model string
 	subagents, autoPR, dcoSignoff                      bool
 	budgetUSD, budgetCredits                           float64
+	testCommand                                        string
 	review                                             task.Review
+}
+
+// applyDefaults fills in every flag the user did not type from the settings
+// files. Flags win outright: the files are there to stop the same options
+// being retyped, not to change what an explicit option means.
+//
+// The flag names are the ones the FlagSet registers, so the mapping between a
+// setting and the flag it stands in for is spelled out here in one place.
+func (f *flags) applyDefaults(s config.Settings, given map[string]bool) {
+	if !given["cli"] && s.CLI != "" {
+		f.cli = string(s.CLI)
+	}
+	if !given["model"] && s.Model != "" {
+		f.model = s.Model
+	}
+	if !given["base-branch"] && s.BaseBranch != "" {
+		f.base = s.BaseBranch
+	}
+	if !given["subagents"] && s.Subagents != nil {
+		f.subagents = *s.Subagents
+	}
+	if !given["budget-usd"] && s.BudgetUSD != nil {
+		f.budgetUSD = *s.BudgetUSD
+	}
+	if !given["budget-credits"] && s.BudgetCredits != nil {
+		f.budgetCredits = *s.BudgetCredits
+	}
+	// The flag is --no-auto-pr and the setting is auto_pr, so the sense flips.
+	if !given["no-auto-pr"] && s.AutoPR != nil {
+		f.autoPR = *s.AutoPR
+	}
+	if !given["dco-signoff"] && s.DCOSignoff != nil {
+		f.dcoSignoff = *s.DCOSignoff
+	}
+	// There is no flag for the test command: it is discovered from the
+	// repository, and the setting is only for the projects that discovery does
+	// not describe. That is a fact about a repository, not about one run of
+	// one task, so it belongs in a file rather than on a command line.
+	if s.TestCommand != "" {
+		f.testCommand = s.TestCommand
+	}
+	if s.Review == nil {
+		return
+	}
+	if !given["review"] && !given["auto-review"] && s.Review.Enabled != nil {
+		f.review.Enabled = *s.Review.Enabled
+	}
+	// Automatic review implies review: a task that reviews itself on finishing
+	// is reviewed, and asking for both separately would only be a way to get
+	// the combination wrong.
+	if !given["auto-review"] && s.Review.Auto != nil {
+		f.review.Auto = *s.Review.Auto
+		f.review.Enabled = f.review.Enabled || f.review.Auto
+	}
+	if !given["review-cli"] && s.Review.CLI != "" {
+		f.review.CLI = s.Review.CLI
+	}
+	if !given["review-model"] && s.Review.Model != "" {
+		f.review.Model = s.Review.Model
+	}
 }
 
 // buildTask applies the defaults for a single command-line task.
@@ -174,7 +274,7 @@ func buildTask(f flags) (task.Task, error) {
 	}
 
 	if strings.TrimSpace(f.cli) == "" {
-		return task.Task{}, errors.New("--cli is required")
+		return task.Task{}, errors.New("--cli is required; pass it, or set 'cli' in a defaults file so every run does not have to")
 	}
 
 	// A zero budget means "not set" rather than "cap at nothing", so the flag
@@ -188,19 +288,20 @@ func buildTask(f flags) (task.Task, error) {
 	}
 
 	return resolveGitDefaults(task.Task{
-		ID:         f.id,
-		Source:     f.source,
-		Prompt:     f.prompt,
-		Repo:       f.repo,
-		Branch:     f.branch,
-		BaseBranch: f.base,
-		CLI:        task.CLI(f.cli),
-		Model:      f.model,
-		Subagents:  f.subagents,
-		Budget:     budget,
-		AutoPR:     f.autoPR,
-		DCOSignoff: f.dcoSignoff,
-		Review:     f.review,
+		ID:          f.id,
+		Source:      f.source,
+		Prompt:      f.prompt,
+		Repo:        f.repo,
+		Branch:      f.branch,
+		BaseBranch:  f.base,
+		CLI:         task.CLI(f.cli),
+		Model:       f.model,
+		Subagents:   f.subagents,
+		Budget:      budget,
+		AutoPR:      f.autoPR,
+		DCOSignoff:  f.dcoSignoff,
+		Review:      f.review,
+		TestCommand: f.testCommand,
 	})
 }
 
@@ -320,7 +421,7 @@ func cleanupCmd(argv []string, out io.Writer) error {
 		return c.CleanAll(*force, *delBranch)
 	}
 	if id == "" {
-		return errors.New("usage: agent-orc cleanup <task-id|--all> [--force] [--delete-branch]")
+		return errors.New("usage: agent-orc cleanup <task-id|--all> [--force]")
 	}
 	return c.Clean(id, *force, *delBranch)
 }
