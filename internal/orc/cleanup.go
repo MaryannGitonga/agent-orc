@@ -72,10 +72,13 @@ func (c *Cleaner) Clean(id string, force, deleteBranch bool) error {
 					record.Branch, reason)
 			}
 		}
-		if err := repo.DeleteBranch(record.Branch); err != nil {
-			return err
+		branch = "already gone"
+		if repo.BranchExists(record.Branch) {
+			if err := repo.DeleteBranch(record.Branch); err != nil {
+				return err
+			}
+			branch = "deleted"
 		}
-		branch = "deleted"
 	}
 
 	if err := c.store.Delete(id); err != nil {
@@ -105,6 +108,14 @@ func (c *Cleaner) Clean(id string, force, deleteBranch bool) error {
 // that does not contain its base, and the only way past that refusal is
 // --force, which would then also throw away branches that do hold work.
 func unsafeToDelete(repo *gitx.Repo, record state.Task) string {
+	// Already gone, so there is nothing to protect and nothing to do. This is
+	// what a manual deletion leaves behind, and what a previous cleanup that
+	// deleted the branch and then failed to remove the state leaves behind;
+	// treating the missing ref as unpushed work would make the second attempt
+	// refuse and keep the id taken.
+	if !repo.BranchExists(record.Branch) {
+		return ""
+	}
 	// Nothing of its own: the branch is already contained in its base.
 	if repo.IsAncestor(record.Branch, record.BaseBranch) {
 		return ""

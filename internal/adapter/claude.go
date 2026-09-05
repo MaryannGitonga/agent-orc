@@ -83,6 +83,10 @@ func (Claude) ParseUsage(logPath string) (*Usage, error) {
 	return &u, nil
 }
 
+// WritesJSONResult is true: agent-orc runs Claude Code with --output-format
+// json, so its answer arrives wrapped.
+func (Claude) WritesJSONResult() bool { return true }
+
 // ParseResult digs the agent's message out of Claude Code's JSON envelope.
 // Output that holds no such envelope is returned as it came, which is what a
 // run that failed before producing a result writes.

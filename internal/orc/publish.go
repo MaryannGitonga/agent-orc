@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/forge"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
@@ -43,6 +44,28 @@ type Publisher struct {
 	opener *forge.Opener
 	self   string
 	out    io.Writer
+	// owns scopes writes to one dispatch; see OwnRun.
+	owns time.Time
+}
+
+// OwnRun scopes every write this publisher makes to one dispatch of the task,
+// identified by the StartedAt it was given. The supervisor sets it because the
+// publish chain runs after the agent has exited, by which point the task can
+// have been cleaned up and its id dispatched again; without this the chain
+// would stamp the finished run's push and PR onto a task that is still working.
+// `agent-orc pr` leaves it unset, since a human invoking it is acting on
+// whatever the id names now.
+func (p *Publisher) OwnRun(startedAt time.Time) { p.owns = startedAt }
+
+// update applies mutate, skipping the write when the record no longer belongs
+// to the run this publisher was scoped to.
+func (p *Publisher) update(id string, mutate func(*state.Task)) error {
+	return p.store.Update(id, func(k *state.Task) {
+		if !p.owns.IsZero() && !k.StartedAt.Equal(p.owns) {
+			return
+		}
+		mutate(k)
+	})
 }
 
 // NewPublisher returns a publisher writing progress to out.
@@ -129,7 +152,7 @@ func (p *Publisher) Publish(id string) error {
 	if rewritten > 0 {
 		// Recorded before the push, so the state reflects what happened to
 		// the branch even if opening the draft later fails.
-		if err := p.store.Update(id, func(k *state.Task) { k.RewrittenCommits = rewritten }); err != nil {
+		if err := p.update(id, func(k *state.Task) { k.RewrittenCommits = rewritten }); err != nil {
 			return err
 		}
 		fmt.Fprintf(p.out, "%s  rewrote %d commit message(s)\n", id, rewritten)
@@ -161,7 +184,7 @@ func (p *Publisher) Publish(id string) error {
 	}
 	// Recorded before the draft is opened, because that is the step that can
 	// fail and leave the branch on the remote for a later retry to recognise.
-	if err := p.store.Update(id, func(k *state.Task) { k.PushedSHA = pushed }); err != nil {
+	if err := p.update(id, func(k *state.Task) { k.PushedSHA = pushed }); err != nil {
 		return err
 	}
 	fmt.Fprintf(p.out, "%s  pushed %s\n", id, record.Branch)
@@ -175,7 +198,7 @@ func (p *Publisher) Publish(id string) error {
 	// failed attempt is stale. Recording it here rather than only in the
 	// supervisor is what lets a manual `agent-orc pr` retry actually finish a
 	// task that was left at publish_failed.
-	if err := p.store.Update(id, func(k *state.Task) {
+	if err := p.update(id, func(k *state.Task) {
 		k.PRURL = url
 		k.Status = state.StatusDone
 		k.Error = ""
@@ -208,7 +231,7 @@ func (p *Publisher) checkAgentDidNotPublish(record *state.Task) error {
 	if record.PushedSHA != "" && remoteSHA == record.PushedSHA {
 		return nil
 	}
-	if uerr := p.store.Update(record.ID, func(k *state.Task) {
+	if uerr := p.update(record.ID, func(k *state.Task) {
 		k.Status = state.StatusPolicyViolation
 		k.Error = fmt.Sprintf("the agent pushed %s itself; the remote branch has not been sanitized", record.Branch)
 	}); uerr != nil {

@@ -5,14 +5,20 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"github.com/MaryannGitonga/agent-orc/internal/adapter"
+	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
 // Logs writes a task's agent log to out. When follow is set it keeps writing
 // as the agent produces more, and stops when the task finishes. It is a tail
 // that ends on its own rather than one the user has to interrupt.
 //
-// The log is summarized unless raw is set: a CLI that reports its result as
-// JSON writes one very long line, and printing it verbatim is what raw is for.
+// The log is summarized unless raw is set, and only for a CLI that reports
+// through a JSON envelope: that CLI writes one very long line, and printing it
+// verbatim is what raw is for. A CLI that answers in prose is copied straight
+// through, because its bytes are the record of the run, and reinterpreting a
+// JSON object the agent happened to print would rewrite the agent's own output.
 func (r *Reporter) Logs(id string, follow, raw bool) error {
 	record, err := r.store.Load(id)
 	if err != nil {
@@ -28,7 +34,7 @@ func (r *Reporter) Logs(id string, follow, raw bool) error {
 	}
 	defer f.Close()
 
-	if raw {
+	if raw || !summarizes(record.CLI) {
 		return r.copyLog(f, r.out, id, record.LogPath, follow)
 	}
 	formatted := &logFormatter{out: r.out}
@@ -39,6 +45,14 @@ func (r *Reporter) Logs(id string, follow, raw bool) error {
 		err = ferr
 	}
 	return err
+}
+
+// summarizes reports whether a CLI's log is worth reshaping. An unknown CLI is
+// left alone: passing bytes through is always safe, and guessing at a shape is
+// not.
+func summarizes(cli task.CLI) bool {
+	a, err := adapter.For(cli)
+	return err == nil && a.WritesJSONResult()
 }
 
 // copyLog drains f into out, and keeps draining while the task runs if follow

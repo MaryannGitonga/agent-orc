@@ -198,9 +198,10 @@ cost     $0.1147
 session  6fb7fb30-eef3-4704-942e-d71d9c084be9
 ```
 
-Output that is not JSON, which is all a CLI reporting in prose produces, is
-passed through untouched. `--raw` prints the log exactly as it was written, for
-piping it into something else.
+Only a CLI that reports through a JSON envelope is summarized. One that answers
+in prose is copied through byte for byte, JSON it happened to print included,
+because its output is the record of what it did. `--raw` prints any log exactly
+as it was written, for piping it into something else.
 
 ## Task sources
 

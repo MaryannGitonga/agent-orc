@@ -285,6 +285,69 @@ func TestCleanupDeleteBranchJudgesAgainstTheBase(t *testing.T) {
 	}
 }
 
+// TestCleanupDeleteBranchWhenTheBranchIsAlreadyGone covers cleanup finishing
+// on a branch someone removed by hand, or one a previous cleanup deleted before
+// failing to remove the state. A missing ref is not unpushed work, and treating
+// it as such would refuse the second attempt and keep the id taken.
+func TestCleanupDeleteBranchWhenTheBranchIsAlreadyGone(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"),
+		"printf 'work\\n' > out.txt\ngit add . && git commit --no-gpg-sign -m 'feat: work' >/dev/null")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "GONE-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	rec := waitForStatus(t, home, "GONE-1", "done", "failed")
+
+	// Remove the worktree and the branch behind agent-orc's back.
+	git(t, repo, "worktree", "remove", "--force", rec.Worktree)
+	git(t, repo, "branch", "-D", "agent-orc/gone-1")
+
+	out, err := orcRun(t, home, stub, "cleanup", "GONE-1", "--delete-branch")
+	if err != nil {
+		t.Fatalf("cleanup --delete-branch = %v, want an absent branch to be no obstacle\n%s", err, out)
+	}
+	if !strings.Contains(out, "already gone") {
+		t.Errorf("cleanup = %q, want it to say the branch was already gone", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "state", "GONE-1.json")); !os.IsNotExist(statErr) {
+		t.Error("the state file survived, so the id is still taken")
+	}
+}
+
+// TestLogsLeaveProseCLIsAlone covers the summary being scoped to the CLIs that
+// actually wrap their answer. A CLI that reports in prose may print JSON of its
+// own, and rewriting that as though it were a result envelope would change the
+// agent's output in the one place that records what it did.
+func TestLogsLeaveProseCLIsAlone(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	// A prose CLI that prints a JSON object carrying a "result" key, which is
+	// exactly the shape the summary looks for.
+	const line = `{"result":"do not summarize me","subtype":"success"}`
+	stub := stubAgent(t, "copilot", filepath.Join(t.TempDir(), "receipt"),
+		"cat <<'JSON'\n"+line+"\nJSON")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "PROSE-1", "--repo", repo, "--cli", "copilot", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "PROSE-1", "done", "failed")
+
+	out, err := orcRun(t, home, stub, "logs", "PROSE-1")
+	if err != nil {
+		t.Fatalf("agent-orc logs = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, line) {
+		t.Errorf("logs = %q, want a prose CLI's output byte for byte", out)
+	}
+	if strings.Contains(out, "status  ") {
+		t.Errorf("logs = %q, want no summary for a CLI that does not wrap its answer", out)
+	}
+}
+
 // TestCleanupDeleteBranchKeepsUnmergedWork checks the guard on the flag: a
 // branch holding commits that are nowhere else is work, and only --force says
 // to throw it away.
