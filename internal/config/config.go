@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -47,6 +48,8 @@ type Defaults struct {
 	Review        *Review  `yaml:"review"`
 	// TestCommand is run in each task's worktree once its agent has finished.
 	TestCommand string `yaml:"test_command"`
+	// TestTimeout caps one run of it, as a duration such as "10m", or "none".
+	TestTimeout string `yaml:"test_timeout"`
 	// Instructions apply to every task in the batch, on top of anything in
 	// ~/.agent-orc/instructions.md.
 	Instructions string `yaml:"instructions"`
@@ -82,6 +85,7 @@ type Entry struct {
 	Review        *Review  `yaml:"review"`
 
 	TestCommand string `yaml:"test_command"`
+	TestTimeout string `yaml:"test_timeout"`
 }
 
 // Load reads and validates a batch file. Paths inside it are resolved relative
@@ -182,6 +186,9 @@ func (f *File) validate() error {
 		if err := (task.Budget{USD: t.BudgetUSD, Credits: t.BudgetCredits}).Validate(); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 		}
+		if _, err := ParseTestTimeout(t.TestTimeout); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", where, err))
+		}
 		if r := t.Review; r != nil {
 			if r.CLI != "" && !r.CLI.Known() {
 				errs = append(errs, fmt.Errorf("%s: unsupported review cli %q, want one of %v", where, r.CLI, task.KnownCLIs))
@@ -192,6 +199,9 @@ func (f *File) validate() error {
 		errs = append(errs, fmt.Errorf("defaults: unsupported cli %q, want one of %v", f.Defaults.CLI, task.KnownCLIs))
 	}
 	if err := (task.Budget{USD: f.Defaults.BudgetUSD, Credits: f.Defaults.BudgetCredits}).Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("defaults: %w", err))
+	}
+	if _, err := ParseTestTimeout(f.Defaults.TestTimeout); err != nil {
 		errs = append(errs, fmt.Errorf("defaults: %w", err))
 	}
 	return errors.Join(errs...)
@@ -239,7 +249,15 @@ func (f *File) Resolved(e Entry) task.Task {
 		DCOSignoff:  f.DCOSignoff,
 		Review:      mergeReview(e.Review, f.Defaults.Review),
 		TestCommand: pick(e.TestCommand, f.Defaults.TestCommand),
+		TestTimeout: mustTestTimeout(pick(e.TestTimeout, f.Defaults.TestTimeout)),
 	}
+}
+
+// mustTestTimeout parses a validated timeout. Parse and Load reject a bad one
+// before any task is resolved, so a failure here cannot come from a file.
+func mustTestTimeout(raw string) time.Duration {
+	d, _ := ParseTestTimeout(raw)
+	return d
 }
 
 // mergeReview layers a task's review block over the batch default, field by

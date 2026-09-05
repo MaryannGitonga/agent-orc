@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -46,6 +47,35 @@ type Settings struct {
 	// than in the machine-wide one: how a codebase runs its tests is a fact
 	// about that codebase.
 	TestCommand string `yaml:"test_command"`
+	// TestTimeout caps one run of the test command, as a duration such as
+	// "10m". Empty means the default; "none" lets it run for as long as it
+	// takes, for a suite that genuinely runs longer than the default.
+	TestTimeout string `yaml:"test_timeout"`
+}
+
+// NoTimeout is the configured value that lets the test command run uncapped.
+const NoTimeout = "none"
+
+// ParseTestTimeout turns a configured timeout into a duration: empty is the
+// default, "none" is uncapped, and anything else is a Go duration such as
+// "90s" or "10m". A cap of zero or less is rejected rather than read as one of
+// those, since a timeout that fires immediately would fail every suite.
+func ParseTestTimeout(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	switch raw {
+	case "":
+		return 0, nil
+	case NoTimeout:
+		return task.NoTestTimeout, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("test_timeout %q is not a duration such as \"10m\", or %q", raw, NoTimeout)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("test_timeout %q must be positive, or %q to run uncapped", raw, NoTimeout)
+	}
+	return d, nil
 }
 
 // LoadSettings reads a settings file. A file that is not there is not an
@@ -103,6 +133,9 @@ func (s Settings) validate() error {
 	if err := (task.Budget{USD: s.BudgetUSD, Credits: s.BudgetCredits}).Validate(); err != nil {
 		errs = append(errs, err)
 	}
+	if _, err := ParseTestTimeout(s.TestTimeout); err != nil {
+		errs = append(errs, err)
+	}
 	if r := s.Review; r != nil {
 		if r.CLI != "" && !r.CLI.Known() {
 			errs = append(errs, fmt.Errorf("unsupported review cli %q, want one of %v", r.CLI, task.KnownCLIs))
@@ -142,6 +175,9 @@ func (s Settings) Merge(narrower Settings) Settings {
 	}
 	if narrower.TestCommand != "" {
 		out.TestCommand = narrower.TestCommand
+	}
+	if narrower.TestTimeout != "" {
+		out.TestTimeout = narrower.TestTimeout
 	}
 	out.Review = mergeReviewBlocks(s.Review, narrower.Review)
 	return out
@@ -205,6 +241,7 @@ func (f *File) LayerUnder(s Settings) {
 	f.Defaults.AutoPR = merged.AutoPR
 	f.Defaults.Review = merged.Review
 	f.Defaults.TestCommand = merged.TestCommand
+	f.Defaults.TestTimeout = merged.TestTimeout
 	f.DCOSignoff = merged.DCOSignoff != nil && *merged.DCOSignoff
 }
 

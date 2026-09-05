@@ -28,6 +28,11 @@ budget_usd: 2.00
 # should not be running.
 # test_command: pytest -q -m "not slow"
 
+# How long one run of it may take before it is killed. The default is 30m, which
+# is there to catch a suite that has hung rather than to hurry one that is slow.
+# Set "none" for a suite that genuinely runs longer than that.
+# test_timeout: 10m
+
 review:
   enabled: true
   auto: true                    # review on finishing, before the PR is opened

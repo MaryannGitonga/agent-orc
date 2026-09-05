@@ -362,10 +362,19 @@ func resolveTestCommand(t task.Task) (task.Task, string) {
 			return t, "none found; the agent is asked to find them itself"
 		}
 		t.TestCommand = command
-		return t, fmt.Sprintf("%s (from %s)", command, reason)
+		return t, fmt.Sprintf("%s (from %s), %s", command, reason, timeoutNote(t))
 	default:
-		return t, t.TestCommand + " (set for this task)"
+		return t, fmt.Sprintf("%s (set for this task), %s", t.TestCommand, timeoutNote(t))
 	}
+}
+
+// timeoutNote says how long the test command gets, so a cap that is about to
+// apply is visible before it fires rather than only in the log afterwards.
+func timeoutNote(t task.Task) string {
+	if d := t.TestRunTimeout(); d > 0 {
+		return "killed after " + d.String()
+	}
+	return "uncapped"
 }
 
 // truncateLogs clears whatever a previous task of the same id left behind. It

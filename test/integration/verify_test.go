@@ -138,6 +138,91 @@ func TestVerifyHandsFailuresBackToTheAgent(t *testing.T) {
 	}
 }
 
+// TestVerifyTimesOutAHangingTestCommand covers the one failure the loop's own
+// stop conditions cannot see. A command that never returns never passes, never
+// fails, and never hands the agent anything to act on, so without a cap the
+// task waits on it forever.
+func TestVerifyTimesOutAHangingTestCommand(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "child.pid")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	write(t, filepath.Join(repo, ".agent-orc.yaml"),
+		"test_command: 'sleep 300 & echo $! > "+marker+"; sleep 300'\ntest_timeout: 2s\n")
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "TMO-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+	if err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	// The cap is reported before it applies, not only in the log afterwards.
+	if !strings.Contains(out, "killed after 2s") {
+		t.Errorf("run = %q, want the timeout reported at dispatch", out)
+	}
+
+	got := waitForStatus(t, home, "TMO-1", "failed", "done")
+	if got.Status != "failed" {
+		t.Fatalf("status = %q, want failed\n%s", got.Status,
+			readFile(t, filepath.Join(home, "logs", "TMO-1.supervisor.log")))
+	}
+	if !strings.Contains(got.Error, "did not finish") {
+		t.Errorf("error = %q, want it to say the command was killed rather than that it failed", got.Error)
+	}
+
+	// The whole group went, not just the command that was waited on.
+	pid, err := strconv.Atoi(strings.TrimSpace(readFile(t, marker)))
+	if err != nil {
+		t.Fatalf("parsing the child pid: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Errorf("the timed-out command's child (pid %d) was left running", pid)
+}
+
+// TestVerifyRunsUncappedWhenAsked covers the way out for a suite that really
+// does take longer than the default: the cap is off, not merely larger.
+func TestVerifyRunsUncappedWhenAsked(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_command: 'true'\ntest_timeout: none\n")
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "TMO-2", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+	if err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "uncapped") {
+		t.Errorf("run = %q, want the absent cap reported", out)
+	}
+	if got := waitForStatus(t, home, "TMO-2", "done", "failed"); got.Status != "done" {
+		t.Errorf("status = %q, want done", got.Status)
+	}
+}
+
+// TestVerifyRejectsABadTimeout keeps an unreadable cap from reaching a run.
+func TestVerifyRejectsABadTimeout(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_timeout: soon\n")
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "TMO-3", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+	if err == nil {
+		t.Fatalf("agent-orc run = nil, want a refusal\n%s", out)
+	}
+	if !strings.Contains(out, "test_timeout") {
+		t.Errorf("run = %q, want it to name the bad setting", out)
+	}
+}
+
 // TestStopReachesAHangingTestCommand covers the phases that run after the agent
 // has exited. Both loops run until they succeed, so a test command that never
 // returns would hang the task forever; before the child was given a process

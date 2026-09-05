@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // CLI names an agentic command-line tool agent-orc can dispatch to.
@@ -71,6 +72,34 @@ type Task struct {
 	// the agent has finished. Empty means agent-orc checks nothing, which is
 	// the default: there is no way to guess how a repository runs its tests.
 	TestCommand string `yaml:"test_command" json:"test_command,omitempty"`
+	// TestTimeout caps a single run of that command. Zero means the default;
+	// negative means no cap at all. It is the one bound the loop's own stop
+	// conditions cannot supply: a command that never returns never passes,
+	// never fails, and never gives the agent anything to act on.
+	TestTimeout time.Duration `yaml:"-" json:"test_timeout,omitempty"`
+}
+
+// DefaultTestTimeout is how long a single run of the test command may take.
+// Generous on purpose: it is there to catch a suite that has hung, not to
+// hurry one that is slow, and firing on a real suite would be worse than not
+// firing on a hung one.
+const DefaultTestTimeout = 30 * time.Minute
+
+// NoTestTimeout is the TestTimeout value that lets the command run for as long
+// as it likes, for a suite that genuinely takes longer than the default.
+const NoTestTimeout = -1
+
+// TestRunTimeout returns the effective cap on one run of the test command, or
+// zero when there is none.
+func (t Task) TestRunTimeout() time.Duration {
+	switch {
+	case t.TestTimeout < 0:
+		return 0
+	case t.TestTimeout == 0:
+		return DefaultTestTimeout
+	default:
+		return t.TestTimeout
+	}
 }
 
 // Review configures the optional agentic review pass.

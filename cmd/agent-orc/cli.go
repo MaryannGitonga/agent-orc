@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/config"
 	"github.com/MaryannGitonga/agent-orc/internal/gitx"
@@ -201,6 +202,7 @@ type flags struct {
 	subagents, autoPR, dcoSignoff                      bool
 	budgetUSD, budgetCredits                           float64
 	testCommand                                        string
+	testTimeout                                        time.Duration
 	review                                             task.Review
 }
 
@@ -242,6 +244,11 @@ func (f *flags) applyDefaults(s config.Settings, given map[string]bool) {
 	// one task, so it belongs in a file rather than on a command line.
 	if s.TestCommand != "" {
 		f.testCommand = s.TestCommand
+	}
+	// Already validated by the loader, so a parse failure here cannot come
+	// from a settings file.
+	if d, err := config.ParseTestTimeout(s.TestTimeout); err == nil {
+		f.testTimeout = d
 	}
 	if s.Review == nil {
 		return
@@ -302,6 +309,7 @@ func buildTask(f flags) (task.Task, error) {
 		DCOSignoff:  f.dcoSignoff,
 		Review:      f.review,
 		TestCommand: f.testCommand,
+		TestTimeout: f.testTimeout,
 	})
 }
 

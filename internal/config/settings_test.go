@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
@@ -187,5 +188,45 @@ func TestFileLayerUnder(t *testing.T) {
 	}
 	if !got.Review.Enabled || !got.Review.Auto {
 		t.Errorf("review = %+v, want it inherited whole", got.Review)
+	}
+}
+
+// TestParseTestTimeout covers the one value that has to be readable by hand and
+// unambiguous to the loop: how long a single run of the suite may take.
+func TestParseTestTimeout(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    time.Duration
+		wantErr string
+	}{
+		{in: "", want: 0},                        // unset, so the default applies
+		{in: "none", want: task.NoTestTimeout},   // uncapped, for a suite that really is long
+		{in: " none ", want: task.NoTestTimeout}, // written with the whitespace people leave
+		{in: "90s", want: 90 * time.Second},
+		{in: "10m", want: 10 * time.Minute},
+		{in: "2h30m", want: 150 * time.Minute},
+		// A cap of zero would kill every suite the moment it started, so it is
+		// rejected rather than quietly read as "no cap".
+		{in: "0", wantErr: "must be positive"},
+		{in: "-5m", wantErr: "must be positive"},
+		{in: "soon", wantErr: "is not a duration"},
+		{in: "30", wantErr: "is not a duration"}, // a bare number has no unit
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := ParseTestTimeout(tt.in)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ParseTestTimeout(%q) error = %v, want it to mention %q", tt.in, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseTestTimeout(%q) = %v", tt.in, err)
+			}
+			if got != tt.want {
+				t.Errorf("ParseTestTimeout(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
 	}
 }

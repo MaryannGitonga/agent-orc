@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func valid() Task {
@@ -210,5 +211,22 @@ func TestValidateRejectsABranchThatLooksLikeAFlag(t *testing.T) {
 	tk.Branch, tk.BaseBranch = "agent-orc/proj-1", "main"
 	if err := tk.Validate(); err != nil {
 		t.Errorf("Validate() = %v, want an ordinary branch accepted", err)
+	}
+}
+
+// TestTestRunTimeout covers the three states the field encodes: unset takes the
+// default, negative means run uncapped, and anything else is itself.
+func TestTestRunTimeout(t *testing.T) {
+	tests := map[time.Duration]time.Duration{
+		0:                DefaultTestTimeout,
+		NoTestTimeout:    0,
+		-time.Hour:       0,
+		90 * time.Second: 90 * time.Second,
+		45 * time.Minute: 45 * time.Minute,
+	}
+	for set, want := range tests {
+		if got := (Task{TestTimeout: set}).TestRunTimeout(); got != want {
+			t.Errorf("Task{TestTimeout: %v}.TestRunTimeout() = %v, want %v", set, got, want)
+		}
 	}
 }

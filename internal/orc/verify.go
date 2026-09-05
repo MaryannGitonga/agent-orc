@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
@@ -55,13 +56,22 @@ func (s *Supervisor) verify(record state.Task) error {
 
 	for attempt := 1; ; attempt++ {
 		s.logf("running the test command (attempt %d): %s", attempt, command)
-		output, runErr := s.runTestCommand(record.ID, record.Worktree, command)
+		output, runErr := s.runTestCommand(record.ID, record.Worktree, command, record.TestRunTimeout())
 		if runErr == nil {
 			s.logf("the test command passed")
 			s.recordTests(record.ID, attempt, true)
 			return nil
 		}
-		s.logf("the test command failed: %v", runErr)
+		if errors.Is(runErr, ErrTimedOut) {
+			// Worth saying plainly: a suite that hangs looks nothing like one
+			// that fails, and the output below will be whatever it managed to
+			// print before it stopped making progress.
+			s.logf("the test command was killed after %s without finishing", record.TestRunTimeout())
+			output += fmt.Sprintf("\n[agent-orc killed this command after %s; it did not finish]\n",
+				record.TestRunTimeout())
+		} else {
+			s.logf("the test command failed: %v", runErr)
+		}
 		s.recordTests(record.ID, attempt, false)
 
 		// The failure may be the stop itself: `agent-orc stop` kills whatever
@@ -132,7 +142,7 @@ func (s *Supervisor) handBackFailure(record state.Task, command, output string) 
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = os.Environ()
-	if err := s.tracker(record.ID).run(cmd); err != nil {
+	if err := s.tracker(record.ID, 0).run(cmd); err != nil {
 		return fmt.Errorf("task %q: %s exited with an error while fixing the tests: %w",
 			record.ID, argv[0], err)
 	}
@@ -157,21 +167,21 @@ func testFailurePrompt(command, output string) string {
 // runTestCommand runs the command through a shell in dir. A shell because a
 // test command is written the way it is typed, pipes and all, and quoting it
 // into an argv here would only be a worse shell.
-func (s *Supervisor) runTestCommand(id, dir, command string) (string, error) {
+func (s *Supervisor) runTestCommand(id, dir, command string, timeout time.Duration) (string, error) {
 	cmd := exec.Command("sh", "-c", command) // #nosec G204 -- the command is the user's own config
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	err := s.tracker(id).run(cmd)
+	err := s.tracker(id, timeout).run(cmd)
 	return buf.String(), err
 }
 
 // tracker runs a child on this task's behalf, in its own process group and
 // with its pid on the record while it runs.
-func (s *Supervisor) tracker(id string) tracker {
-	return tracker{id: id, update: s.update}
+func (s *Supervisor) tracker(id string, timeout time.Duration) tracker {
+	return tracker{id: id, update: s.update, timeout: timeout}
 }
 
 // recordTests notes how the verification went, so 'agent-orc status' can say

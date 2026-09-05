@@ -378,8 +378,24 @@ between an agent that says the tests pass and a branch where they do.
 There is no attempt cap. Getting the suite green is part of the work, not an
 optional extra with a quota, so the loop runs until it is. `agent-orc stop`
 reaches it: the test command runs in its own process group with its pid on the
-record, so a suite that hangs is still something you can end, and the task stays
-stopped rather than going round again on the killed command. Three real conditions
+record, so a run you want to end is something you can end, and the task stays
+stopped rather than going round again on the killed command.
+
+One run of the command is capped, at 30 minutes by default. That cap is the one
+bound the loop's own stop conditions cannot supply: a command that never returns
+never passes, never fails, and never gives the agent anything to act on, so
+nothing else would ever notice. It is deliberately generous, because firing on a
+slow suite would be worse than not firing on a hung one, and `test_timeout` moves
+it or removes it:
+
+```yaml
+# .agent-orc.yaml
+test_timeout: 10m      # a duration, or "none" to let it run as long as it likes
+```
+
+A run that is killed is reported as killed rather than as a failing suite, and
+goes back to the agent with that said plainly, since a suite that hangs looks
+nothing like one that fails. Three real conditions
 end it instead:
 
 - **the tests pass**, and the branch goes on to be published;
@@ -492,8 +508,8 @@ Four layers, narrowest wins:
 
 The keys are the flag names with dashes swapped for underscores, so there is
 one vocabulary rather than three: `cli`, `model`, `base_branch`, `subagents`,
-`budget_usd`, `budget_credits`, `auto_pr`, `dco_signoff`, `test_command`, and
-the `review` block (`enabled`, `auto`, `cli`, `model`). What is inherently
+`budget_usd`, `budget_credits`, `auto_pr`, `dco_signoff`, `test_command`,
+`test_timeout`, and the `review` block (`enabled`, `auto`, `cli`, `model`). What is inherently
 per-task cannot be defaulted: the id, the prompt or source, the branch, and the
 repository.
 
