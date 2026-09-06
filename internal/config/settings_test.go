@@ -230,3 +230,90 @@ func TestParseTestTimeout(t *testing.T) {
 		})
 	}
 }
+
+// TestFileLayerUnderCarriesEveryField guards the batch layer as a whole rather
+// than one field at a time. LayerUnder has to feed each of the batch's own
+// settings into the merge and take each one back out again, and a field missing
+// from either half is silent: the batch value is not merely ignored, it is
+// overwritten by the broader layer on the way back.
+func TestFileLayerUnderCarriesEveryField(t *testing.T) {
+	// Every field set on both sides, with different values, so anything the
+	// batch sets has to win.
+	broad := Settings{
+		CLI: task.CLICopilot, Model: "broad-model", BaseBranch: "broad-base",
+		Subagents: boolPtr(false), BudgetUSD: fltPtr(1), BudgetCredits: fltPtr(1),
+		AutoPR: boolPtr(false), DCOSignoff: boolPtr(false),
+		TestCommand: "broad-tests", TestTimeout: "30m",
+		Review: &Review{Enabled: boolPtr(false), CLI: task.CLICopilot, Model: "broad-reviewer"},
+	}
+	f := &File{
+		BaseBranch: "batch-base",
+		DCOSignoff: true,
+		Defaults: Defaults{
+			CLI: task.CLIClaude, Model: "batch-model",
+			Subagents: boolPtr(true), BudgetUSD: fltPtr(2), BudgetCredits: fltPtr(2),
+			AutoPR:      boolPtr(true),
+			TestCommand: "batch-tests", TestTimeout: "5m",
+			Review: &Review{Enabled: boolPtr(true), CLI: task.CLIClaude, Model: "batch-reviewer"},
+		},
+		Tasks: []Entry{{ID: "a", Prompt: "do it"}},
+	}
+	f.LayerUnder(broad)
+
+	got := f.Resolved(f.Tasks[0])
+	checks := []struct {
+		field string
+		got   any
+		want  any
+	}{
+		{"cli", got.CLI, task.CLIClaude},
+		{"model", got.Model, "batch-model"},
+		{"base_branch", got.BaseBranch, "batch-base"},
+		{"subagents", got.Subagents, true},
+		{"budget_usd", *got.Budget.USD, 2.0},
+		{"budget_credits", *got.Budget.Credits, 2.0},
+		{"auto_pr", got.AutoPR, true},
+		{"dco_signoff", got.DCOSignoff, true},
+		{"test_command", got.TestCommand, "batch-tests"},
+		{"test_timeout", got.TestTimeout, 5 * time.Minute},
+		{"review.enabled", got.Review.Enabled, true},
+		{"review.cli", got.Review.CLI, task.CLIClaude},
+		{"review.model", got.Review.Model, "batch-reviewer"},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want the batch's %v", c.field, c.got, c.want)
+		}
+	}
+
+	// The other direction, which is what the second half of LayerUnder carries:
+	// a batch that says nothing has to end up with everything the broader layer
+	// said. Checking only the first direction would miss a field dropped from
+	// the write-back, since the batch's own value survives that untouched.
+	empty := &File{Tasks: []Entry{{ID: "a", Prompt: "do it"}}}
+	empty.LayerUnder(broad)
+	inherited := empty.Resolved(empty.Tasks[0])
+	for _, c := range []struct {
+		field string
+		got   any
+		want  any
+	}{
+		{"cli", inherited.CLI, task.CLICopilot},
+		{"model", inherited.Model, "broad-model"},
+		{"base_branch", inherited.BaseBranch, "broad-base"},
+		{"subagents", inherited.Subagents, false},
+		{"budget_usd", *inherited.Budget.USD, 1.0},
+		{"budget_credits", *inherited.Budget.Credits, 1.0},
+		{"auto_pr", inherited.AutoPR, false},
+		{"dco_signoff", inherited.DCOSignoff, false},
+		{"test_command", inherited.TestCommand, "broad-tests"},
+		{"test_timeout", inherited.TestTimeout, 30 * time.Minute},
+		{"review.enabled", inherited.Review.Enabled, false},
+		{"review.cli", inherited.Review.CLI, task.CLICopilot},
+		{"review.model", inherited.Review.Model, "broad-reviewer"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want the inherited %v", c.field, c.got, c.want)
+		}
+	}
+}

@@ -225,6 +225,10 @@ func mergeReviewBlocks(broader, narrower *Review) *Review {
 // not pick up that other repository's file: the batch is resolved once, before
 // any task is dispatched.
 func (f *File) LayerUnder(s Settings) {
+	// Every field goes in and comes back out. A field missing from the first
+	// half is not merely ignored: the merge returns the broader layer's value
+	// for it, and the second half then writes that over what the batch said.
+	// TestFileLayerUnderCarriesEveryField is what keeps the two in step.
 	merged := s.Merge(Settings{
 		CLI:           f.Defaults.CLI,
 		Model:         f.Defaults.Model,
@@ -234,6 +238,7 @@ func (f *File) LayerUnder(s Settings) {
 		BudgetCredits: f.Defaults.BudgetCredits,
 		AutoPR:        f.Defaults.AutoPR,
 		TestCommand:   f.Defaults.TestCommand,
+		TestTimeout:   f.Defaults.TestTimeout,
 		// The batch file's dco_signoff is a plain bool, so it can only turn
 		// the setting on. Leaving it nil when false is what keeps it from
 		// silently overriding a repository that asked for sign-off.
