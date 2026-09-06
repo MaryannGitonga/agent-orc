@@ -332,6 +332,49 @@ func TestReviewApprovalClearsAnEarlierFailure(t *testing.T) {
 	}
 }
 
+// TestReviewRetryWithoutApprovalDropsTheOldReason covers the other way a manual
+// retry ends. The round runs and raises comments rather than approving, so the
+// task is not reviewed, but the reason an earlier automatic attempt recorded is
+// no longer what happened and must not keep being reported.
+func TestReviewRetryWithoutApprovalDropsTheOldReason(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	verdict := filepath.Join(t.TempDir(), "verdict")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "worker"), workerCommitsTwice)
+	// Unreadable the first time, a comment list every time after.
+	stubInto(t, stub, "copilot", filepath.Join(t.TempDir(), "reviewer"),
+		"if [ -f '"+verdict+"' ]; then printf -- '- out.txt: needs a test\n'; "+
+			"else touch '"+verdict+"'; printf 'no idea\n'; fi")
+
+	if out, err := orcRun(t, home, stub, "run", "--id", "RETRY-2", "--repo", repo,
+		"--cli", "claude", "--prompt", "do the thing", "--no-auto-pr",
+		"--auto-review", "--review-cli", "copilot"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	if got := waitForStatus(t, home, "RETRY-2", "review_failed", "done", "failed"); got.Status != "review_failed" {
+		t.Fatalf("status = %q, want review_failed from the unreadable verdict", got.Status)
+	}
+	stale := loadReviewRecord(t, home, "RETRY-2").Error
+	if stale == "" {
+		t.Fatal("nothing was recorded to become stale")
+	}
+
+	out, err := orcRun(t, home, stub, "review", "RETRY-2")
+	if err != nil {
+		t.Fatalf("agent-orc review = %v\n%s", err, out)
+	}
+	got := loadReviewRecord(t, home, "RETRY-2")
+	if got.Status == "reviewed" {
+		t.Fatal("status = reviewed, but the reviewer only raised comments")
+	}
+	if got.Error != "" {
+		t.Errorf("error = %q, want the superseded reason gone", got.Error)
+	}
+	if !strings.Contains(out, "no longer applies") {
+		t.Errorf("review = %q, want it to say the earlier failure was superseded", out)
+	}
+}
+
 // TestReviewLoopsUntilApproved is what replaced the round cap: as long as the
 // worker keeps acting on the comments, the loop keeps going, and it ends on the
 // approval rather than on a number.

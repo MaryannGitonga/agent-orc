@@ -90,7 +90,20 @@ func (r *Reviewer) Review(id string) error {
 			k.Error = ""
 		})
 	}
-	return nil
+
+	// No approval, but the round itself ran. If it followed an automatic
+	// attempt that could not finish, that attempt's reason describes something
+	// this run has since superseded, and a status row explaining a failure that
+	// has been retried is worse than one explaining nothing. The status stays:
+	// the branch still has no approval and was never published, which is what
+	// review_failed says and what `agent-orc pr` is for.
+	return r.update(id, func(k *state.Task) {
+		if k.Status == state.StatusReviewFailed {
+			k.Error = ""
+			fmt.Fprintf(r.out, "%s  the earlier automatic review failure no longer applies; "+
+				"publish with 'agent-orc pr %s' when you are happy with the branch\n", id, id)
+		}
+	})
 }
 
 // Rounds runs review rounds until the reviewer approves, and reports whether
