@@ -381,7 +381,9 @@ There is no attempt cap. Getting the suite green is part of the work, not an
 optional extra with a quota, so the loop runs until it is. `agent-orc stop`
 reaches it: the test command runs in its own process group with its pid on the
 record, so a run you want to end is something you can end, and the task stays
-stopped rather than going round again on the killed command.
+stopped rather than going round again on the killed command. Stopping between
+two commands works too, when there is nothing running to signal: the stop is
+recorded, and both loops check for one before starting anything else.
 
 One run of the command is capped, at 30 minutes by default. That cap is the one
 bound the loop's own stop conditions cannot supply: a command that never returns

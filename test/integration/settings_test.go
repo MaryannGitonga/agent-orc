@@ -74,8 +74,8 @@ review:
 	}
 }
 
-// TestSettingsRejectATypo keeps a settings file from silently doing nothing.
-func TestSettingsRejectATypo(t *testing.T) {
+// TestSettingsRejectsATypo keeps a settings file from silently doing nothing.
+func TestSettingsRejectsATypo(t *testing.T) {
 	repo := initRepo(t)
 	home := t.TempDir()
 	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")

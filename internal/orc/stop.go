@@ -22,10 +22,14 @@ func (r *Reporter) Stop(id string) error {
 	if !t.Status.HasProcess() {
 		return fmt.Errorf("task %q is %s, not running", id, t.Status)
 	}
-	if t.PID == 0 {
-		if t.Status == state.StatusVerifying || t.Status == state.StatusReviewing {
-			return fmt.Errorf("task %q is %s but is between commands right now; try again in a moment", id, t.Status)
-		}
+	// Between commands in one of the phases that run after the agent: there is
+	// nothing to signal this instant, but the loop is about to start the next
+	// test run or review round, and telling the user to try again in a moment
+	// is telling them to race it. Recording the stop is what actually ends it,
+	// since both loops check for one before starting anything else.
+	betweenCommands := t.PID == 0 &&
+		(t.Status == state.StatusVerifying || t.Status == state.StatusReviewing)
+	if t.PID == 0 && !betweenCommands {
 		return fmt.Errorf("task %q has no recorded process; it may not have started yet", id)
 	}
 	// Record the stop before signalling, not after. The supervisor sits in
@@ -40,6 +44,10 @@ func (r *Reporter) Stop(id string) error {
 		k.Error = "stopped by agent-orc stop"
 	}); err != nil {
 		return err
+	}
+	if betweenCommands {
+		fmt.Fprintf(r.out, "%s  stopped between commands; nothing was running to signal\n", id)
+		return nil
 	}
 	if err := signalGroup(t.PID); err != nil {
 		// ESRCH is the process already being gone, which is the end state the

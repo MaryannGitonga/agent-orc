@@ -44,10 +44,10 @@ func TestVerifyBlocksAPublishOnRedTests(t *testing.T) {
 	}
 }
 
-// TestVerifyDiscoversTheRepositorysOwnTests covers the zero-config path: a
+// TestVerifyDiscoversTestsFromTheRepository covers the zero-config path: a
 // repository states how it is tested in its own build files, and nobody should
 // have to repeat that in a flag.
-func TestVerifyDiscoversTheRepositorysOwnTests(t *testing.T) {
+func TestVerifyDiscoversTestsFromTheRepository(t *testing.T) {
 	repo := initRepo(t)
 	home := t.TempDir()
 	receipt := filepath.Join(t.TempDir(), "receipt")
