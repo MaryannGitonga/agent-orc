@@ -237,3 +237,37 @@ func TestMarkKeepsFinishedAtHonest(t *testing.T) {
 		t.Errorf("finished_at = %v, want when the task finished rather than when its agent did", got.FinishedAt)
 	}
 }
+
+// TestSuccessClearsAnEarlierFailure covers what a retry leaves behind. A task
+// that failed and was then put right is not still failing, and a status row
+// carrying the old reason alongside the new outcome is worse than one carrying
+// no reason at all.
+func TestSuccessClearsAnEarlierFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	rec := state.Task{
+		Task:      task.Task{ID: "PROJ-6", CLI: task.CLIClaude},
+		Status:    state.StatusPublishFailed,
+		Error:     "the remote rejected the push",
+		StartedAt: time.Now().UTC(),
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, startedAt: rec.StartedAt}
+
+	s.mark("PROJ-6", state.StatusDone, "")
+	got, err := store.Load("PROJ-6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Error != "" {
+		t.Errorf("error = %q, want a done task to carry none", got.Error)
+	}
+
+	// And a status that does have something to say still says it.
+	s.mark("PROJ-6", state.StatusFailed, "the tests did not pass")
+	if got, _ := store.Load("PROJ-6"); got.Error != "the tests did not pass" {
+		t.Errorf("error = %q, want the new reason recorded", got.Error)
+	}
+}

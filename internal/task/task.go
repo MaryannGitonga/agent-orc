@@ -69,8 +69,11 @@ type Task struct {
 	// Review configures the optional agentic review pass.
 	Review Review `yaml:"review" json:"review,omitempty"`
 	// TestCommand is the project's own test command, run in the worktree once
-	// the agent has finished. Empty means agent-orc checks nothing, which is
-	// the default: there is no way to guess how a repository runs its tests.
+	// the agent has finished. It is normally filled in at dispatch from what
+	// the repository says about itself, so a task carries the command that
+	// will actually run rather than a request to work one out later. Empty by
+	// the time it gets here means nothing was found and nothing was set, or
+	// that verification was turned off, and nothing is checked.
 	TestCommand string `yaml:"test_command" json:"test_command,omitempty"`
 	// TestTimeout caps a single run of that command. Zero means the default;
 	// negative means no cap at all. It is the one bound the loop's own stop

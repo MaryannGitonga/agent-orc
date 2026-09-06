@@ -73,7 +73,14 @@ func (r *Reviewer) Review(id string) error {
 		return err
 	}
 	if approved {
-		return r.update(id, func(k *state.Task) { k.Status = state.StatusReviewed })
+		return r.update(id, func(k *state.Task) {
+			k.Status = state.StatusReviewed
+			// A retry that succeeds is not still carrying the failure it
+			// followed: leaving the text of an earlier review_failed behind
+			// would have `status` report an approved branch with a reason it
+			// did not work.
+			k.Error = ""
+		})
 	}
 	return nil
 }

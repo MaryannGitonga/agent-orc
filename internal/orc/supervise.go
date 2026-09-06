@@ -346,9 +346,10 @@ func (s *Supervisor) mark(id string, status state.Status, message string) {
 		} else {
 			k.FinishedAt = &now
 		}
-		if message != "" {
-			k.Error = message
-		}
+		// Assigned either way, so a status carrying no message clears whatever
+		// the last one left. A task that reached done has no error, and saying
+		// it does is worse than saying nothing.
+		k.Error = message
 	}); err != nil {
 		s.logf("warning: could not record status %s: %v", status, err)
 	}

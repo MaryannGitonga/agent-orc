@@ -295,6 +295,43 @@ func TestReviewRefusesATaskThatDidNotEnableIt(t *testing.T) {
 	}
 }
 
+// TestReviewApprovalClearsAnEarlierFailure covers a retry after an automatic
+// review that could not be read. The automatic round leaves the task
+// review_failed with the reason; a manual round then approves, and the record
+// has to stop saying the first thing happened.
+func TestReviewApprovalClearsAnEarlierFailure(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	verdict := filepath.Join(t.TempDir(), "verdict")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "worker"), workerCommitsTwice)
+	// Unreadable the first time it is asked, an approval the second.
+	stubInto(t, stub, "copilot", filepath.Join(t.TempDir(), "reviewer"),
+		"if [ -f '"+verdict+"' ]; then printf 'LGTM\n'; else touch '"+verdict+"'; printf 'no idea\n'; fi")
+
+	if out, err := orcRun(t, home, stub, "run", "--id", "RETRY-1", "--repo", repo,
+		"--cli", "claude", "--prompt", "do the thing", "--no-auto-pr",
+		"--auto-review", "--review-cli", "copilot"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	if got := waitForStatus(t, home, "RETRY-1", "review_failed", "done", "failed"); got.Status != "review_failed" {
+		t.Fatalf("status = %q, want review_failed from the unreadable verdict", got.Status)
+	}
+	if got := loadReviewRecord(t, home, "RETRY-1"); got.Error == "" {
+		t.Fatal("the automatic round recorded no reason, so there is nothing to clear")
+	}
+
+	if out, err := orcRun(t, home, stub, "review", "RETRY-1"); err != nil {
+		t.Fatalf("agent-orc review = %v\n%s", err, out)
+	}
+	got := loadReviewRecord(t, home, "RETRY-1")
+	if got.Status != "reviewed" {
+		t.Errorf("status = %q, want reviewed", got.Status)
+	}
+	if got.Error != "" {
+		t.Errorf("error = %q, want the approved task to carry none", got.Error)
+	}
+}
+
 // TestReviewLoopsUntilApproved is what replaced the round cap: as long as the
 // worker keeps acting on the comments, the loop keeps going, and it ends on the
 // approval rather than on a number.

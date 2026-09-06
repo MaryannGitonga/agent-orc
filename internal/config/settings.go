@@ -147,6 +147,15 @@ func (s Settings) validate() error {
 // Merge returns s with narrower layered on top: every field narrower sets wins,
 // and every field it leaves alone keeps s's value. That is what lets a
 // repository change one setting without restating the machine-wide file.
+//
+// Empty means "not set here", never "reset this to the built-in default", so a
+// narrower layer overrides an inherited value by naming the one it wants rather
+// than by blanking the field. A repository under a machine-wide
+// `test_timeout: none` gets a cap back by writing the duration it wants, and
+// one under `test_command: none` by writing the command. There is deliberately
+// no third value meaning "the default": it would have to be understood by every
+// field to be worth having, and the layering is easier to reason about when a
+// value present in a file is the value that applies.
 func (s Settings) Merge(narrower Settings) Settings {
 	out := s
 	if narrower.CLI != "" {

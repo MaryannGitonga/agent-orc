@@ -513,6 +513,11 @@ one vocabulary rather than three: `cli`, `model`, `base_branch`, `subagents`,
 per-task cannot be defaulted: the id, the prompt or source, the branch, and the
 repository.
 
+An empty value means "not set here", never "put this back to the default", so a
+narrower layer overrides an inherited setting by naming the one it wants: under
+a machine-wide `test_timeout: none`, a repository gets a cap back by writing the
+duration it wants, not by blanking the field.
+
 A flag you type always wins, and a flag you leave off is not an override, so
 `--cli copilot` changes the CLI without disturbing an inherited `dco_signoff`.
 A narrower layer can turn an inherited setting off as well as on: `auto_pr:
