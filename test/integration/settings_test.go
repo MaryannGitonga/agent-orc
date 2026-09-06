@@ -4,6 +4,7 @@ package integration
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -116,5 +117,40 @@ func TestSettingsSupplyTheCLI(t *testing.T) {
 	}
 	if got := waitForStatus(t, home, "SET-5", "done", "failed"); got.CLI != "claude" {
 		t.Errorf("cli = %q, want it supplied by the repository file", got.CLI)
+	}
+}
+
+// TestSettingsFoundFromASubdirectory covers where the repository's own file is
+// looked for. --repo defaults to the working directory, so a run started
+// anywhere but the top of the repository would read settings from a directory
+// that does not have them, while the dispatch that follows resolves the same
+// path to the git root and works on the right repository regardless.
+func TestSettingsFoundFromASubdirectory(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	write(t, filepath.Join(repo, ".agent-orc.yaml"), "cli: claude\nmodel: from-repo-file\n")
+
+	deep := filepath.Join(repo, "pkg", "deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// No --repo and no --cli: both have to come from the repository's file,
+	// found from a directory well inside the tree.
+	cmd := exec.Command(buildBinary(t), "run", "--id", "SUBDIR-1", "--prompt", "do it", "--no-auto-pr")
+	cmd.Dir = deep
+	cmd.Env = append(os.Environ(), gitEnv...)
+	cmd.Env = append(cmd.Env,
+		"AGENT_ORC_HOME="+home,
+		"PATH="+stub+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("agent-orc run from %s = %v\n%s", deep, err, out)
+	}
+
+	got := waitForStatus(t, home, "SUBDIR-1", "done", "failed")
+	if got.CLI != "claude" || got.Model != "from-repo-file" {
+		t.Errorf("cli/model = %q/%q, want them read from the repository root", got.CLI, got.Model)
 	}
 }

@@ -182,6 +182,30 @@ func runBatch(ctx context.Context, d *orc.Dispatcher, layout paths.Layout, path 
 	return d.RunBatch(ctx, f, resolveGitDefaults)
 }
 
+// repoRoot returns the top of the working tree containing dir, which is where a
+// repository keeps its settings file.
+//
+// The path this is given is whatever --repo said, and that defaults to the
+// working directory, so without this a run started anywhere but the top of the
+// repository looks for the file in a directory that does not have it. The
+// dispatch that follows resolves the same path the same way, but by then the
+// settings have already been read.
+//
+// A path that is not in a repository comes back unchanged. Saying so is the
+// dispatch's job, and reporting it here as well would report it twice, from the
+// half of the program that was only trying to read an optional file.
+func repoRoot(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	r, err := gitx.Open(abs)
+	if err != nil {
+		return dir
+	}
+	return r.Dir
+}
+
 // loadSettings returns the defaults a task inherits, broadest first: the
 // machine-wide file, then the repository's own. Neither has to exist.
 func loadSettings(layout paths.Layout, repo string) (config.Settings, error) {
@@ -189,7 +213,7 @@ func loadSettings(layout paths.Layout, repo string) (config.Settings, error) {
 	if err != nil {
 		return config.Settings{}, err
 	}
-	local, err := config.LoadRepoSettings(repo)
+	local, err := config.LoadRepoSettings(repoRoot(repo))
 	if err != nil {
 		return config.Settings{}, err
 	}

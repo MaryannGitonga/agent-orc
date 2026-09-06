@@ -529,6 +529,9 @@ fact about the project, so it is set in a file or discovered, never per run.
 What is inherently per-task cannot be defaulted at all: the id, the prompt or
 source, the branch, and the repository.
 
+A repository's file is read from the top of its working tree, so it applies the
+same whether you run from the root or from somewhere deep inside it.
+
 An empty value means "not set here", never "put this back to the default", so a
 narrower layer overrides an inherited setting by naming the one it wants: under
 a machine-wide `test_timeout: none`, a repository gets a cap back by writing the
