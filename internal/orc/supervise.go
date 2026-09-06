@@ -140,6 +140,15 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 // A publish failure does not fail the task: the agent's work is committed and
 // on its branch either way. It is logged and left for `agent-orc pr` to retry.
 func (s *Supervisor) publish(id string, record state.Task) {
+	// Unlike the writes above, this is not covered by scoping the publisher:
+	// Publish loads the record itself, so the guard would drop its state writes
+	// while it had already sanitized, force-pushed and opened a pull request
+	// against whatever branch the id names now. Checking ownership before
+	// starting is the only place that catches it.
+	if !s.owns(id) {
+		s.logf("this task's id now belongs to a later run; not publishing")
+		return
+	}
 	p, err := NewPublisher(s.layout, s.out)
 	if err == nil {
 		p.OwnRun(s.startedAt)
@@ -209,6 +218,15 @@ func (s *Supervisor) update(id string, mutate func(*state.Task)) error {
 		s.logf("this task's id now belongs to a later run; not recording anything against it")
 	}
 	return err
+}
+
+// owns reports whether the id still belongs to the run this supervisor was
+// started for. A task can be cleaned up and its id dispatched again while this
+// supervisor is still working, and anything that acts on the id rather than on
+// the record it already holds has to ask first.
+func (s *Supervisor) owns(id string) bool {
+	current, err := s.store.Load(id)
+	return err == nil && current.StartedAt.Equal(s.startedAt)
 }
 
 // mark sets a task's terminal status.

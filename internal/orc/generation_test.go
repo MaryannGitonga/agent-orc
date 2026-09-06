@@ -1,7 +1,10 @@
 package orc
 
 import (
+	"bytes"
 	"io"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,5 +92,58 @@ func TestPublisherWritesOnlyToItsOwnRun(t *testing.T) {
 	}
 	if got, _ := store.Load("PROJ-2"); got.PRURL == "" {
 		t.Error("an unscoped publisher's write was dropped; 'agent-orc pr' depends on it landing")
+	}
+}
+
+// TestSupervisorDoesNotPublishALaterRun covers the one step that acts on the id
+// rather than on the record the supervisor already holds. Scoping the
+// publisher's writes is not enough: Publish loads the record for itself, so a
+// stale supervisor would sanitize, force-push and open a pull request against
+// whatever branch the id names now, and only then have its state writes
+// dropped. The damage would already be on the remote.
+func TestSupervisorDoesNotPublishALaterRun(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	current := state.Task{
+		Task:      task.Task{ID: "PROJ-3", CLI: task.CLIClaude, Branch: "agent-orc/proj-3", AutoPR: true},
+		Status:    state.StatusRunning,
+		PID:       999,
+		StartedAt: time.Now().UTC(),
+	}
+	if err := store.Save(current); err != nil {
+		t.Fatal(err)
+	}
+
+	// A supervisor from an earlier task that had this id. Its worktree and repo
+	// are nonsense on purpose: reaching git at all would be the bug.
+	//
+	// The state has to be read out of the log rather than out of the record.
+	// Every write the chain would make is dropped by the generation guard
+	// anyway, so the record looks the same either way; what distinguishes the
+	// two is whether the chain was attempted at all.
+	var log bytes.Buffer
+	stale := &Supervisor{
+		layout:    paths.New(dir),
+		store:     store,
+		out:       &log,
+		startedAt: current.StartedAt.Add(-time.Hour),
+	}
+	stale.publish("PROJ-3", state.Task{
+		Task:     task.Task{ID: "PROJ-3", Repo: filepath.Join(dir, "no-such-repo")},
+		Worktree: filepath.Join(dir, "no-such-worktree"),
+	})
+
+	if got := log.String(); !strings.Contains(got, "belongs to a later run") {
+		t.Errorf("log = %q, want the publish declined before it started", got)
+	} else if strings.Contains(got, "publish failed") || strings.Contains(got, "is done") {
+		t.Errorf("log = %q, want no sign the chain was attempted", got)
+	}
+
+	got, err := store.Load("PROJ-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusRunning || got.PID != 999 {
+		t.Errorf("a stale supervisor published over the live task: status=%q pid=%d", got.Status, got.PID)
 	}
 }
