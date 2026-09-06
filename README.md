@@ -182,7 +182,7 @@ actually have, and checks the binary is on PATH before creating anything.
 | `run <tasks.yaml>` | dispatch a batch |
 | `status` | one row per task: status, spend, branch, elapsed |
 | `logs <id> [-f] [--raw]` | print the agent's output, or follow it until the task ends |
-| `stop <id>` | terminate whatever the task is running, and everything it spawned |
+| `stop <id>` | terminate the agent, or the tests or reviewer running after it, and everything they spawned |
 | `pr <id>` | run the publish chain by hand, or retry one that failed |
 | `review <id>` | run an agentic review round |
 | `cleanup <id\|--all> [--force] [--delete-branch]` | remove the worktree and state; keep the branch unless told otherwise |
@@ -385,8 +385,8 @@ One run of the command is capped, at 30 minutes by default. That cap is the one
 bound the loop's own stop conditions cannot supply: a command that never returns
 never passes, never fails, and never gives the agent anything to act on, so
 nothing else would ever notice. It is deliberately generous, because firing on a
-slow suite would be worse than not firing on a hung one, and `test_timeout` moves
-it or removes it:
+slow suite would be worse than not firing on a hung one, and `test_timeout`
+moves it or removes it:
 
 ```yaml
 # .agent-orc.yaml
@@ -506,12 +506,15 @@ Four layers, narrowest wins:
 | batch | a batch file's `defaults` | one run of many tasks |
 | task | a flag, or a batch entry | this task alone |
 
-The keys are the flag names with dashes swapped for underscores, so there is
-one vocabulary rather than three: `cli`, `model`, `base_branch`, `subagents`,
-`budget_usd`, `budget_credits`, `auto_pr`, `dco_signoff`, `test_command`,
-`test_timeout`, and the `review` block (`enabled`, `auto`, `cli`, `model`). What is inherently
-per-task cannot be defaulted: the id, the prompt or source, the branch, and the
-repository.
+The keys follow the run flags, dashes swapped for underscores, so there is one
+vocabulary rather than three: `cli`, `model`, `base_branch`, `subagents`,
+`budget_usd`, `budget_credits`, `auto_pr`, `dco_signoff`, and the `review` block
+(`enabled`, `auto`, `cli`, `model`). `test_command` and `test_timeout` follow
+the same naming but have no flag of their own: how a project is tested is a
+fact about the project, so it is set in a file or discovered, never per run.
+
+What is inherently per-task cannot be defaulted at all: the id, the prompt or
+source, the branch, and the repository.
 
 An empty value means "not set here", never "put this back to the default", so a
 narrower layer overrides an inherited setting by naming the one it wants: under
@@ -581,11 +584,11 @@ because the branch is the work. Logs go only with `--force`, which is also what
 gets past a worktree that cannot be inspected at all, a permission or a mount
 problem rather than a missing one: cleanup stops there by default rather than
 removing the record and leaving a checkout nothing points at. The branch goes
-only with `--delete-branch`, which refuses a branch holding commits that are neither
-in its base branch nor pushed, unless `--force` says otherwise. That question is
-asked against the base the task was cut from rather than whatever the repository
-currently has checked out, which is what `git branch -d` would ask and is the
-wrong question for a task branch.
+only with `--delete-branch`, which refuses a branch holding commits that are
+neither in its base branch nor pushed, unless `--force` says otherwise. That
+question is asked against the base the task was cut from rather than whatever
+the repository currently has checked out, which is what `git branch -d` would
+ask and is the wrong question for a task branch.
 
 Reusing a task id is fine once its predecessor is cleaned up: the new task
 starts with empty logs. The branch is what stands in the way, since cleanup
