@@ -3,6 +3,7 @@ package orc
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,33 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
+
+// startedWriter records what was written and signals the first time anything
+// is. Nothing reaches it until the reporter has loaded the record, opened the
+// log and copied from it, so closing the channel is the moment the follower is
+// known to be attached to that particular file. A sleep here would only be a
+// guess at the same thing, and a wrong guess would have the test race the
+// follower to the state file and pass for the wrong reason.
+type startedWriter struct {
+	mu      sync.Mutex
+	buf     strings.Builder
+	once    sync.Once
+	started chan struct{}
+}
+
+func (w *startedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buf.Write(p)
+	w.once.Do(func() { close(w.started) })
+	return n, err
+}
+
+func (w *startedWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
 
 // TestFollowEndsWhenTheIDIsDispatchedAgain covers the one way `logs -f` can
 // wait forever. A task's log is unlinked when its id is reused, so a follower
@@ -39,13 +67,20 @@ func TestFollowEndsWhenTheIDIsDispatchedAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out strings.Builder
+	out := &startedWriter{started: make(chan struct{})}
 	done := make(chan error, 1)
-	go func() { done <- NewReporter(layout.State, &out).Logs("PROJ-1", true, false) }()
+	go func() { done <- NewReporter(layout.State, out).Logs("PROJ-1", true, false) }()
+
+	// Wait until the follower is demonstrably reading the first run's log,
+	// rather than assuming it got there.
+	select {
+	case <-out.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the follower never started reading the first log")
+	}
 
 	// The id is cleaned up and dispatched again: a new run, still active, with
 	// a log file of its own at the same path.
-	time.Sleep(300 * time.Millisecond)
 	second := first
 	second.StartedAt = time.Now().UTC()
 	if err := os.Remove(logPath); err != nil {
