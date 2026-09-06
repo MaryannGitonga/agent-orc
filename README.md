@@ -198,6 +198,10 @@ cost     $0.1147
 session  6fb7fb30-eef3-4704-942e-d71d9c084be9
 ```
 
+`-f` follows the log until the task finishes. It also stops if the id is
+cleaned up and dispatched again while you are watching, since the run you asked
+for is gone and its log will never grow again.
+
 Only a CLI that reports through a JSON envelope is summarized. One that answers
 in prose is copied through byte for byte, JSON it happened to print included,
 because its output is the record of what it did. `--raw` prints any log exactly

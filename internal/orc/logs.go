@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
+	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
@@ -35,10 +36,10 @@ func (r *Reporter) Logs(id string, follow, raw bool) error {
 	defer f.Close()
 
 	if raw || !summarizes(record.CLI) {
-		return r.copyLog(f, r.out, id, record.LogPath, follow)
+		return r.copyLog(f, r.out, id, record, follow)
 	}
 	formatted := &logFormatter{out: r.out}
-	err = r.copyLog(f, formatted, id, record.LogPath, follow)
+	err = r.copyLog(f, formatted, id, record, follow)
 	// The copy stops at whatever the file holds, which need not be a whole
 	// line, so the remainder is written before returning either error.
 	if ferr := formatted.Flush(); err == nil {
@@ -57,7 +58,8 @@ func summarizes(cli task.CLI) bool {
 
 // copyLog drains f into out, and keeps draining while the task runs if follow
 // is set.
-func (r *Reporter) copyLog(f *os.File, out io.Writer, id, logPath string, follow bool) error {
+func (r *Reporter) copyLog(f *os.File, out io.Writer, id string, record state.Task, follow bool) error {
+	logPath := record.LogPath
 	if _, err := io.Copy(out, f); err != nil {
 		return fmt.Errorf("reading %s: %w", logPath, err)
 	}
@@ -72,11 +74,20 @@ func (r *Reporter) copyLog(f *os.File, out io.Writer, id, logPath string, follow
 			continue
 		}
 		current, err := r.store.Load(id)
-		if err != nil || !current.Status.Active() {
+		// A task that was cleaned up and dispatched again under the same id is
+		// a different run: its log is a new file at this path, and the handle
+		// open here refers to the old one, which was unlinked and will never
+		// grow again. The record would look active forever, so following it
+		// would hang on a file nothing writes to.
+		reused := err == nil && !current.StartedAt.Equal(record.StartedAt)
+		if err != nil || reused || !current.Status.Active() {
 			// One last read, so nothing written between the final check and
 			// the process exiting is lost.
 			if _, cerr := io.Copy(out, f); cerr != nil {
 				return fmt.Errorf("reading %s: %w", logPath, cerr)
+			}
+			if reused {
+				return fmt.Errorf("task %q was cleaned up and dispatched again while this log was being followed; run 'agent-orc logs %s -f' again for the new run", id, id)
 			}
 			return err
 		}
