@@ -46,15 +46,17 @@ func runWorker(t *testing.T, home, stub, repo, id string, extra ...string) revie
 	return loadReviewRecord(t, home, id)
 }
 
-// runWorkerWithCLI is runWorker with the two CLIs swapped, for tests that need
-// the reviewing CLI to be a particular one.
-func runWorkerWithCLI(t *testing.T, home, stub, repo, id, cli string) reviewRecord {
+// runWorkerWithCLI dispatches a task under the named *worker* CLI, with the
+// other of the two as its reviewer. The reviewer is what most callers actually
+// care about, so read it as picking that one by elimination: pass "copilot" to
+// get a claude reviewer.
+func runWorkerWithCLI(t *testing.T, home, stub, repo, id, workerCLI string) reviewRecord {
 	t.Helper()
 	reviewer := "claude"
-	if cli == "claude" {
+	if workerCLI == "claude" {
 		reviewer = "copilot"
 	}
-	if out, err := orcRun(t, home, stub, "run", "--id", id, "--repo", repo, "--cli", cli,
+	if out, err := orcRun(t, home, stub, "run", "--id", id, "--repo", repo, "--cli", workerCLI,
 		"--prompt", "do the thing", "--no-auto-pr", "--review", "--review-cli", reviewer); err != nil {
 		t.Fatalf("agent-orc run = %v\n%s", err, out)
 	}

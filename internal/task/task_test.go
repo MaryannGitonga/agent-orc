@@ -209,15 +209,15 @@ func TestRawSkipsInstructionsToo(t *testing.T) {
 // "unknown switch `x'" from inside git worktree add, which names nothing, into
 // a message about the branch that caused it.
 func TestValidateRejectsABranchThatLooksLikeAFlag(t *testing.T) {
-	for _, tt := range []struct{ field, branch, base string }{
-		{"branch", "-x", "main"},
-		{"base branch", "agent-orc/ok", "-x"},
+	for _, tt := range []struct{ field, offending, branch, base string }{
+		{"branch", "-x", "-x", "main"},
+		{"base branch", "-x", "agent-orc/ok", "-x"},
 	} {
 		tk := valid()
 		tk.Branch, tk.BaseBranch = tt.branch, tt.base
 		err := tk.Validate()
 		if err == nil || !strings.Contains(err.Error(), "must not start with") {
-			t.Errorf("Validate() with %s %q = %v, want it refused", tt.field, tt.branch+tt.base, err)
+			t.Errorf("Validate() with %s %q = %v, want it refused", tt.field, tt.offending, err)
 		}
 	}
 	// An ordinary branch is untouched by the check.

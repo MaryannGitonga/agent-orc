@@ -60,18 +60,23 @@ func scanJSONObjects(r io.Reader) (map[string]any, error) {
 }
 
 // jsonResultField returns the "result" string of the last JSON object in
-// output, or "" when the output holds no such object.
+// output, and whether such a field was there at all.
 //
 // It is how a CLI that answers in JSON gets read as prose: the agent's actual
 // message is one field of a large object, and every caller that wants what the
 // agent said, rather than what it spent, needs exactly that field.
-func jsonResultField(output string) string {
+//
+// The second return value is what separates an agent that said nothing from
+// output that was never an envelope. Both give an empty string, and a caller
+// that could not tell them apart would answer the first with the whole
+// envelope, which is the one thing the field exists to avoid handing on.
+func jsonResultField(output string) (string, bool) {
 	obj, err := scanJSONObjects(strings.NewReader(output))
 	if err != nil || obj == nil {
-		return ""
+		return "", false
 	}
-	text, _ := obj["result"].(string)
-	return text
+	text, ok := obj["result"].(string)
+	return text, ok
 }
 
 // floatField reads a number from a decoded JSON object.

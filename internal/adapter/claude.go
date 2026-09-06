@@ -91,7 +91,7 @@ func (Claude) WritesJSONResult() bool { return true }
 // Output that holds no such envelope is returned as it came, which is what a
 // run that failed before producing a result writes.
 func (Claude) ParseResult(output string) string {
-	if text := jsonResultField(output); text != "" {
+	if text, ok := jsonResultField(output); ok {
 		return text
 	}
 	return output
