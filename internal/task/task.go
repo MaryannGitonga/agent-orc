@@ -75,6 +75,12 @@ type Task struct {
 	// the time it gets here means nothing was found and nothing was set, or
 	// that verification was turned off, and nothing is checked.
 	TestCommand string `yaml:"test_command" json:"test_command,omitempty"`
+	// SkipTests is set when the task was told not to run tests at all, as
+	// opposed to simply having no command to run. The two are different
+	// instructions to the agent: nothing found is a reason to ask it to look,
+	// and an opt-out is a reason not to mention tests to it at all, since the
+	// suite it would find is the one somebody said not to run.
+	SkipTests bool `yaml:"-" json:"skip_tests,omitempty"`
 	// TestTimeout caps a single run of that command. Zero means the default;
 	// negative means no cap at all. It is the one bound the loop's own stop
 	// conditions cannot supply: a command that never returns never passes,
@@ -269,11 +275,15 @@ func (t Task) Render() string {
 		out += instructionsHeader + s
 	}
 	out += policySuffix
-	switch cmd := strings.TrimSpace(t.TestCommand); cmd {
-	case "":
-		out += genericTestRule
-	default:
+	switch cmd := strings.TrimSpace(t.TestCommand); {
+	case t.SkipTests:
+		// Nothing about tests at all. Asking an agent to find and run a suite
+		// that was explicitly turned off would have it spend the task's time
+		// and budget on the one thing it was told to leave alone.
+	case cmd != "":
 		out += fmt.Sprintf(testRule, cmd)
+	default:
+		out += genericTestRule
 	}
 	return out
 }

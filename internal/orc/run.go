@@ -355,7 +355,8 @@ func resolveTestCommand(t task.Task) (task.Task, string) {
 	switch strings.TrimSpace(t.TestCommand) {
 	case testcmd.None:
 		t.TestCommand = ""
-		return t, "not run for this task"
+		t.SkipTests = true
+		return t, "not run for this task, and not mentioned to the agent"
 	case "":
 		command, reason := testcmd.Discover(t.Repo)
 		if command == "" {

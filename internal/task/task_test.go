@@ -230,3 +230,37 @@ func TestTestRunTimeout(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderTestRuleFollowsTheThreeStates covers what the agent is told about
+// tests. Turning verification off and finding no command both leave the command
+// empty, but they are opposite instructions: one is a reason to ask the agent to
+// go looking, the other is somebody saying not to run the suite at all, and
+// asking anyway spends the task's budget on the one thing it was told to skip.
+func TestRenderTestRuleFollowsTheThreeStates(t *testing.T) {
+	base := Task{Prompt: "do it"}
+
+	named := base
+	named.TestCommand = "pytest -q"
+	if got := named.Render(); !strings.Contains(got, "run `pytest -q`") {
+		t.Errorf("a known command was not named to the agent:\n%s", got)
+	}
+
+	// Nothing found, so the agent is the only one who can look.
+	if got := base.Render(); !strings.Contains(got, "If this project has a test suite") {
+		t.Errorf("no command left the agent unasked:\n%s", got)
+	}
+
+	// Turned off, so tests are not mentioned at all.
+	off := base
+	off.SkipTests = true
+	got := off.Render()
+	for _, unwanted := range []string{"test suite", "run `", "make it pass"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("an opted-out task was still told about tests (%q):\n%s", unwanted, got)
+		}
+	}
+	// The rest of the operating rules survive.
+	if !strings.Contains(got, "Do NOT push") {
+		t.Errorf("the operating rules went missing with the test rule:\n%s", got)
+	}
+}

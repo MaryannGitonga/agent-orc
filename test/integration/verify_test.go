@@ -86,7 +86,8 @@ func TestVerifyNoneOptsOut(t *testing.T) {
 	git(t, repo, "commit", "--no-gpg-sign", "-m", "chore: module")
 	write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_command: none\n")
 
-	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	receipt := filepath.Join(t.TempDir(), "receipt")
+	stub := stubAgent(t, "claude", receipt, "true")
 	out, err := orcRun(t, home, stub, "run",
 		"--id", "DISC-2", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
 	if err != nil {
@@ -97,6 +98,11 @@ func TestVerifyNoneOptsOut(t *testing.T) {
 	}
 	if got := waitForStatus(t, home, "DISC-2", "done", "failed"); got.TestRuns != 0 {
 		t.Errorf("test_runs = %d, want the suite left alone", got.TestRuns)
+	}
+	// And the agent was not asked to run them either: a suite somebody turned
+	// off is not one to spend the task's budget hunting for.
+	if r := readFile(t, receipt); strings.Contains(r, "test suite") {
+		t.Errorf("an opted-out task still told the agent to run tests:\n%s", r)
 	}
 }
 

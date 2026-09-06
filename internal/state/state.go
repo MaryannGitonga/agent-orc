@@ -29,9 +29,12 @@ const (
 	StatusPublishing    Status = "publishing"
 	StatusDone          Status = "done"
 	StatusPublishFailed Status = "publish_failed" // committed but unpublished; retry with `agent-orc pr`
-	StatusFailed        Status = "failed"         // exited non-zero, or never launched
-	StatusStopped       Status = "stopped"        // killed by `agent-orc stop`
-	StatusReviewed      Status = "reviewed"       // a review round found nothing to change
+	// StatusFailed covers everything that stopped the task short of publishing:
+	// an agent that exited non-zero or never launched, and a verification pass
+	// whose suite never went green.
+	StatusFailed   Status = "failed"
+	StatusStopped  Status = "stopped"  // killed by `agent-orc stop`
+	StatusReviewed Status = "reviewed" // a review round found nothing to change
 	// StatusReviewFailed means an automatic review could not be completed: the
 	// reviewer errored or its verdict was unreadable. The work is committed on
 	// its branch either way, and `agent-orc review` retries.

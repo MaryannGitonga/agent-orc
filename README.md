@@ -294,7 +294,7 @@ waiting for is never going to appear.
 | `publishing` | the sanitize, push and draft-PR chain is running |
 | `done` | published as a draft PR, or sanitized and left on the branch when there is no remote |
 | `publish_failed` | no draft PR was opened: the chain stopped part way, or the agent committed nothing |
-| `failed` | the agent exited non-zero, or never launched |
+| `failed` | the agent exited non-zero or never launched, or the test command never passed |
 | `stopped` | you killed it with `agent-orc stop` |
 | `reviewed` | an agentic review round approved the branch |
 | `review_failed` | an automatic review could not finish; the work is on its branch, retry with `agent-orc review` |
@@ -362,6 +362,8 @@ project, not about one run of one task, so the override lives in the
 repository's own file: `test_command` when the conventions above do not
 describe it, and `test_command: none` for a suite agent-orc should not be
 running, one that is too slow or needs something the worktree does not have.
+`none` also stops the agent being asked about tests at all, since a suite
+somebody turned off is not one to spend the task on looking for.
 
 ```yaml
 # .agent-orc.yaml
