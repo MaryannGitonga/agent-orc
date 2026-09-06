@@ -415,8 +415,11 @@ Everything lives under `~/.agent-orc`, overridable with `AGENT_ORC_HOME`:
 ```
 
 `agent-orc cleanup <id>` removes the worktree and state but keeps the branch,
-because the branch is the work. Logs go only with `--force`, and the branch only
-with `--delete-branch`, which refuses a branch holding commits that are neither
+because the branch is the work. Logs go only with `--force`, which is also what
+gets past a worktree that cannot be inspected at all, a permission or a mount
+problem rather than a missing one: cleanup stops there by default rather than
+removing the record and leaving a checkout nothing points at. The branch goes
+only with `--delete-branch`, which refuses a branch holding commits that are neither
 in its base branch nor pushed, unless `--force` says otherwise. That question is
 asked against the base the task was cut from rather than whatever the repository
 currently has checked out, which is what `git branch -d` would ask and is the

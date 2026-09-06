@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 
 	"github.com/MaryannGitonga/agent-orc/internal/gitx"
@@ -37,11 +38,27 @@ func (c *Cleaner) Clean(id string, force, deleteBranch bool) error {
 		return fmt.Errorf("task %q is %s; stop it first or pass --force", id, record.Status)
 	}
 
+	// Only a missing worktree counts as gone. Any other stat failure, a
+	// permission or an I/O error, means the state of that directory is unknown,
+	// and carrying on would delete the record and possibly the branch while
+	// leaving a checkout nobody can reach and nothing now points at. Forcing
+	// past it stays possible, because a worktree that cannot be read is not a
+	// reason to be unable to clean up the record forever.
+	hasWorktree := false
+	switch _, statErr := os.Stat(record.Worktree); {
+	case statErr == nil:
+		hasWorktree = true
+	case errors.Is(statErr, fs.ErrNotExist):
+	case !force:
+		return fmt.Errorf("checking whether %s is still there: %w\npass --force to remove the record anyway and leave the worktree", record.Worktree, statErr)
+	default:
+		fmt.Fprintf(c.out, "%s  warning: %s could not be inspected (%v); leaving it in place\n",
+			id, record.Worktree, statErr)
+	}
+
 	// The repository is opened up front because the branch may need deleting
 	// even when the worktree is already gone, which is what a half-finished
 	// cleanup or a manually removed checkout leaves behind.
-	_, statErr := os.Stat(record.Worktree)
-	hasWorktree := statErr == nil
 	var repo *gitx.Repo
 	if hasWorktree || deleteBranch {
 		var err error

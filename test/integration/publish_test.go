@@ -285,6 +285,61 @@ func TestCleanupDeleteBranchJudgesAgainstTheBase(t *testing.T) {
 	}
 }
 
+// TestCleanupRefusesAnUnreadableWorktree covers the difference between a
+// worktree that is gone and one that cannot be looked at. Only the first means
+// there is nothing left to remove; treating the second the same way deletes the
+// record, and with --delete-branch the branch, while leaving a checkout on disk
+// that nothing points at any more.
+func TestCleanupRefusesAnUnreadableWorktree(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "STAT-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	rec := waitForStatus(t, home, "STAT-1", "done", "failed")
+
+	// Make the worktree unstattable by closing its parent to searches, which is
+	// the shape a permission or mount problem takes.
+	parent := filepath.Dir(rec.Worktree)
+	if err := os.Chmod(parent, 0o000); err != nil {
+		t.Fatalf("closing %s: %v", parent, err)
+	}
+	defer func() { _ = os.Chmod(parent, 0o755) }()
+	if _, err := os.Stat(rec.Worktree); err == nil || os.IsNotExist(err) {
+		t.Skip("stat still succeeds here, so this cannot be exercised (running as root?)")
+	}
+
+	out, err := orcRun(t, home, stub, "cleanup", "STAT-1", "--delete-branch")
+	if err == nil {
+		t.Fatalf("cleanup = nil, want it to refuse a worktree it cannot inspect\n%s", out)
+	}
+	if !strings.Contains(out, "--force") {
+		t.Errorf("cleanup = %q, want it to name the way past", out)
+	}
+	// Nothing was half-done: the record and the branch both survive.
+	if _, statErr := os.Stat(filepath.Join(home, "state", "STAT-1.json")); statErr != nil {
+		t.Error("the state file was removed despite the refusal")
+	}
+	if !strings.Contains(git(t, repo, "branch", "--list", "agent-orc/stat-1"), "stat-1") {
+		t.Error("the branch was deleted despite the refusal")
+	}
+
+	// --force is the way past, and says what it left behind.
+	out, err = orcRun(t, home, stub, "cleanup", "STAT-1", "--force")
+	if err != nil {
+		t.Fatalf("cleanup --force = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "could not be inspected") {
+		t.Errorf("cleanup --force = %q, want it to say the worktree was left in place", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "state", "STAT-1.json")); !os.IsNotExist(statErr) {
+		t.Error("the state file survived a forced cleanup")
+	}
+}
+
 // TestCleanupDeleteBranchWhenTheBranchIsAlreadyGone covers cleanup finishing
 // on a branch someone removed by hand, or one a previous cleanup deleted before
 // failing to remove the state. A missing ref is not unpushed work, and treating
