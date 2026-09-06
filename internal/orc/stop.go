@@ -90,9 +90,8 @@ const killGrace = 2 * time.Second
 //
 // An agent runs compilers, test runners and git of its own, and signalling only
 // the leader would orphan them. It is started with Setpgid, so the negative pid
-// addresses exactly that process's descendants and nothing else. Records
-// written before agents were given their own group have no such group, so a
-// missing one falls back to signalling the process itself.
+// addresses exactly that process's descendants and nothing else, and nothing
+// here ever signals a bare pid: see signal for why.
 //
 // SIGTERM is a request, and a process is free to ignore it. Returning as soon
 // as it was sent would record a task as stopped while it carried on running, so

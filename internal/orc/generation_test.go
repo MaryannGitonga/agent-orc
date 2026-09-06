@@ -271,3 +271,42 @@ func TestSuccessClearsAnEarlierFailure(t *testing.T) {
 		t.Errorf("error = %q, want the new reason recorded", got.Error)
 	}
 }
+
+// TestMarkDoesNotUndoAStop covers the window a stop can land in. The phases
+// after the agent clear the pid between commands, and stop is allowed to record
+// itself there, so the next phase's own mark would otherwise write over it and
+// the loops would carry on as though nothing had been asked.
+func TestMarkDoesNotUndoAStop(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	stoppedAt := time.Now().UTC()
+	rec := state.Task{
+		Task:       task.Task{ID: "PROJ-7", CLI: task.CLIClaude},
+		Status:     state.StatusStopped,
+		Error:      "stopped by agent-orc stop",
+		StartedAt:  time.Now().UTC().Add(-time.Hour),
+		FinishedAt: &stoppedAt,
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, startedAt: rec.StartedAt}
+
+	// Everything the supervisor would go on to record after the gates.
+	for _, next := range []state.Status{
+		state.StatusVerifying, state.StatusReviewing, state.StatusPublishing,
+		state.StatusDone, state.StatusFailed, state.StatusReviewFailed,
+	} {
+		s.mark("PROJ-7", next, "")
+		got, err := store.Load("PROJ-7")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != state.StatusStopped {
+			t.Fatalf("mark(%s) overwrote the stop; status = %q", next, got.Status)
+		}
+		if got.Error != "stopped by agent-orc stop" {
+			t.Errorf("mark(%s) changed the reason to %q", next, got.Error)
+		}
+	}
+}

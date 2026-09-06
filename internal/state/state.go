@@ -32,9 +32,11 @@ const (
 	// StatusFailed covers everything that stopped the task short of publishing:
 	// an agent that exited non-zero or never launched, and a verification pass
 	// whose suite never went green.
-	StatusFailed   Status = "failed"
-	StatusStopped  Status = "stopped"  // killed by `agent-orc stop`
-	StatusReviewed Status = "reviewed" // a review round found nothing to change
+	StatusFailed  Status = "failed"
+	StatusStopped Status = "stopped" // killed by `agent-orc stop`
+	// StatusReviewed means the reviewer approved the branch, which may have
+	// taken several rounds of comments and fixes to get to.
+	StatusReviewed Status = "reviewed"
 	// StatusReviewFailed means an automatic review could not be completed: the
 	// reviewer errored or its verdict was unreadable. The work is committed on
 	// its branch either way, and `agent-orc review` retries.

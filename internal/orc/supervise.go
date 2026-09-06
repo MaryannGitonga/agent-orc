@@ -179,6 +179,22 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 		}
 	}
 
+	// Asked once more before publishing: the gates can each finish cleanly and
+	// still leave a stop recorded in the gap after them, and publishing is the
+	// step that reaches the remote.
+	//
+	// No test reaches this line. A stop issued while a gate is running kills
+	// that gate's own child, so verification or review gives up first and
+	// returns above; only a stop landing in the moment between a gate finishing
+	// and this running gets here, which is not something a test can arrange
+	// without a hook in the supervisor. It is kept because the window is real
+	// and the cost of losing that race is a push and a pull request nobody
+	// asked for.
+	if s.wasStopped(id) {
+		s.logf("task was stopped; not publishing")
+		return nil
+	}
+
 	if !record.AutoPR {
 		s.logf("auto_pr is off; run 'agent-orc pr %s' when you want the draft opened", id)
 		s.mark(id, state.StatusDone, "")
@@ -348,6 +364,13 @@ func (s *Supervisor) failUnlessStopped(id string, cause error) {
 func (s *Supervisor) mark(id string, status state.Status, message string) {
 	now := time.Now().UTC()
 	if err := s.update(id, func(k *state.Task) {
+		// A task a human stopped stays stopped. The phases after the agent
+		// clear the pid between commands and a stop is allowed to land there,
+		// so without this the next phase's own mark would quietly undo it and
+		// the loops would carry on as though nothing had been asked.
+		if k.Status == state.StatusStopped {
+			return
+		}
 		k.Status = status
 		// A phase that is still working has no finish time yet, and a task that
 		// has one finished when this said so, not when its agent did.

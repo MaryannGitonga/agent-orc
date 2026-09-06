@@ -309,6 +309,45 @@ func TestStopReachesAHangingTestCommand(t *testing.T) {
 	t.Errorf("the test command's own child (pid %d) survived the stop", pid)
 }
 
+// TestStopDuringVerificationLeavesTheBranchUnpublished covers the end-to-end
+// promise of stopping a task in its verification phase: the record says stopped,
+// no pull request is opened, and nothing reaches the remote.
+//
+// It does not reach the narrower window between the suite passing and the
+// publish starting. Any stop issued while the test command runs kills that
+// command, since the command is the tracked child, so verification gives up
+// first and never gets as far as publishing. See the check in Supervisor.finish.
+func TestStopDuringVerificationLeavesTheBranchUnpublished(t *testing.T) {
+	repo, remote := initRepoWithRemote(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"),
+		"printf 'work\\n' > out.txt\ngit add . && git commit --no-gpg-sign -m 'feat: work' >/dev/null")
+	stubInto(t, stub, "gh", filepath.Join(t.TempDir(), "gh"), `printf 'https://example.com/pr/1\n'`)
+	// The suite stops the task and then hangs, so the stop is what ends it.
+	write(t, filepath.Join(repo, ".agent-orc.yaml"),
+		"test_command: '"+buildBinary(t)+" stop GAP-1 >/dev/null 2>&1; sleep 60'\n")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "GAP-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+
+	got := waitForStatus(t, home, "GAP-1", "stopped", "done", "publish_failed", "failed")
+	if got.Status != "stopped" {
+		t.Fatalf("status = %q, want the stop to have stuck\n%s", got.Status,
+			readFile(t, filepath.Join(home, "logs", "GAP-1.supervisor.log")))
+	}
+	// Give the supervisor time to publish if it were going to.
+	time.Sleep(2 * time.Second)
+	final := loadRecord(t, home, "GAP-1")
+	if final.Status != "stopped" || final.PRURL != "" {
+		t.Errorf("status/pr = %q/%q, want a stopped task left unpublished", final.Status, final.PRURL)
+	}
+	if pushed := git(t, remote, "branch", "--list", "agent-orc/gap-1"); strings.Contains(pushed, "gap-1") {
+		t.Error("a stopped task was pushed to the remote")
+	}
+}
+
 // TestStopDoesNotRestartAStoppedTask checks the loop notices the stop. A killed
 // test command exits non-zero, which on its own reads as a failing suite and
 // would send the task round again against the agent it just stopped.
