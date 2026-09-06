@@ -1,6 +1,7 @@
 package orc
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -99,6 +100,28 @@ func TestLogFormatterReassemblesSplitLines(t *testing.T) {
 	}
 	if got := b.String(); !strings.Contains(got, "Done.") || !strings.Contains(got, "session  abc") {
 		t.Errorf("split writes were not reassembled, got:\n%s", got)
+	}
+}
+
+// failingWriter refuses every write, to exercise the formatter's error path.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("the writer is closed") }
+
+// TestLogFormatterReportsTheBytesItTook covers the io.Writer contract on the
+// way out of a failure. Write copies p into its buffer before rendering any of
+// it, so the bytes are taken whatever happens next; reporting none as written
+// would tell a caller that retries to send the same chunk again, and the log
+// would gain a duplicate of it.
+func TestLogFormatterReportsTheBytesItTook(t *testing.T) {
+	f := &logFormatter{out: failingWriter{}}
+	in := []byte("a whole line\n")
+	n, err := f.Write(in)
+	if err == nil {
+		t.Fatal("Write() = nil, want the underlying writer's error")
+	}
+	if n != len(in) {
+		t.Errorf("Write() = %d, want %d: every byte of p was consumed", n, len(in))
 	}
 }
 

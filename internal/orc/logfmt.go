@@ -31,6 +31,11 @@ type logFormatter struct {
 }
 
 // Write consumes a chunk of log, rendering every complete line in it.
+//
+// It reports len(p) on the way out even when it failed, because p is appended
+// to the buffer before any of it is rendered: by the time anything can go
+// wrong the bytes have been taken, and saying none were would invite a caller
+// to send them again.
 func (f *logFormatter) Write(p []byte) (int, error) {
 	f.buf = append(f.buf, p...)
 	for {
@@ -41,12 +46,12 @@ func (f *logFormatter) Write(p []byte) (int, error) {
 		line := string(f.buf[:i])
 		f.buf = f.buf[i+1:]
 		if err := f.line(line); err != nil {
-			return 0, err
+			return len(p), err
 		}
 	}
 	if len(f.buf) > maxLineBuffer {
 		if _, err := f.out.Write(f.buf); err != nil {
-			return 0, err
+			return len(p), err
 		}
 		f.buf = f.buf[:0]
 	}

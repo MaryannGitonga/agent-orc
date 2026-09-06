@@ -26,7 +26,8 @@ Usage:
   agent-orc run [flags]         dispatch a single task
   agent-orc run <tasks.yaml>    dispatch every task in a batch file
   agent-orc status              show every task as a table
-  agent-orc logs <task-id>      print a task's log
+  agent-orc logs <task-id> [-f] [--raw]
+                                print a task's log, or follow it
   agent-orc stop <task-id>      kill a running task
   agent-orc pr <task-id>        sanitize, push and open the draft PR by hand
   agent-orc review <task-id>    run an independent review round, if enabled
