@@ -33,6 +33,11 @@ var ErrNoCommits = errors.New("the agent committed nothing")
 // either: a draft PR someone is waiting for will never appear.
 var ErrNothingToPublish = errors.New("the agent committed nothing to publish")
 
+// ErrRunReplaced means the task id was cleaned up and dispatched again before
+// the publish chain got to it, so the record now under that id describes work
+// this publisher has nothing to do with.
+var ErrRunReplaced = errors.New("the task id belongs to a later run")
+
 // Publisher runs the sanitize, push and draft-PR chain for a finished task.
 //
 // The order matters and is not negotiable: nothing is pushed until the commit
@@ -56,12 +61,11 @@ type Publisher struct {
 // `agent-orc pr` leaves it unset, since a human invoking it is acting on
 // whatever the id names now.
 //
-// It scopes the writes, not the read Publish opens with. A record loaded before
-// an id was reused would still be acted on in git, and only its state writes
-// dropped. That is left alone deliberately: the supervisor calls Publish inline
-// the moment the gates pass, so nothing can be dispatched under the id between
-// the two, and widening the guard to cover the read would mean holding a lock
-// across a push for a window that the normal flow cannot open.
+// It scopes the read as well as the writes. Publish checks the record it loads
+// against this before touching git, which is the check that matters: the
+// supervisor asks the same question first, but between its answer and Publish's
+// load the id can be dispatched again, and dropping only the state writes would
+// leave a branch already sanitized, force-pushed and opened as a pull request.
 func (p *Publisher) OwnRun(startedAt time.Time) { p.owns = startedAt }
 
 // update applies mutate, skipping the write when the record no longer belongs
@@ -96,6 +100,14 @@ func (p *Publisher) Publish(id string) error {
 	record, err := p.store.Load(id)
 	if err != nil {
 		return err
+	}
+	// Against the record about to be acted on, not against an earlier read of
+	// it. The caller checks too, but between its check and this load the id can
+	// be cleaned up and dispatched again, and everything below works from this
+	// record: sanitizing, force-pushing and opening a pull request for a branch
+	// belonging to a task that is still running.
+	if !p.owns.IsZero() && !record.StartedAt.Equal(p.owns) {
+		return fmt.Errorf("task %q: %w", id, ErrRunReplaced)
 	}
 	if record.Status.HasProcess() {
 		return fmt.Errorf("task %q is still %s; wait for it to finish or run 'agent-orc stop %s'",

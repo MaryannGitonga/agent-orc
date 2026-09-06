@@ -159,6 +159,13 @@ func (s *Supervisor) publish(id string, record state.Task) {
 		s.logf("task %s is done", id)
 		return
 	}
+	if errors.Is(err, ErrRunReplaced) {
+		// The id was dispatched again between the check above and the load
+		// inside Publish. Nothing was done, and nothing about the run that now
+		// owns the id is this supervisor's to record.
+		s.logf("this task's id now belongs to a later run; nothing was published")
+		return
+	}
 	if errors.Is(err, ErrNoRemote) {
 		// A local-only repository is a legitimate way to work, not a failure.
 		s.mark(id, state.StatusDone, "")

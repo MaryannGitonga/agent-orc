@@ -2,6 +2,7 @@ package orc
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"path/filepath"
 	"strings"
@@ -145,5 +146,47 @@ func TestSupervisorDoesNotPublishALaterRun(t *testing.T) {
 	}
 	if got.Status != state.StatusRunning || got.PID != 999 {
 		t.Errorf("a stale supervisor published over the live task: status=%q pid=%d", got.Status, got.PID)
+	}
+}
+
+// TestPublishRefusesARecordFromAnotherRun covers the gap between the caller's
+// ownership check and the load inside Publish. The supervisor asks first, but
+// the id can be dispatched again in between, and everything the chain does
+// works from the record loaded here: checking the earlier read would leave a
+// branch sanitized, force-pushed and opened as a pull request before any state
+// write was dropped.
+func TestPublishRefusesARecordFromAnotherRun(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	current := state.Task{
+		Task: task.Task{
+			ID: "PROJ-4", CLI: task.CLIClaude, AutoPR: true,
+			Branch: "agent-orc/proj-4",
+			// A repository that does not exist, so any git the chain reached
+			// would fail with something else entirely.
+			Repo: filepath.Join(dir, "no-such-repo"),
+		},
+		Status:    state.StatusRunning,
+		Worktree:  filepath.Join(dir, "no-such-worktree"),
+		StartedAt: time.Now().UTC(),
+	}
+	if err := store.Save(current); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Publisher{store: store, out: io.Discard}
+	p.OwnRun(current.StartedAt.Add(-time.Hour))
+	err := p.Publish("PROJ-4")
+	if !errors.Is(err, ErrRunReplaced) {
+		t.Fatalf("Publish() = %v, want %v before any git ran", err, ErrRunReplaced)
+	}
+
+	// And a publisher scoped to this run, or to none at all, gets past the
+	// check and fails on the repository instead, which is how we know the
+	// guard is the reason for the refusal above and not the missing repo.
+	p = &Publisher{store: store, out: io.Discard}
+	p.OwnRun(current.StartedAt)
+	if err := p.Publish("PROJ-4"); errors.Is(err, ErrRunReplaced) {
+		t.Errorf("Publish() = %v, want the owning run to get past the check", err)
 	}
 }
