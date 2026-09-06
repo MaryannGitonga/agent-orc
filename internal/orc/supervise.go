@@ -149,26 +149,26 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	// suite is red, and no point opening a PR over a branch the review is
 	// still changing.
 	if err := s.verify(record); err != nil {
-		s.failUnlessStopped(id, err)
 		s.logf("not publishing: %v", err)
+		s.failUnlessStopped(id, err)
 		return nil
 	}
 	if record.Review.Enabled && record.Review.Auto {
 		s.mark(id, state.StatusReviewing, "")
 		if err := s.autoReview(&record); err != nil {
+			s.logf("not publishing: %v", err)
 			if s.wasStopped(id) {
 				s.logf("task was stopped during review: %v", err)
 			} else {
 				s.mark(id, state.StatusReviewFailed, err.Error())
 			}
-			s.logf("not publishing: %v", err)
 			return nil
 		}
 	}
 
 	if !record.AutoPR {
-		s.mark(id, state.StatusDone, "")
 		s.logf("auto_pr is off; run 'agent-orc pr %s' when you want the draft opened", id)
+		s.mark(id, state.StatusDone, "")
 		return nil
 	}
 	s.mark(id, state.StatusPublishing, "")
@@ -222,8 +222,8 @@ func (s *Supervisor) publish(id string, record state.Task) {
 		err = p.Publish(id)
 	}
 	if err == nil {
-		s.mark(id, state.StatusDone, "")
 		s.logf("task %s is done", id)
+		s.mark(id, state.StatusDone, "")
 		return
 	}
 	if errors.Is(err, ErrRunReplaced) {
@@ -235,23 +235,23 @@ func (s *Supervisor) publish(id string, record state.Task) {
 	}
 	if errors.Is(err, ErrNoRemote) {
 		// A local-only repository is a legitimate way to work, not a failure.
-		s.mark(id, state.StatusDone, "")
 		s.logf("no %s remote; the work is sanitized and on %s, and was not pushed", defaultRemote, record.Branch)
+		s.mark(id, state.StatusDone, "")
 		return
 	}
 	if errors.Is(err, ErrNothingToPublish) {
 		// Not a publish failure: nothing was attempted, because there was
 		// nothing to attempt it with. Still not done, because the PR a human is
 		// waiting on is never going to arrive.
-		s.mark(id, state.StatusPublishFailed, err.Error())
 		s.logf("the agent committed nothing; %s is empty and no PR was opened", record.Branch)
+		s.mark(id, state.StatusPublishFailed, err.Error())
 		return
 	}
 	if errors.Is(err, ErrNoCommits) {
 		// Nothing to sanitize and nothing to publish. Say so, rather than
 		// reporting work on a branch that does not have any.
-		s.mark(id, state.StatusDone, "")
 		s.logf("the agent committed nothing; %s is empty", record.Branch)
+		s.mark(id, state.StatusDone, "")
 		return
 	}
 
@@ -322,6 +322,12 @@ func (s *Supervisor) failUnlessStopped(id string, cause error) {
 }
 
 // mark sets a task's terminal status.
+//
+// Every caller logs before calling this, never after. The state file is what
+// anyone waiting on the task reads, so it has to be the last thing a supervisor
+// writes: a status observed while the supervisor still had a line to write
+// means the watcher can act, and delete the very directory being written to,
+// before the process has finished with it.
 func (s *Supervisor) mark(id string, status state.Status, message string) {
 	if err := s.update(id, func(k *state.Task) {
 		k.Status = status
@@ -369,6 +375,7 @@ func (s *Supervisor) readSessionID(record state.Task) string {
 
 // fail records a task that could not be run at all.
 func (s *Supervisor) fail(id string, cause error) error {
+	s.logf("task failed before the agent started: %v", cause)
 	now := time.Now().UTC()
 	if err := s.update(id, func(k *state.Task) {
 		k.Status = state.StatusFailed
@@ -378,7 +385,6 @@ func (s *Supervisor) fail(id string, cause error) error {
 	}); err != nil {
 		return errors.Join(cause, err)
 	}
-	s.logf("task failed before the agent started: %v", cause)
 	return cause
 }
 
