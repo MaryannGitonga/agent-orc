@@ -328,7 +328,10 @@ func (s *Supervisor) failUnlessStopped(id string, cause error) {
 	s.mark(id, state.StatusFailed, cause.Error())
 }
 
-// mark sets a task's terminal status.
+// mark records a status change, terminal or not: the phases that run after the
+// agent exits are statuses in their own right, and moving into one goes through
+// here as much as finishing does. A status that is still working has its finish
+// time cleared, and one that is not has it set.
 //
 // Every caller logs before calling this, never after. The state file is what
 // anyone waiting on the task reads, so it has to be the last thing a supervisor

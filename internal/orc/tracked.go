@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 
@@ -45,24 +46,44 @@ func (t tracker) run(cmd *exec.Cmd) error {
 	pid := cmd.Process.Pid
 	_ = t.update(t.id, func(k *state.Task) { k.PID = pid })
 
-	// The whole group, not just the leader: a test command runs a build and a
-	// test runner of its own, and killing only the shell would leave those
-	// holding the worktree while the task moved on. signalGroup asks first and
-	// escalates, which is what the same timer would have to do anyway.
-	timedOut := make(chan struct{})
+	// The timer and the wait race for the same process, so they share a lock.
+	// Once the child has been reaped its pid means nothing and the kernel may
+	// hand it to something else, so a timer that fires late has to find out it
+	// is too late rather than signal whatever holds that pid now. Stopping the
+	// timer on the way out is not enough on its own: Stop does not wait for a
+	// callback that has already begun.
+	//
+	// The kill covers the whole group, not just the leader: a test command runs
+	// a build and a test runner of its own, and killing only the shell would
+	// leave those holding the worktree while the task moved on.
+	var (
+		mu       sync.Mutex
+		reaped   bool
+		timedOut bool
+	)
 	if t.timeout > 0 {
 		timer := time.AfterFunc(t.timeout, func() {
-			close(timedOut)
+			mu.Lock()
+			defer mu.Unlock()
+			if reaped {
+				return
+			}
+			timedOut = true
 			_ = signalGroup(pid)
 		})
 		defer timer.Stop()
 	}
 
 	err := cmd.Wait()
-	select {
-	case <-timedOut:
+	// Blocks until a callback already in flight has finished signalling, which
+	// is the point: the group is on its way out and the caller should not be
+	// told the command merely failed while that is still happening.
+	mu.Lock()
+	reaped = true
+	killed := timedOut
+	mu.Unlock()
+	if killed {
 		err = fmt.Errorf("%w after %s", ErrTimedOut, t.timeout)
-	default:
 	}
 
 	// Clear it only if it is still ours. Anything else means another writer
