@@ -179,12 +179,33 @@ actually have, and checks the binary is on PATH before creating anything.
 | `run --id <id> --cli <name> ...` | dispatch one task |
 | `run <tasks.yaml>` | dispatch a batch |
 | `status` | one row per task: status, spend, branch, elapsed |
-| `logs <id> [-f]` | print the agent's output, or follow it until the task ends |
+| `logs <id> [-f] [--raw]` | print the agent's output, or follow it until the task ends |
 | `stop <id>` | terminate a running agent and everything it spawned |
 | `pr <id>` | run the publish chain by hand, or retry one that failed |
 | `review <id>` | run an agentic review round |
-| `cleanup <id\|--all> [--force]` | remove the worktree and state; keep the branch |
+| `cleanup <id\|--all> [--force] [--delete-branch]` | remove the worktree and state; keep the branch unless told otherwise |
 | `version` | print the version |
+
+`logs` summarizes as it prints. A CLI that reports its result as JSON writes
+one very long line holding the answer buried in token accounting, so that line
+becomes the answer plus a short footer:
+
+```
+Added the optional greeting parameter and a test covering both cases.
+
+status   success, 10 turns, 30.7s
+cost     $0.1147
+session  6fb7fb30-eef3-4704-942e-d71d9c084be9
+```
+
+`-f` follows the log until the task finishes. It also stops if the id is
+cleaned up and dispatched again while you are watching, since the run you asked
+for is gone and its log will never grow again.
+
+Only a CLI that reports through a JSON envelope is summarized. One that answers
+in prose is copied through byte for byte, JSON it happened to print included,
+because its output is the record of what it did. `--raw` prints any log exactly
+as it was written, for piping it into something else.
 
 ## Task sources
 
@@ -398,7 +419,20 @@ Everything lives under `~/.agent-orc`, overridable with `AGENT_ORC_HOME`:
 ```
 
 `agent-orc cleanup <id>` removes the worktree and state but keeps the branch,
-because the branch is the work. Logs go only with `--force`.
+because the branch is the work. Logs go only with `--force`, which is also what
+gets past a worktree that cannot be inspected at all, a permission or a mount
+problem rather than a missing one: cleanup stops there by default rather than
+removing the record and leaving a checkout nothing points at. The branch goes
+only with `--delete-branch`, which refuses a branch holding commits that are neither
+in its base branch nor pushed, unless `--force` says otherwise. That question is
+asked against the base the task was cut from rather than whatever the repository
+currently has checked out, which is what `git branch -d` would ask and is the
+wrong question for a task branch.
+
+Reusing a task id is fine once its predecessor is cleaned up: the new task
+starts with empty logs. The branch is what stands in the way, since cleanup
+keeps it deliberately, so `--delete-branch` is the one-step way to free an id
+you want back.
 
 ## Development
 

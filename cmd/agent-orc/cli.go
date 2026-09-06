@@ -26,7 +26,8 @@ Usage:
   agent-orc run [flags]         dispatch a single task
   agent-orc run <tasks.yaml>    dispatch every task in a batch file
   agent-orc status              show every task as a table
-  agent-orc logs <task-id> [-f] print a task's log
+  agent-orc logs <task-id> [-f] [--raw]
+                                print a task's log, or follow it
   agent-orc stop <task-id>      kill a running task
   agent-orc pr <task-id>        sanitize, push and open the draft PR by hand
   agent-orc review <task-id>    run an independent review round, if enabled
@@ -208,21 +209,22 @@ func logsCmd(argv []string, out io.Writer) error {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	fs.SetOutput(out)
 	follow := fs.Bool("f", false, "keep printing until the task finishes")
+	raw := fs.Bool("raw", false, "print the log verbatim instead of summarizing it")
 	id, err := parseAround(fs, argv)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
-		return fmt.Errorf("%w\nusage: agent-orc logs <task-id> [-f]", err)
+		return fmt.Errorf("%w\nusage: agent-orc logs <task-id> [-f] [--raw]", err)
 	}
 	if id == "" {
-		return errors.New("usage: agent-orc logs <task-id> [-f]")
+		return errors.New("usage: agent-orc logs <task-id> [-f] [--raw]")
 	}
 	layout, err := paths.Resolve()
 	if err != nil {
 		return err
 	}
-	return orc.NewReporter(layout.State, out).Logs(id, *follow)
+	return orc.NewReporter(layout.State, out).Logs(id, *follow, *raw)
 }
 
 // parseAround parses flags that appear on either side of a single positional
@@ -298,12 +300,13 @@ func cleanupCmd(argv []string, out io.Writer) error {
 	fs.SetOutput(out)
 	all := fs.Bool("all", false, "clean up every task that is not running")
 	force := fs.Bool("force", false, "discard uncommitted work and remove logs too")
+	delBranch := fs.Bool("delete-branch", false, "delete the task's branch too, if its commits are merged or pushed")
 	id, err := parseAround(fs, argv)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
-		return fmt.Errorf("%w\nusage: agent-orc cleanup <task-id|--all> [--force]", err)
+		return fmt.Errorf("%w\nusage: agent-orc cleanup <task-id|--all> [--force] [--delete-branch]", err)
 	}
 	layout, err := paths.Resolve()
 	if err != nil {
@@ -314,12 +317,12 @@ func cleanupCmd(argv []string, out io.Writer) error {
 		if id != "" {
 			return errors.New("pass either a task id or --all, not both")
 		}
-		return c.CleanAll(*force)
+		return c.CleanAll(*force, *delBranch)
 	}
 	if id == "" {
-		return errors.New("usage: agent-orc cleanup <task-id|--all> [--force]")
+		return errors.New("usage: agent-orc cleanup <task-id|--all> [--force] [--delete-branch]")
 	}
-	return c.Clean(id, *force)
+	return c.Clean(id, *force, *delBranch)
 }
 
 // sanitizeCommitCmd applies the commit policy to HEAD. The sanitization rebase

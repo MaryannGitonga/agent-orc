@@ -312,3 +312,39 @@ func TestEveryAdapterRunsUnattended(t *testing.T) {
 		}
 	}
 }
+
+// TestParseResultTellsAnEmptyAnswerFromNoEnvelope covers the difference between
+// an agent that said nothing and output that was never wrapped. Both are an
+// empty string, and answering the first with the whole envelope would hand a
+// caller the very blob the unwrapping exists to remove.
+func TestParseResultTellsAnEmptyAnswerFromNoEnvelope(t *testing.T) {
+	tests := []struct {
+		name, output, want string
+	}{{
+		name:   "an envelope whose result is empty",
+		output: `{"type":"result","subtype":"success","result":"","session_id":"s1"}`,
+		want:   "",
+	}, {
+		name:   "an envelope with a result",
+		output: `{"type":"result","subtype":"success","result":"LGTM"}`,
+		want:   "LGTM",
+	}, {
+		// No result field at all, so there is nothing to unwrap and the bytes
+		// are all the caller has.
+		name:   "an object that is not a result envelope",
+		output: `{"type":"system","subtype":"init"}`,
+		want:   `{"type":"system","subtype":"init"}`,
+	}, {
+		name:   "prose",
+		output: "LGTM\n",
+		want:   "LGTM\n",
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (Claude{}).ParseResult(tt.output); got != tt.want {
+				t.Errorf("ParseResult() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

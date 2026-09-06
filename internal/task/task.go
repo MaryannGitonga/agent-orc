@@ -168,6 +168,16 @@ func (t Task) validateCommon() error {
 	if t.Branch == "" {
 		errs = append(errs, errors.New("branch is empty"))
 	}
+	// A leading dash is the one branch name that turns into a flag when it
+	// reaches git. git refuses to create such a branch anyway, but it does so
+	// from inside `git worktree add` with "unknown switch", which says nothing
+	// about the name that caused it; refusing here says what is wrong.
+	if strings.HasPrefix(t.Branch, "-") {
+		errs = append(errs, fmt.Errorf("branch %q must not start with '-': git reads such a name as a flag", t.Branch))
+	}
+	if strings.HasPrefix(t.BaseBranch, "-") {
+		errs = append(errs, fmt.Errorf("base branch %q must not start with '-': git reads such a name as a flag", t.BaseBranch))
+	}
 	if t.BaseBranch == "" {
 		errs = append(errs, errors.New("base branch is empty"))
 	}

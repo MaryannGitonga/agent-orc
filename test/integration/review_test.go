@@ -46,6 +46,24 @@ func runWorker(t *testing.T, home, stub, repo, id string, extra ...string) revie
 	return loadReviewRecord(t, home, id)
 }
 
+// runWorkerWithCLI dispatches a task under the named *worker* CLI, with the
+// other of the two as its reviewer. The reviewer is what most callers actually
+// care about, so read it as picking that one by elimination: pass "copilot" to
+// get a claude reviewer.
+func runWorkerWithCLI(t *testing.T, home, stub, repo, id, workerCLI string) reviewRecord {
+	t.Helper()
+	reviewer := "claude"
+	if workerCLI == "claude" {
+		reviewer = "copilot"
+	}
+	if out, err := orcRun(t, home, stub, "run", "--id", id, "--repo", repo, "--cli", workerCLI,
+		"--prompt", "do the thing", "--no-auto-pr", "--review", "--review-cli", reviewer); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, id, "done", "failed")
+	return loadReviewRecord(t, home, id)
+}
+
 // TestRunRecordsAResumableSessionID checks that a session ID is assigned at
 // launch and passed to the CLI, which is what makes the feedback loop possible.
 func TestRunRecordsAResumableSessionID(t *testing.T) {
@@ -60,6 +78,60 @@ func TestRunRecordsAResumableSessionID(t *testing.T) {
 	}
 	if r := readFile(t, receipt); !strings.Contains(r, "arg=--session-id") || !strings.Contains(r, "arg="+got.SessionID) {
 		t.Errorf("the session id was not passed to the CLI:\n%s", r)
+	}
+}
+
+// TestReviewReadsAVerdictOutOfAJSONEnvelope covers a reviewer whose CLI wraps
+// its answer instead of printing it. Every other review test stubs a CLI that
+// echoes bare prose, so the verdict is the whole of stdout; a real Claude Code
+// run buries it in one field of a very large object, and reading that object
+// as prose finds neither an approval nor a comment list.
+func TestReviewReadsAVerdictOutOfAJSONEnvelope(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "copilot", filepath.Join(t.TempDir(), "receipt"), workerCommit)
+	// The shape Claude Code writes under --output-format json, verdict included.
+	stubInto(t, stub, "claude", filepath.Join(t.TempDir(), "reviewer"),
+		`printf '{"type":"result","subtype":"success","is_error":false,`+
+			`"num_turns":6,"total_cost_usd":0.13,"session_id":"s1","result":"LGTM"}\n'`)
+
+	runWorkerWithCLI(t, home, stub, repo, "REVJ-1", "copilot")
+
+	out, err := orcRun(t, home, stub, "review", "REVJ-1")
+	if err != nil {
+		t.Fatalf("agent-orc review = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "approved") {
+		t.Errorf("review output = %q, want the approval read out of the envelope", out)
+	}
+	got := loadReviewRecord(t, home, "REVJ-1")
+	if got.Status != "reviewed" || got.ReviewRound != 1 {
+		t.Errorf("status/round = %q/%d, want reviewed/1", got.Status, got.ReviewRound)
+	}
+}
+
+// TestReviewReadsCommentsOutOfAJSONEnvelope is the other half: a wrapped
+// verdict that is a comment list has to reach the worker, newlines intact.
+func TestReviewReadsCommentsOutOfAJSONEnvelope(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	workerReceipt := filepath.Join(t.TempDir(), "receipt")
+	stub := stubAgent(t, "copilot", workerReceipt, workerCommit)
+	stubInto(t, stub, "claude", filepath.Join(t.TempDir(), "reviewer"),
+		`printf '{"type":"result","subtype":"success","result":"- greeter.py: farewell() has no test\\n- README.md: document the new function"}\n'`)
+
+	runWorkerWithCLI(t, home, stub, repo, "REVJ-2", "copilot")
+
+	out, err := orcRun(t, home, stub, "review", "REVJ-2")
+	if err != nil {
+		t.Fatalf("agent-orc review = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "raised 2 comment(s)") {
+		t.Errorf("review output = %q, want both comments read out of the envelope", out)
+	}
+	// And they were handed back to the worker, not just printed.
+	if r := readFile(t, workerReceipt); !strings.Contains(r, "farewell() has no test") {
+		t.Errorf("the worker was not given the comments:\n%s", r)
 	}
 }
 

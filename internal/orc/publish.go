@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/forge"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
@@ -32,6 +33,11 @@ var ErrNoCommits = errors.New("the agent committed nothing")
 // either: a draft PR someone is waiting for will never appear.
 var ErrNothingToPublish = errors.New("the agent committed nothing to publish")
 
+// ErrRunReplaced means the task id was cleaned up and dispatched again before
+// the publish chain got to it, so the record now under that id describes work
+// this publisher has nothing to do with.
+var ErrRunReplaced = errors.New("the task id belongs to a later run")
+
 // Publisher runs the sanitize, push and draft-PR chain for a finished task.
 //
 // The order matters and is not negotiable: nothing is pushed until the commit
@@ -43,6 +49,34 @@ type Publisher struct {
 	opener *forge.Opener
 	self   string
 	out    io.Writer
+	// owns scopes writes to one dispatch; see OwnRun.
+	owns time.Time
+}
+
+// OwnRun scopes every write this publisher makes to one dispatch of the task,
+// identified by the StartedAt it was given. The supervisor sets it because the
+// publish chain runs after the agent has exited, by which point the task can
+// have been cleaned up and its id dispatched again; without this the chain
+// would stamp the finished run's push and PR onto a task that is still working.
+// `agent-orc pr` leaves it unset, since a human invoking it is acting on
+// whatever the id names now.
+//
+// It scopes the read as well as the writes. Publish checks the record it loads
+// against this before touching git, which is the check that matters: the
+// supervisor asks the same question first, but between its answer and Publish's
+// load the id can be dispatched again, and dropping only the state writes would
+// leave a branch already sanitized, force-pushed and opened as a pull request.
+func (p *Publisher) OwnRun(startedAt time.Time) { p.owns = startedAt }
+
+// update applies mutate, skipping the write when the record no longer belongs
+// to the run this publisher was scoped to.
+func (p *Publisher) update(id string, mutate func(*state.Task)) error {
+	return p.store.Update(id, func(k *state.Task) {
+		if !p.owns.IsZero() && !k.StartedAt.Equal(p.owns) {
+			return
+		}
+		mutate(k)
+	})
 }
 
 // NewPublisher returns a publisher writing progress to out.
@@ -66,6 +100,14 @@ func (p *Publisher) Publish(id string) error {
 	record, err := p.store.Load(id)
 	if err != nil {
 		return err
+	}
+	// Against the record about to be acted on, not against an earlier read of
+	// it. The caller checks too, but between its check and this load the id can
+	// be cleaned up and dispatched again, and everything below works from this
+	// record: sanitizing, force-pushing and opening a pull request for a branch
+	// belonging to a task that is still running.
+	if !p.owns.IsZero() && !record.StartedAt.Equal(p.owns) {
+		return fmt.Errorf("task %q: %w", id, ErrRunReplaced)
 	}
 	if record.Status.HasProcess() {
 		return fmt.Errorf("task %q is still %s; wait for it to finish or run 'agent-orc stop %s'",
@@ -129,7 +171,7 @@ func (p *Publisher) Publish(id string) error {
 	if rewritten > 0 {
 		// Recorded before the push, so the state reflects what happened to
 		// the branch even if opening the draft later fails.
-		if err := p.store.Update(id, func(k *state.Task) { k.RewrittenCommits = rewritten }); err != nil {
+		if err := p.update(id, func(k *state.Task) { k.RewrittenCommits = rewritten }); err != nil {
 			return err
 		}
 		fmt.Fprintf(p.out, "%s  rewrote %d commit message(s)\n", id, rewritten)
@@ -161,7 +203,7 @@ func (p *Publisher) Publish(id string) error {
 	}
 	// Recorded before the draft is opened, because that is the step that can
 	// fail and leave the branch on the remote for a later retry to recognise.
-	if err := p.store.Update(id, func(k *state.Task) { k.PushedSHA = pushed }); err != nil {
+	if err := p.update(id, func(k *state.Task) { k.PushedSHA = pushed }); err != nil {
 		return err
 	}
 	fmt.Fprintf(p.out, "%s  pushed %s\n", id, record.Branch)
@@ -175,7 +217,7 @@ func (p *Publisher) Publish(id string) error {
 	// failed attempt is stale. Recording it here rather than only in the
 	// supervisor is what lets a manual `agent-orc pr` retry actually finish a
 	// task that was left at publish_failed.
-	if err := p.store.Update(id, func(k *state.Task) {
+	if err := p.update(id, func(k *state.Task) {
 		k.PRURL = url
 		k.Status = state.StatusDone
 		k.Error = ""
@@ -208,7 +250,7 @@ func (p *Publisher) checkAgentDidNotPublish(record *state.Task) error {
 	if record.PushedSHA != "" && remoteSHA == record.PushedSHA {
 		return nil
 	}
-	if uerr := p.store.Update(record.ID, func(k *state.Task) {
+	if uerr := p.update(record.ID, func(k *state.Task) {
 		k.Status = state.StatusPolicyViolation
 		k.Error = fmt.Sprintf("the agent pushed %s itself; the remote branch has not been sanitized", record.Branch)
 	}); uerr != nil {

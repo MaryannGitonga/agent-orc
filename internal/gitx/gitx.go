@@ -84,13 +84,43 @@ func (r *Repo) AddWorktree(dir, branch, base string) error {
 	return nil
 }
 
-// DeleteBranch removes a local branch. It exists to undo a branch agent-orc
-// created moments earlier, not to throw away a user's work.
+// DeleteBranch removes a local branch.
+//
+// It is always git's unconditional delete. git's own safe delete asks whether
+// the branch is merged into the current HEAD, which is not the question here:
+// a task branch is judged against the base it was cut from, and whoever calls
+// this has already decided. See the check in the cleanup path.
 func (r *Repo) DeleteBranch(branch string) error {
-	if _, err := run(r.Dir, "branch", "-D", branch); err != nil {
-		return fmt.Errorf("deleting branch %q: %w", branch, err)
+	// The separator keeps a name beginning with a dash from being read as a
+	// flag. Such a branch cannot be made through agent-orc, since the worktree
+	// creation that would make it fails on the same confusion, but it can
+	// exist in a repository by other means and this costs nothing.
+	if out, err := run(r.Dir, "branch", "-D", "--", branch); err != nil {
+		return fmt.Errorf("deleting branch %q: %w: %s", branch, err, out)
 	}
 	return nil
+}
+
+// IsAncestor reports whether rev is reachable from other, which is how a task
+// branch that added nothing of its own is told from one that did.
+func (r *Repo) IsAncestor(rev, other string) bool {
+	_, err := run(r.Dir, "merge-base", "--is-ancestor", "--", rev, other)
+	return err == nil
+}
+
+// SHA resolves a revision to its commit id.
+//
+// There is deliberately no `--` here. rev-parse reads it as the start of path
+// arguments rather than as an end-of-options marker, so `rev-parse -- HEAD`
+// prints "-- HEAD" instead of resolving anything, and `--end-of-options` is
+// echoed into the output this reads back. The guard belongs at the entry
+// point instead, where a branch name that would need one is refused.
+func (r *Repo) SHA(rev string) (string, error) {
+	out, err := run(r.Dir, "rev-parse", rev+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolving %q: %w", rev, err)
+	}
+	return out, nil
 }
 
 // RemoveWorktree deletes the worktree at dir. Its branch is left alone: that

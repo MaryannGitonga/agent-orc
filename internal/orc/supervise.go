@@ -21,6 +21,9 @@ type Supervisor struct {
 	layout paths.Layout
 	store  *state.Store
 	out    io.Writer
+	// startedAt identifies the run this supervisor was launched for, so its
+	// writes can be told from those of a later task reusing the same id.
+	startedAt time.Time
 }
 
 // NewSupervisor returns a supervisor logging its own progress to out.
@@ -34,6 +37,7 @@ func (s *Supervisor) Supervise(id string) error {
 	if err != nil {
 		return err
 	}
+	s.startedAt = record.StartedAt
 
 	logFile, err := os.OpenFile(record.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -61,7 +65,7 @@ func (s *Supervisor) Supervise(id string) error {
 		return s.fail(id, fmt.Errorf("starting %s: %w", argv[0], err))
 	}
 
-	if err := s.store.Update(id, func(k *state.Task) {
+	if err := s.update(id, func(k *state.Task) {
 		k.Status = state.StatusRunning
 		k.PID = cmd.Process.Pid
 	}); err != nil {
@@ -95,7 +99,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	usage := s.readUsage(record)
 	sessionID := s.readSessionID(record)
 
-	if err := s.store.Update(id, func(k *state.Task) {
+	if err := s.update(id, func(k *state.Task) {
 		// A task a human stopped stays stopped; the non-zero exit that came
 		// from the signal is not a failure of the agent's own making.
 		if k.Status != state.StatusStopped {
@@ -136,13 +140,30 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 // A publish failure does not fail the task: the agent's work is committed and
 // on its branch either way. It is logged and left for `agent-orc pr` to retry.
 func (s *Supervisor) publish(id string, record state.Task) {
+	// Unlike the writes above, this is not covered by scoping the publisher:
+	// Publish loads the record itself, so the guard would drop its state writes
+	// while it had already sanitized, force-pushed and opened a pull request
+	// against whatever branch the id names now. Checking ownership before
+	// starting is the only place that catches it.
+	if !s.owns(id) {
+		s.logf("this task's id now belongs to a later run; not publishing")
+		return
+	}
 	p, err := NewPublisher(s.layout, s.out)
 	if err == nil {
+		p.OwnRun(s.startedAt)
 		err = p.Publish(id)
 	}
 	if err == nil {
 		s.mark(id, state.StatusDone, "")
 		s.logf("task %s is done", id)
+		return
+	}
+	if errors.Is(err, ErrRunReplaced) {
+		// The id was dispatched again between the check above and the load
+		// inside Publish. Nothing was done, and nothing about the run that now
+		// owns the id is this supervisor's to record.
+		s.logf("this task's id now belongs to a later run; nothing was published")
 		return
 	}
 	if errors.Is(err, ErrNoRemote) {
@@ -177,9 +198,47 @@ func (s *Supervisor) publish(id string, record state.Task) {
 	s.mark(id, state.StatusPublishFailed, err.Error())
 }
 
+// update applies mutate only while the stored record is still the run this
+// supervisor was started for.
+//
+// An id becomes reusable the moment its task is cleaned up, and cleanup does
+// not wait for the supervisor: `stop` signals the agent and returns without
+// waiting for it to die, and a forced cleanup does not look at the process at
+// all. So a supervisor can still be inside its final write when a new task is
+// dispatched under the same id, and a blind store.Update would then stamp the
+// old run's status, exit code and a zero pid onto the new one, leaving a task
+// that is running but recorded as finished and cannot be stopped.
+//
+// StartedAt is the generation marker: it is set once per dispatch and never
+// changes afterwards, so a mismatch means this supervisor no longer owns the
+// id and its write is dropped.
+func (s *Supervisor) update(id string, mutate func(*state.Task)) error {
+	stale := false
+	err := s.store.Update(id, func(k *state.Task) {
+		if !k.StartedAt.Equal(s.startedAt) {
+			stale = true
+			return
+		}
+		mutate(k)
+	})
+	if stale {
+		s.logf("this task's id now belongs to a later run; not recording anything against it")
+	}
+	return err
+}
+
+// owns reports whether the id still belongs to the run this supervisor was
+// started for. A task can be cleaned up and its id dispatched again while this
+// supervisor is still working, and anything that acts on the id rather than on
+// the record it already holds has to ask first.
+func (s *Supervisor) owns(id string) bool {
+	current, err := s.store.Load(id)
+	return err == nil && current.StartedAt.Equal(s.startedAt)
+}
+
 // mark sets a task's terminal status.
 func (s *Supervisor) mark(id string, status state.Status, message string) {
-	if err := s.store.Update(id, func(k *state.Task) {
+	if err := s.update(id, func(k *state.Task) {
 		k.Status = status
 		if message != "" {
 			k.Error = message
@@ -226,7 +285,7 @@ func (s *Supervisor) readSessionID(record state.Task) string {
 // fail records a task that could not be run at all.
 func (s *Supervisor) fail(id string, cause error) error {
 	now := time.Now().UTC()
-	if err := s.store.Update(id, func(k *state.Task) {
+	if err := s.update(id, func(k *state.Task) {
 		k.Status = state.StatusFailed
 		k.PID = 0
 		k.FinishedAt = &now

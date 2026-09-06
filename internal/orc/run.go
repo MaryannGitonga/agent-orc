@@ -102,7 +102,14 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		return fmt.Errorf("base branch %q does not exist in %s", t.BaseBranch, repo.Dir)
 	}
 	if repo.BranchExists(t.Branch) {
-		return fmt.Errorf("branch %q already exists in %s; pick another --branch", t.Branch, repo.Dir)
+		// The branch outliving its task is the normal case, since cleanup
+		// leaves it behind on purpose, so this fires most often on a retry of
+		// an id that was cleaned up. Name the command that clears it: by now
+		// the state file is gone, so 'agent-orc cleanup' no longer knows the
+		// branch and cannot be the answer.
+		return fmt.Errorf("branch %q already exists in %s; delete it with %s if it holds nothing you want, or pick another --branch",
+			t.Branch, repo.Dir,
+			shellCommand("git", "-C", repo.Dir, "branch", "-D", "--", t.Branch))
 	}
 
 	worktree := d.layout.Worktree(t.ID)
@@ -158,6 +165,23 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		// that makes a retry with the same id fail on the collision check.
 		_ = repo.RemoveWorktree(worktree, true)
 		_ = repo.DeleteBranch(t.Branch)
+		return err
+	}
+
+	// A task id is reusable once its predecessor has been cleaned up, and the
+	// log paths are derived from the id alone, so a stale log would otherwise
+	// be appended to and 'agent-orc logs' would open with the previous run's
+	// output. Everything within one task still appends: the review rounds
+	// write into the same files as the worker.
+	if err := d.truncateLogs(t.ID); err != nil {
+		// The record already exists, so returning here without marking it
+		// would leave a task that is pending forever: nothing to stop, since
+		// there is no pid, and an id that is taken. Fail it the way the
+		// startSupervisor path below does, so ordinary cleanup can recover it.
+		_ = d.store.Update(t.ID, func(k *state.Task) {
+			k.Status = state.StatusFailed
+			k.Error = err.Error()
+		})
 		return err
 	}
 
@@ -287,6 +311,55 @@ func (d *Dispatcher) resolvePrompt(ctx context.Context, t task.Task) (task.Task,
 	}
 	t.Prompt = source.Compose(fetched, t.Prompt)
 	return t, nil
+}
+
+// shellCommand renders argv as a command that can be pasted into a shell.
+//
+// Neither of the values this is used on is safe to interpolate raw: a
+// repository path may contain spaces, and git allows characters in a branch
+// name that a shell would treat as syntax, so an unquoted suggestion could
+// fail or run something else entirely when copied.
+func shellCommand(argv ...string) string {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// shellQuote wraps s in single quotes, which a POSIX shell takes literally,
+// ending and reopening them around any single quote of its own.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(s, " \t\n\"'\\$`&;|<>()*?[]#~!{}") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// truncateLogs clears whatever a previous task of the same id left behind. It
+// is called once the launch is certain, so a run that fails its checks leaves
+// the earlier task's record readable.
+//
+// The files are unlinked rather than truncated in place. An orphaned supervisor
+// from the previous task can still hold one of them open, and its handle is in
+// append mode, so truncating would leave that writer appending into the file
+// the new run is using and interleave two tasks' output. Unlinking leaves the
+// old handle writing into an inode nobody can reach, which goes away when it
+// closes, and the new run opens a file of its own.
+func (d *Dispatcher) truncateLogs(id string) error {
+	for _, path := range []string{
+		d.layout.LogFile(id),
+		d.layout.SupervisorLogFile(id),
+		d.layout.ReviewLogFile(id),
+	} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("clearing %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 // standingInstructions combines the machine-wide instructions file with

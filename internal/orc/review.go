@@ -78,7 +78,15 @@ func (r *Reviewer) round(record *state.Task) (bool, error) {
 		return false, err
 	}
 
-	verdict, err := review.ParseVerdict(output)
+	// What the reviewer *said*, not what its CLI printed around it: a CLI that
+	// answers in JSON buries the verdict in a field of a very large object,
+	// and parsing the envelope as prose finds neither an approval nor a list.
+	a, err := adapter.For(record.ReviewerCLI())
+	if err != nil {
+		return false, err
+	}
+
+	verdict, err := review.ParseVerdict(a.ParseResult(output))
 	if err != nil {
 		// §15: an unreadable verdict stops and waits for a human rather than
 		// being guessed at in either direction.
