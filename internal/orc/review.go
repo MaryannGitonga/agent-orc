@@ -38,12 +38,27 @@ func NewReviewer(layout paths.Layout, out io.Writer) *Reviewer {
 // acting on whatever the id names now.
 func (r *Reviewer) OwnRun(startedAt time.Time) { r.owns = startedAt }
 
-// stopped reports whether a human has stopped the task. A stop lands as a
-// killed child or as a record change, and between rounds there is no child, so
-// the record is the only place it shows.
-func (r *Reviewer) stopped(id string) bool {
+// mayContinue says why this reviewer should stop working on the task, or nil to
+// carry on. It answers nothing for a reviewer that is not scoped to a run,
+// which is what `agent-orc review` builds.
+//
+// Both reasons come from one read: a stop lands as a killed child or as a
+// record change, and between rounds there is no child, so the record is the
+// only place either shows.
+func (r *Reviewer) mayContinue(id string) error {
+	if r.owns.IsZero() {
+		return nil
+	}
 	current, err := r.store.Load(id)
-	return err == nil && current.Status == state.StatusStopped
+	switch {
+	case err != nil:
+		return fmt.Errorf("re-reading task %q: %w", id, err)
+	case !current.StartedAt.Equal(r.owns):
+		return fmt.Errorf("task %q now belongs to a later run; no further review rounds", id)
+	case current.Status == state.StatusStopped:
+		return fmt.Errorf("task %q was stopped; no further review rounds", id)
+	}
+	return nil
 }
 
 // update applies mutate, skipping the write when the record no longer belongs
@@ -127,13 +142,16 @@ func (r *Reviewer) Review(id string) error {
 // makes, and it is itself the thing that would otherwise be moving the branch.
 func (r *Reviewer) Rounds(record *state.Task) (bool, error) {
 	for {
-		// Only the automatic pass asks: it runs inside the supervisor, where a
-		// stop is meant to end the work, and each further round pays for both
-		// a reviewer and a worker. A human running `agent-orc review` on a
-		// stopped task is asking for something reasonable, since the work is
-		// still sitting on the branch.
-		if !r.owns.IsZero() && r.stopped(record.ID) {
-			return false, fmt.Errorf("task %q was stopped; no further review rounds", record.ID)
+		// Only the automatic pass asks, and one load answers both questions it
+		// has. It runs inside the supervisor, where a stop is meant to end the
+		// work and where the id can be cleaned up and dispatched again while
+		// the loop is still going: scoping the writes is not enough for that,
+		// because a round checks out the branch the id names now and pays for
+		// a reviewer and a worker to work on it. A human running `agent-orc
+		// review` on a stopped task is asking for something reasonable, since
+		// the work is still sitting on the branch, so none of this applies.
+		if err := r.mayContinue(record.ID); err != nil {
+			return false, err
 		}
 		before := headSHA(record.Worktree)
 		approved, err := r.round(record)

@@ -57,9 +57,15 @@ func (s *Supervisor) verify(record state.Task) error {
 	for attempt := 1; ; attempt++ {
 		// Asked before each run, not only after one fails: a stop recorded in
 		// the gap between attempts has nothing to kill, and the only way it
-		// takes effect is the loop declining to start the next command.
+		// takes effect is the loop declining to start the next command. The
+		// same read covers the id having been dispatched again, since this
+		// loop runs until the suite passes and that is long enough for a task
+		// to be cleaned up and replaced underneath it.
 		if s.wasStopped(record.ID) {
 			return fmt.Errorf("task %q was stopped before its tests could be run again", record.ID)
+		}
+		if !s.owns(record.ID) {
+			return fmt.Errorf("task %q now belongs to a later run; its tests are not ours to run", record.ID)
 		}
 		s.logf("running the test command (attempt %d): %s", attempt, command)
 		output, runErr := s.runTestCommand(record.ID, record.Worktree, command, record.TestRunTimeout())

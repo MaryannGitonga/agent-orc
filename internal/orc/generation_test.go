@@ -310,3 +310,59 @@ func TestMarkDoesNotUndoAStop(t *testing.T) {
 		}
 	}
 }
+
+// TestReviewRoundsStopForALaterRun covers the loop that runs longest. Scoping
+// the writes is not enough here: a round checks out whatever branch the id
+// names now and pays a reviewer and a worker to work on it, so a supervisor
+// whose task has been cleaned up and replaced has to stop before it starts one,
+// not merely have its bookkeeping dropped afterwards.
+func TestReviewRoundsStopForALaterRun(t *testing.T) {
+	dir := t.TempDir()
+	layout := paths.New(dir)
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(layout.State)
+	current := state.Task{
+		Task:      task.Task{ID: "PROJ-8", CLI: task.CLIClaude, Branch: "agent-orc/proj-8"},
+		Status:    state.StatusRunning,
+		StartedAt: time.Now().UTC(),
+		// Nonsense on purpose: reaching git at all would be the bug.
+		Worktree: filepath.Join(dir, "no-such-worktree"),
+	}
+	if err := store.Save(current); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewReviewer(layout, io.Discard)
+	r.OwnRun(current.StartedAt.Add(-time.Hour))
+	held := current
+	approved, err := r.Rounds(&held)
+	if approved {
+		t.Fatal("a stale reviewer approved a branch it does not own")
+	}
+	if err == nil || !strings.Contains(err.Error(), "belongs to a later run") {
+		t.Fatalf("Rounds() = %v, want it to decline before starting a round", err)
+	}
+
+	// A stop is the other reason to stop, from the same read.
+	if err := store.Update("PROJ-8", func(k *state.Task) { k.Status = state.StatusStopped }); err != nil {
+		t.Fatal(err)
+	}
+	r = NewReviewer(layout, io.Discard)
+	r.OwnRun(current.StartedAt)
+	held = current
+	if _, err := r.Rounds(&held); err == nil || !strings.Contains(err.Error(), "was stopped") {
+		t.Errorf("Rounds() = %v, want it to decline a stopped task", err)
+	}
+
+	// And a reviewer nobody scoped, which is what `agent-orc review` builds,
+	// is not held back by either: it gets as far as needing a real worktree.
+	r = NewReviewer(layout, io.Discard)
+	held = current
+	if _, err := r.Rounds(&held); err == nil ||
+		strings.Contains(err.Error(), "belongs to a later run") ||
+		strings.Contains(err.Error(), "was stopped") {
+		t.Errorf("Rounds() = %v, want an unscoped reviewer to proceed to the work", err)
+	}
+}
