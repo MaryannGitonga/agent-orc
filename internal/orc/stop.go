@@ -140,24 +140,25 @@ func waitForGroup(pid int, d time.Duration) bool {
 // Asking only about the leader is not the same question: an agent's test runner
 // or compiler is in the same group, and one of those outliving a leader that
 // exited on SIGTERM would end the wait early and never be escalated to, leaving
-// it running after the task is recorded as stopped. Signal 0 against the
-// negative pid asks about the whole group; ESRCH from that is either an empty
-// group or a record written before agents had one, so the leader is checked
-// on its own before concluding anything is gone.
+// it running after the task is recorded as stopped.
+//
+// ESRCH means the group is gone, and that is the end of it. Falling back to the
+// leader's own pid would be asking about whoever holds that number now: a pid
+// is reused as soon as its process is reaped, so a record left stale by a
+// missed reconcile would have this wait on, and then SIGKILL, something with no
+// connection to the task.
 func groupAlive(pid int) bool {
 	err := syscall.Kill(-pid, 0)
-	if errors.Is(err, syscall.ESRCH) {
-		return processAlive(pid)
-	}
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// signal sends sig to a process group, falling back to the process alone for
-// records written before agents were given a group of their own.
+// signal sends sig to a process group, and only ever to a group.
+//
+// Every pid agent-orc records belongs to a process it started with Setpgid, so
+// the group always exists while the process does, and it has been that way
+// since before the first release: there are no records to be compatible with
+// that lack one. Signalling a bare pid as a fallback would therefore never help
+// a real record, and would reach an unrelated process holding a reused number.
 func signal(pid int, sig syscall.Signal) error {
-	err := syscall.Kill(-pid, sig)
-	if errors.Is(err, syscall.ESRCH) {
-		return syscall.Kill(pid, sig)
-	}
-	return err
+	return syscall.Kill(-pid, sig)
 }

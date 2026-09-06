@@ -54,3 +54,33 @@ func TestSignalGroupOutlastsAStubbornChild(t *testing.T) {
 		t.Error("the group survived; the escalation never reached the child")
 	}
 }
+
+// TestGroupAliveIgnoresAReusedPID covers the difference between "this group is
+// gone" and "something else holds that number now". A pid is reused as soon as
+// its process is reaped, so a record left stale by a missed reconcile names a
+// pid that may belong to anyone. Consulting the bare pid there would have stop
+// wait on a stranger and then SIGKILL it.
+func TestGroupAliveIgnoresAReusedPID(t *testing.T) {
+	// A live process that is not a group leader, which is what a reused pid
+	// almost always names: it inherits this test binary's group, so no group
+	// carries its own number.
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+	pid := cmd.Process.Pid
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	if !processAlive(pid) {
+		t.Fatal("the stand-in process is not running, so there is nothing to confuse")
+	}
+	if syscall.Kill(-pid, 0) == nil {
+		t.Skip("this pid happens to name a real group; nothing to assert")
+	}
+	if groupAlive(pid) {
+		t.Error("a live process that leads no group was read as the task's group still running")
+	}
+}
