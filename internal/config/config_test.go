@@ -227,3 +227,17 @@ func TestShippedExampleIsValid(t *testing.T) {
 		}
 	}
 }
+
+// TestBatchAutoReviewImpliesEnabled covers the file half of the same invariant:
+// a batch that asks for review on finishing has asked for review, and the
+// supervisor only runs it when both are set.
+func TestBatchAutoReviewImpliesEnabled(t *testing.T) {
+	f, err := Parse([]byte("defaults:\n  cli: claude\n  review:\n    auto: true\ntasks:\n  - id: A\n    prompt: x\n"))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	got := f.Resolved(f.Tasks[0]).Review
+	if !got.Enabled || !got.Auto {
+		t.Errorf("review = %+v, want auto to have enabled it", got)
+	}
+}

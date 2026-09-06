@@ -307,7 +307,7 @@ func buildTask(f flags) (task.Task, error) {
 		Budget:      budget,
 		AutoPR:      f.autoPR,
 		DCOSignoff:  f.dcoSignoff,
-		Review:      f.review,
+		Review:      f.review.Normalize(),
 		TestCommand: f.testCommand,
 		TestTimeout: f.testTimeout,
 	})

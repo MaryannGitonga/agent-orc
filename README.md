@@ -424,6 +424,10 @@ agent-orc run --id PROJ-1234 --cli claude --prompt "..." \
 agent-orc review PROJ-1234
 ```
 
+Asking for review on finishing is asking for review, so `auto` turns `enabled`
+on by itself, in a batch file and in the settings layers as well as on the
+command line.
+
 `--auto-review` runs it for you instead, the moment the agent finishes and
 before the branch is published, so the draft PR that opens has already been
 through a round rather than being opened and then changed under whoever started

@@ -229,6 +229,34 @@ func TestVerifyRejectsABadTimeout(t *testing.T) {
 	}
 }
 
+// TestBatchAutoReviewRunsWithoutEnabled covers the invariant end to end. A
+// batch that asks for review on finishing has asked for review, and before the
+// two were tied together such a file dispatched a task that quietly never got
+// reviewed at all.
+func TestBatchAutoReviewRunsWithoutEnabled(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	reviewer := filepath.Join(t.TempDir(), "reviewer")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"),
+		"printf 'work\\n' > out.txt\ngit add . && git commit --no-gpg-sign -m 'feat: work' >/dev/null")
+	stubInto(t, stub, "copilot", reviewer, `printf 'LGTM\n'`)
+
+	batch := filepath.Join(t.TempDir(), "tasks.yaml")
+	// auto, and deliberately no enabled.
+	write(t, batch, "repo: "+repo+"\ndefaults:\n  cli: claude\n  auto_pr: false\n  review:\n    auto: true\n    cli: copilot\ntasks:\n  - id: BAUTO-1\n    prompt: do it\n")
+
+	if out, err := orcRun(t, home, stub, "run", batch); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	if got := waitForStatus(t, home, "BAUTO-1", "done", "failed", "review_failed"); got.Status != "done" {
+		t.Fatalf("status = %q, want done\n%s", got.Status,
+			readFile(t, filepath.Join(home, "logs", "BAUTO-1.supervisor.log")))
+	}
+	if r := readFile(t, reviewer); !strings.Contains(r, "git diff main...HEAD") {
+		t.Errorf("the reviewer never ran, so auto did not imply enabled:\n%s", r)
+	}
+}
+
 // TestStopReachesAHangingTestCommand covers the phases that run after the agent
 // has exited. Both loops run until they succeed, so a test command that never
 // returns would hang the task forever; before the child was given a process

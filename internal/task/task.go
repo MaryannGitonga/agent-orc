@@ -131,6 +131,20 @@ type Review struct {
 	Auto bool `yaml:"auto" json:"auto,omitempty"`
 }
 
+// Normalize applies the invariants a review block has to satisfy however it was
+// built, from flags or from a file.
+//
+// Asking for a review when the agent finishes is asking for a review, so auto
+// implies enabled. It lives here rather than at each construction site because
+// it was written at two of them and not the third, and a batch file that set
+// only `auto` silently got no review at all.
+func (r Review) Normalize() Review {
+	if r.Auto {
+		r.Enabled = true
+	}
+	return r
+}
+
 // ReviewerCLI returns the CLI that should run the review for a worker task.
 // With nothing configured it picks a CLI other than the worker's, so the two
 // sessions are less likely to make the same mistake.

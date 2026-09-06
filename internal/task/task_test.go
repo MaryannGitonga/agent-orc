@@ -264,3 +264,20 @@ func TestRenderTestRuleFollowsTheThreeStates(t *testing.T) {
 		t.Errorf("the operating rules went missing with the test rule:\n%s", got)
 	}
 }
+
+// TestReviewNormalizeMakesAutoImplyEnabled covers the invariant that used to be
+// written at two construction sites and missing from the third, which left a
+// batch file setting only `auto` with no review at all.
+func TestReviewNormalizeMakesAutoImplyEnabled(t *testing.T) {
+	if got := (Review{Auto: true}).Normalize(); !got.Enabled {
+		t.Error("auto did not imply enabled, so the supervisor's Enabled && Auto never fires")
+	}
+	// It only ever adds: a review that was asked for by hand stays that way,
+	// and one nobody asked for is not turned on.
+	if got := (Review{Enabled: true}).Normalize(); got.Auto {
+		t.Error("enabled turned auto on; review is meant to stay manual unless asked")
+	}
+	if got := (Review{}).Normalize(); got.Enabled || got.Auto {
+		t.Errorf("an empty block became %+v, want it left alone", got)
+	}
+}

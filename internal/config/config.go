@@ -247,7 +247,7 @@ func (f *File) Resolved(e Entry) task.Task {
 		},
 		AutoPR:      autoPR,
 		DCOSignoff:  f.DCOSignoff,
-		Review:      mergeReview(e.Review, f.Defaults.Review),
+		Review:      mergeReview(e.Review, f.Defaults.Review).Normalize(),
 		TestCommand: pick(e.TestCommand, f.Defaults.TestCommand),
 		TestTimeout: mustTestTimeout(pick(e.TestTimeout, f.Defaults.TestTimeout)),
 	}
