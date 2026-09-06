@@ -115,8 +115,14 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 			k.Error = message
 		}
 		k.PID = 0
-		k.FinishedAt = &now
 		k.ExitCode = &code
+		// Only once the task is actually finished. The gates below run after
+		// the agent exits and can take as long as the tests and the reviewer
+		// need, so stamping this here would freeze the elapsed time `status`
+		// reports at the moment the agent stopped and hide all of it.
+		if !k.Status.Active() {
+			k.FinishedAt = &now
+		}
 		if usage != nil {
 			k.SpentUSD = usage.CostUSD
 			k.Tokens = usage.Tokens
@@ -192,10 +198,11 @@ func (s *Supervisor) autoReview(record *state.Task) error {
 		s.logf("the reviewer approved the branch after %d round(s)", record.ReviewRound)
 		return nil
 	}
-	// Not an error: the cap is a deliberate stop, and the work is still worth
-	// publishing for a human to pick up. It is only recorded so status can say
-	// the review ended on the cap rather than on an approval.
-	s.logf("the review cap was reached without an approval; publishing anyway")
+	// Not an error, and no longer a cap: the loop ends without an approval only
+	// when the worker stopped acting on the comments, which is as far as an
+	// automatic round can get on its own. The work is still worth publishing
+	// for a human to pick up, so say why it stopped and carry on.
+	s.logf("the review ended without an approval because the worker stopped changing anything; publishing anyway")
 	return nil
 }
 
@@ -329,8 +336,16 @@ func (s *Supervisor) failUnlessStopped(id string, cause error) {
 // means the watcher can act, and delete the very directory being written to,
 // before the process has finished with it.
 func (s *Supervisor) mark(id string, status state.Status, message string) {
+	now := time.Now().UTC()
 	if err := s.update(id, func(k *state.Task) {
 		k.Status = status
+		// A phase that is still working has no finish time yet, and a task that
+		// has one finished when this said so, not when its agent did.
+		if status.Active() {
+			k.FinishedAt = nil
+		} else {
+			k.FinishedAt = &now
+		}
 		if message != "" {
 			k.Error = message
 		}

@@ -429,7 +429,7 @@ func cleanupCmd(argv []string, out io.Writer) error {
 		return c.CleanAll(*force, *delBranch)
 	}
 	if id == "" {
-		return errors.New("usage: agent-orc cleanup <task-id|--all> [--force]")
+		return errors.New("usage: agent-orc cleanup <task-id|--all> [--force] [--delete-branch]")
 	}
 	return c.Clean(id, *force, *delBranch)
 }

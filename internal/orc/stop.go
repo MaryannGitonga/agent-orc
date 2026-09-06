@@ -72,6 +72,11 @@ func (r *Reporter) Stop(id string) error {
 // rather than a wait.
 const stopGrace = 5 * time.Second
 
+// killGrace is how long the group is given to disappear after SIGKILL, which
+// it cannot refuse. It is short because the only thing that outlasts it is a
+// process stuck in the kernel, which no amount of waiting will fix.
+const killGrace = 2 * time.Second
+
 // signalGroup terminates the agent and everything it spawned, and makes sure it
 // is actually gone.
 //
@@ -88,20 +93,55 @@ func signalGroup(pid int) error {
 	if err := signal(pid, syscall.SIGTERM); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(stopGrace)
-	for processAlive(pid) {
+	if waitForGroup(pid, stopGrace) {
+		return nil
+	}
+	// Not going to honour the request. SIGKILL cannot be ignored, and ESRCH
+	// from here is the group having gone in the meantime, which is the outcome
+	// that was wanted.
+	if err := signal(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	// Confirm it, rather than assuming: a signal is delivered asynchronously,
+	// and returning the moment it was sent would let the caller record a task
+	// as stopped while its processes were still winding down. Only something
+	// stuck in the kernel survives this, and saying so beats claiming success.
+	if !waitForGroup(pid, killGrace) {
+		return fmt.Errorf("process group %d is still running after SIGKILL", pid)
+	}
+	return nil
+}
+
+// waitForGroup waits up to d for every process in the group to go, and reports
+// whether they did.
+func waitForGroup(pid int, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		if !groupAlive(pid) {
+			return true
+		}
 		if time.Now().After(deadline) {
-			// Not going to honour the request. SIGKILL cannot be ignored, and
-			// ESRCH from here is the process having exited in the meantime,
-			// which is the outcome that was wanted.
-			if err := signal(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-				return err
-			}
-			return nil
+			return false
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return nil
+}
+
+// groupAlive reports whether anything in the process group is still there.
+//
+// Asking only about the leader is not the same question: an agent's test runner
+// or compiler is in the same group, and one of those outliving a leader that
+// exited on SIGTERM would end the wait early and never be escalated to, leaving
+// it running after the task is recorded as stopped. Signal 0 against the
+// negative pid asks about the whole group; ESRCH from that is either an empty
+// group or a record written before agents had one, so the leader is checked
+// on its own before concluding anything is gone.
+func groupAlive(pid int) bool {
+	err := syscall.Kill(-pid, 0)
+	if errors.Is(err, syscall.ESRCH) {
+		return processAlive(pid)
+	}
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // signal sends sig to a process group, falling back to the process alone for

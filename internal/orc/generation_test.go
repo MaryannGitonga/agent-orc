@@ -190,3 +190,50 @@ func TestPublishRefusesARecordFromAnotherRun(t *testing.T) {
 		t.Errorf("Publish() = %v, want the owning run to get past the check", err)
 	}
 }
+
+// TestMarkKeepsFinishedAtHonest covers what `status` reports as elapsed. The
+// phases after the agent exits run until the tests pass or the reviewer
+// approves, so stamping a finish time when the agent stopped would freeze the
+// elapsed column there and hide every minute of them.
+func TestMarkKeepsFinishedAtHonest(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	finished := time.Now().UTC().Add(-time.Hour)
+	rec := state.Task{
+		Task:       task.Task{ID: "PROJ-5", CLI: task.CLIClaude},
+		Status:     state.StatusRunning,
+		StartedAt:  time.Now().UTC().Add(-2 * time.Hour),
+		FinishedAt: &finished,
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, startedAt: rec.StartedAt}
+
+	// A phase that is still working has not finished, whatever was stamped
+	// when its agent exited.
+	for _, active := range []state.Status{state.StatusVerifying, state.StatusReviewing, state.StatusPublishing} {
+		s.mark("PROJ-5", active, "")
+		got, err := store.Load("PROJ-5")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.FinishedAt != nil {
+			t.Errorf("%s left finished_at at %v, so elapsed stops counting mid-flight", active, got.FinishedAt)
+		}
+	}
+
+	// And a terminal status finishes it, now rather than an hour ago.
+	before := time.Now().UTC().Add(-time.Second)
+	s.mark("PROJ-5", state.StatusDone, "")
+	got, err := store.Load("PROJ-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FinishedAt == nil {
+		t.Fatal("done left finished_at unset, so elapsed would keep growing forever")
+	}
+	if got.FinishedAt.Before(before) {
+		t.Errorf("finished_at = %v, want when the task finished rather than when its agent did", got.FinishedAt)
+	}
+}
