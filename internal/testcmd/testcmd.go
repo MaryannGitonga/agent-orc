@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // None is the configured value that turns verification off for a repository
@@ -93,16 +94,34 @@ func hasNPMTestScript(dir string) bool {
 	return pkg.Scripts["test"] != ""
 }
 
-// pytestConfig are the files that configure pytest, any one of which means the
-// project has settled on it.
-var pytestConfig = []string{"pytest.ini", "tox.ini", "pyproject.toml", "setup.cfg"}
+// pytestConfig are the files that can configure pytest, with the section that
+// says one of them actually does. Only pytest.ini is pytest's alone; the rest
+// belong to packaging and tooling first, and a project can easily have them
+// without pytest anywhere in sight.
+var pytestConfig = []struct{ file, section string }{
+	{"pytest.ini", ""},
+	{"pyproject.toml", "[tool.pytest"},
+	{"setup.cfg", "[tool:pytest]"},
+	{"tox.ini", "[pytest]"},
+}
 
 // hasPytest looks for pytest's own configuration, and failing that for test
 // files named the way pytest collects them. The second check is what catches a
 // small project with tests and no packaging at all.
+//
+// The configuration check reads the file rather than trusting its name. pytest
+// is the one convention here that fails a project for having no tests: it exits
+// 5 when it collects nothing, where go test and cargo test both exit 0. So
+// taking a pyproject.toml written for Poetry or Ruff as proof of pytest would
+// not merely guess wrong, it would fail every task in that repository and
+// publish none of them.
 func hasPytest(dir string) bool {
-	for _, name := range pytestConfig {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+	for _, c := range pytestConfig {
+		data, err := os.ReadFile(filepath.Join(dir, c.file))
+		if err != nil {
+			continue
+		}
+		if c.section == "" || strings.Contains(string(data), c.section) {
 			return true
 		}
 	}

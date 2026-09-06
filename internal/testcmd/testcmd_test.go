@@ -36,9 +36,51 @@ func TestDiscover(t *testing.T) {
 		files: map[string]string{"package.json": `{"scripts":{"build":"tsc"}}`},
 		want:  "",
 	}, {
-		name:  "pytest configuration",
-		files: map[string]string{"pyproject.toml": "[tool.pytest.ini_options]\n"},
+		name:  "pytest configured in pyproject.toml",
+		files: map[string]string{"pyproject.toml": "[tool.pytest.ini_options]\naddopts = \"-q\"\n"},
 		want:  "python -m pytest -q",
+	}, {
+		// The common case for these files is packaging and tooling with no
+		// pytest anywhere. Guessing pytest there does not merely pick the wrong
+		// command: pytest exits 5 when it collects nothing, where go test and
+		// cargo test exit 0, so every task in the repository would fail and
+		// none would be published.
+		name:  "a pyproject.toml that is only packaging",
+		files: map[string]string{"pyproject.toml": "[tool.poetry]\nname = \"x\"\n"},
+		want:  "",
+	}, {
+		name:  "a pyproject.toml for a linter",
+		files: map[string]string{"pyproject.toml": "[tool.ruff]\nline-length = 100\n"},
+		want:  "",
+	}, {
+		name:  "pytest configured in setup.cfg",
+		files: map[string]string{"setup.cfg": "[metadata]\nname = x\n\n[tool:pytest]\n"},
+		want:  "python -m pytest -q",
+	}, {
+		name:  "a setup.cfg that is only packaging",
+		files: map[string]string{"setup.cfg": "[metadata]\nname = x\n"},
+		want:  "",
+	}, {
+		name:  "pytest configured in tox.ini",
+		files: map[string]string{"tox.ini": "[tox]\nenvlist = py311\n\n[pytest]\n"},
+		want:  "python -m pytest -q",
+	}, {
+		name:  "a tox.ini that only lists environments",
+		files: map[string]string{"tox.ini": "[tox]\nenvlist = py311\n"},
+		want:  "",
+	}, {
+		// pytest.ini is pytest's alone, so its name is enough.
+		name:  "a pytest.ini",
+		files: map[string]string{"pytest.ini": "[pytest]\n"},
+		want:  "python -m pytest -q",
+	}, {
+		// Packaging that says nothing about pytest, next to tests that do.
+		name: "packaging plus real test files",
+		files: map[string]string{
+			"pyproject.toml": "[tool.poetry]\nname = \"x\"\n",
+			"test_thing.py":  "",
+		},
+		want: "python -m pytest -q",
 	}, {
 		name:  "a bare pytest file, which is all a small project has",
 		files: map[string]string{"greeter.py": "", "test_greeter.py": ""},

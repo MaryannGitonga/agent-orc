@@ -340,7 +340,12 @@ session to fix, and refuses to publish while they are red. No configuration:
 | `go.mod` | `go test ./...` |
 | a `test` script in `package.json` | `npm test` |
 | `Cargo.toml` | `cargo test` |
-| pytest config, or `test_*.py` files | `python -m pytest -q` |
+| a pytest section in `pyproject.toml`, `setup.cfg` or `tox.ini`, a `pytest.ini`, or `test_*.py` files | `python -m pytest -q` |
+
+The pytest row reads those files rather than trusting their names: a
+`pyproject.toml` usually belongs to packaging or a linter, and pytest is the one
+convention here that fails a project for having no tests, exiting 5 when it
+collects nothing where `go test` and `cargo test` exit 0.
 
 The `Makefile` comes first on purpose: a repository that wrote a test target has
 already decided how its tests are run, and that beats anything inferred from the
