@@ -107,10 +107,17 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	usage := s.readUsage(record)
 	sessionID := s.readSessionID(record)
 
+	// What the record ends up saying, which is not always what was computed:
+	// a task a human stopped keeps that status, and logging the computed one
+	// would have the log claim a task is verifying while the record says it
+	// was stopped.
+	recorded := status
 	if err := s.update(id, func(k *state.Task) {
 		// A task a human stopped stays stopped; the non-zero exit that came
 		// from the signal is not a failure of the agent's own making.
-		if k.Status != state.StatusStopped {
+		if k.Status == state.StatusStopped {
+			recorded = state.StatusStopped
+		} else {
 			k.Status = status
 			k.Error = message
 		}
@@ -134,7 +141,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 		return err
 	}
 
-	s.logf("agent exited with code %d; task is %s", code, status)
+	s.logf("agent exited with code %d; task is %s", code, recorded)
 	if runErr != nil {
 		return fmt.Errorf("task %s failed: %w", id, runErr)
 	}

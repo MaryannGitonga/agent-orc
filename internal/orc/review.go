@@ -81,8 +81,14 @@ func (r *Reviewer) Review(id string) error {
 		return err
 	}
 	if approved {
+		now := time.Now().UTC()
 		return r.update(id, func(k *state.Task) {
 			k.Status = state.StatusReviewed
+			// Reviewed is where the task stops, and `status` measures elapsed
+			// to whenever that was. Leaving the time its agent exited would
+			// hide however long the review itself took, which for a loop that
+			// runs until approval is the part worth seeing.
+			k.FinishedAt = &now
 			// A retry that succeeds is not still carrying the failure it
 			// followed: leaving the text of an earlier review_failed behind
 			// would have `status` report an approved branch with a reason it

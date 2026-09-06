@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // reviewRecord is the on-disk state with the Phase 4 fields.
 type reviewRecord struct {
 	record
-	SessionID   string `json:"session_id"`
-	ReviewRound int    `json:"review_round"`
+	SessionID   string     `json:"session_id"`
+	ReviewRound int        `json:"review_round"`
+	FinishedAt  *time.Time `json:"finished_at"`
 }
 
 func loadReviewRecord(t *testing.T, home, id string) reviewRecord {
@@ -171,6 +173,14 @@ func TestReviewApprovesAndStops(t *testing.T) {
 	got := loadReviewRecord(t, home, "REV-1")
 	if got.Status != "reviewed" {
 		t.Errorf("status = %q, want reviewed", got.Status)
+	}
+	// Reviewed is where the task stopped, so that is what elapsed measures to.
+	// Keeping the time its agent exited would hide the review entirely.
+	if got.FinishedAt == nil {
+		t.Error("finished_at is unset on an approved task")
+	} else if !got.FinishedAt.After(*rec.FinishedAt) {
+		t.Errorf("finished_at = %v, want it moved past the agent's exit at %v",
+			got.FinishedAt, rec.FinishedAt)
 	}
 	if got.ReviewRound != 1 {
 		t.Errorf("review_round = %d, want 1", got.ReviewRound)

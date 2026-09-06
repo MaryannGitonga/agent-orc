@@ -192,6 +192,14 @@ func TestStopKillsARunningTask(t *testing.T) {
 	}
 
 	got := waitForStatus(t, home, "STOP-1", "stopped")
+
+	// The supervisor's own log has to agree with the record. It computes a
+	// status from the agent's exit and then declines to write it over a stop,
+	// so logging the computed one would have the log claim the task is done or
+	// verifying while the record says it was stopped.
+	if log := readFile(t, filepath.Join(home, "logs", "STOP-1.supervisor.log")); !strings.Contains(log, "task is stopped") {
+		t.Errorf("supervisor log does not report the recorded status:\n%s", log)
+	}
 	if got.Status != "stopped" {
 		t.Errorf("status = %q, want stopped", got.Status)
 	}
