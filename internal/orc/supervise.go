@@ -133,6 +133,17 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 		return fmt.Errorf("task %s failed: %w", id, runErr)
 	}
 
+	// The gates below are what make the window between an agent exiting and its
+	// branch being published a long one: both loops run until they succeed, so
+	// this can be minutes or hours rather than the few statements it used to
+	// be. That is long enough for the task to be cleaned up and its id
+	// dispatched again, and every round of either gate costs money, so ask
+	// before starting rather than only before publishing.
+	if !s.owns(id) {
+		s.logf("this task's id now belongs to a later run; stopping here")
+		return nil
+	}
+
 	// Tests first, then review, then publish. Each gate is there to stop the
 	// next one being wasted: no point paying a reviewer to read a branch whose
 	// suite is red, and no point opening a PR over a branch the review is
