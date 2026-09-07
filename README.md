@@ -112,6 +112,9 @@ CLIs do that. Everything it uses is the OS or a binary you already have.
 
 ## Install
 
+Linux and macOS. Task isolation is built out of process groups, signals and
+file locks, so there is no Windows build.
+
 Download a binary from the [latest release](https://github.com/MaryannGitonga/agent-orc/releases/latest):
 
 ```sh
