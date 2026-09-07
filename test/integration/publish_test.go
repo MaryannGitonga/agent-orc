@@ -480,6 +480,48 @@ func TestRunClearsAPreviousTaskLog(t *testing.T) {
 	}
 }
 
+// TestCleanupAllRemovesEveryFinishedTask covers `cleanup --all`, which is how
+// a working directory full of finished tasks is reclaimed in one go. A task
+// still running is skipped rather than torn down under itself.
+func TestCleanupAllRemovesEveryFinishedTask(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	dir := t.TempDir()
+	stubInto(t, dir, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	for _, id := range []string{"ALL-1", "ALL-2"} {
+		if out, err := orcRun(t, home, dir, "run",
+			"--id", id, "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+			t.Fatalf("agent-orc run %s = %v\n%s", id, err, out)
+		}
+		waitForStatus(t, home, id, "done", "failed")
+	}
+	// A third task that is still running, so there is something to skip.
+	stubInto(t, dir, "copilot", filepath.Join(t.TempDir(), "receipt"), "sleep 30")
+	if out, err := orcRun(t, home, dir, "run",
+		"--id", "ALL-3", "--repo", repo, "--cli", "copilot", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "ALL-3", "running")
+	t.Cleanup(func() { _, _ = orcRun(t, home, dir, "stop", "ALL-3") })
+
+	out, err := orcRun(t, home, dir, "cleanup", "--all")
+	if err != nil {
+		t.Fatalf("agent-orc cleanup --all = %v\n%s", err, out)
+	}
+	for _, id := range []string{"ALL-1", "ALL-2"} {
+		if _, statErr := os.Stat(filepath.Join(home, "state", id+".json")); !os.IsNotExist(statErr) {
+			t.Errorf("%s survived cleanup --all", id)
+		}
+	}
+	if !strings.Contains(out, "ALL-3  skipped") {
+		t.Errorf("cleanup --all = %q, want the running task skipped and said so", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "state", "ALL-3.json")); statErr != nil {
+		t.Error("cleanup --all removed a task that was still running")
+	}
+}
+
 // TestLogsPrintsTheAgentOutput covers §11's logs command.
 func TestLogsPrintsTheAgentOutput(t *testing.T) {
 	repo := initRepo(t)

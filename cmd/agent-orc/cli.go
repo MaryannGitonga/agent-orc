@@ -179,27 +179,18 @@ func runBatch(ctx context.Context, d *orc.Dispatcher, layout paths.Layout, path 
 		return err
 	}
 	f.LayerUnder(settings)
-	return d.RunBatch(ctx, f, resolveGitDefaults)
+	return d.RunBatch(ctx, f)
 }
 
-// repoRoot returns the top of the working tree containing dir, which is where a
-// repository keeps its settings file.
-//
-// The path this is given is whatever --repo said, and that defaults to the
-// working directory, so without this a run started anywhere but the top of the
-// repository looks for the file in a directory that does not have it. The
-// dispatch that follows resolves the same path the same way, but by then the
-// settings have already been read.
-//
-// A path that is not in a repository comes back unchanged. Saying so is the
-// dispatch's job, and reporting it here as well would report it twice, from the
-// half of the program that was only trying to read an optional file.
+// repoRoot returns the top of the working tree containing dir, where a
+// repository keeps its settings file. --repo defaults to the working directory,
+// so without this a run started inside a repository reads settings from a
+// directory that has none. A path outside a repository comes back unchanged;
+// reporting that is the dispatch's job, not this one's.
 func repoRoot(dir string) string {
-	// No path means no repository, and it has to stay that way. A batch file
-	// that names no repo of its own leaves this empty, and filepath.Abs would
-	// turn that into the directory agent-orc happened to be run from: the
-	// tasks would then inherit settings from whatever repository the user was
-	// standing in, which is not theirs and may not be related to them at all.
+	// A batch naming no repo of its own leaves this empty, and filepath.Abs
+	// would turn that into wherever agent-orc was run from: its tasks would
+	// inherit settings from an unrelated repository the user was standing in.
 	if strings.TrimSpace(dir) == "" {
 		return ""
 	}
@@ -285,14 +276,10 @@ func (f *flags) applyDefaults(s config.Settings, given map[string]bool) {
 	if s.Review == nil {
 		return
 	}
-	// Either flag settles both halves of the question, so neither default
-	// applies once one has been typed. Auto implies enabled, so a file saying
-	// reviews here are automatic would otherwise turn one back on after an
-	// explicit --review=false, and make automatic a review that --review asked
-	// for by hand. A flag a file can overrule is not a flag.
-	//
-	// Enabled is not derived here. Review.Normalize is the one place that rule
-	// lives, and buildTask applies it to whatever this leaves behind.
+	// Either flag settles both halves, so neither default applies once one is
+	// typed: auto implies enabled, so a file would otherwise turn review back
+	// on after --review=false. A flag a file can overrule is not a flag.
+	// Review.Normalize is where that implication lives, applied by buildTask.
 	if !given["review"] && !given["auto-review"] {
 		if s.Review.Enabled != nil {
 			f.review.Enabled = *s.Review.Enabled
@@ -332,7 +319,7 @@ func buildTask(f flags) (task.Task, error) {
 		budget.Credits = &f.budgetCredits
 	}
 
-	return resolveGitDefaults(task.Task{
+	return orc.ResolveGitDefaults(task.Task{
 		ID:          f.id,
 		Source:      f.source,
 		Prompt:      f.prompt,
@@ -374,17 +361,14 @@ func logsCmd(argv []string, out io.Writer) error {
 	return orc.NewReporter(layout.State, out).Logs(id, *follow, *raw)
 }
 
-// parseAround parses flags that appear on either side of a single positional
-// argument, and returns that argument. Go's flag package stops parsing at the
-// first non-flag, so `logs <id> -f` would otherwise be rejected even though it
-// is the form the usage lines advertise and the one people type. Parsing what
-// is left over after the positional picks up the trailing flags, and works for
-// flags that take a value as well as boolean ones.
+// parseAround parses flags on either side of a single positional argument and
+// returns that argument. Go's flag package stops at the first non-flag, so
+// `logs <id> -f` would otherwise be rejected though it is the form the usage
+// advertises.
 //
-// That second parse resets the FlagSet's leftover arguments, so callers must
-// use the returned value and not fs.Arg or fs.NArg afterwards: those no longer
-// describe the positional this consumed. An explicit -- is honoured: after one,
-// nothing is reparsed, so an id beginning with a dash can still be passed.
+// The second parse resets the FlagSet's leftover arguments, so callers must use
+// the returned value rather than fs.Arg afterwards. An explicit -- is honoured,
+// so an id beginning with a dash can still be passed.
 func parseAround(fs *flag.FlagSet, argv []string) (string, error) {
 	if err := fs.Parse(argv); err != nil {
 		return "", err
@@ -507,35 +491,6 @@ func stopCmd(argv []string, out io.Writer) error {
 		return err
 	}
 	return orc.NewReporter(layout.State, out).Stop(argv[0])
-}
-
-// resolveGitDefaults fills in the fields that need git or the filesystem to
-// work out: the repository's absolute path, the base branch, and the branch
-// name. It is shared by the single-task and batch paths so both get the same
-// defaults from the same code.
-func resolveGitDefaults(t task.Task) (task.Task, error) {
-	if t.Repo == "" {
-		t.Repo = "."
-	}
-	abs, err := filepath.Abs(t.Repo)
-	if err != nil {
-		return t, fmt.Errorf("resolving repo %q: %w", t.Repo, err)
-	}
-	r, err := gitx.Open(abs)
-	if err != nil {
-		return t, err
-	}
-	t.Repo = r.Dir
-
-	if t.BaseBranch == "" {
-		if t.BaseBranch, err = r.DefaultBranch(); err != nil {
-			return t, err
-		}
-	}
-	if t.Branch == "" {
-		t.Branch = task.DefaultBranch(t.ID)
-	}
-	return t, t.ValidateSpec()
 }
 
 // cliNames lists the dispatchable CLIs for help text.

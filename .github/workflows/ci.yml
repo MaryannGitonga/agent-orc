@@ -76,6 +76,8 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -89,6 +91,28 @@ jobs:
           total=$(make -s coverage)
           echo "$total"
           echo "### ${total}" >> "$GITHUB_STEP_SUMMARY"
+          echo "PCT=$(printf '%s' "$total" | grep -oE '[0-9.]+')" >> "$GITHUB_ENV"
+
+      # The README badge reads this file through shields.io. It lives on its own
+      # branch so publishing it never touches main's history, which CI checks.
+      - name: Publish the coverage badge
+        if: github.event_name == 'push'
+        run: |
+          case "${PCT%%.*}" in
+            9?|100) colour=brightgreen ;;
+            8?)     colour=green ;;
+            [67]?)  colour=yellow ;;
+            *)      colour=red ;;
+          esac
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' \
+            "$PCT" "$colour" > /tmp/coverage.json
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --orphan badges
+          mv /tmp/coverage.json coverage.json
+          git add coverage.json
+          git commit -qm "chore: coverage ${PCT}%"
+          git push -qf origin badges
 
   integration-tests:
     name: integration tests

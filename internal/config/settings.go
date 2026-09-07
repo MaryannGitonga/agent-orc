@@ -18,18 +18,15 @@ import (
 const RepoFile = ".agent-orc.yaml"
 
 // Settings are the defaults a task inherits when it does not set a field
-// itself. They exist so the same flags are not retyped on every run: what is
-// true of every task on this machine belongs in the machine-wide file, and
-// what is true of a repository belongs in that repository's own.
+// itself, so the same flags are not retyped on every run.
 //
-// The field names are the batch file's `defaults` keys, which are in turn the
-// run flags with dashes swapped for underscores, so there is one vocabulary
-// rather than three. Every field is optional, and the pointers are what make
-// "unset" distinguishable from "set to false or zero": a narrower layer has to
-// be able to turn an inherited setting off, not only leave it alone.
+// The names are the run flags with dashes swapped for underscores, which are
+// also the batch file's `defaults` keys, so there is one vocabulary rather than
+// three. The pointers distinguish "unset" from "set to false or zero", which is
+// what lets a narrower layer turn an inherited setting off.
 //
-// What cannot be defaulted is what is inherently per-task: the id, the prompt
-// or source, the branch, and the repository itself.
+// What is inherently per-task cannot be defaulted: the id, the prompt or
+// source, the branch, and the repository.
 type Settings struct {
 	CLI           task.CLI `yaml:"cli"`
 	Model         string   `yaml:"model"`
@@ -144,14 +141,10 @@ func (s Settings) validate() error {
 // and every field it leaves alone keeps s's value. That is what lets a
 // repository change one setting without restating the machine-wide file.
 //
-// Empty means "not set here", never "reset this to the built-in default", so a
-// narrower layer overrides an inherited value by naming the one it wants rather
-// than by blanking the field. A repository under a machine-wide
-// `test_timeout: none` gets a cap back by writing the duration it wants, and
-// one under `test_command: none` by writing the command. There is deliberately
-// no third value meaning "the default": it would have to be understood by every
-// field to be worth having, and the layering is easier to reason about when a
-// value present in a file is the value that applies.
+// Empty means "not set here", never "reset to the built-in default": a narrower
+// layer overrides by naming the value it wants, not by blanking the field.
+// There is deliberately no third value meaning "the default", which would have
+// to be understood by every field to be worth having.
 func (s Settings) Merge(narrower Settings) Settings {
 	out := s
 	if narrower.CLI != "" {
