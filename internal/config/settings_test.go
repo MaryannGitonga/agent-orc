@@ -317,3 +317,42 @@ func TestFileLayerUnderCarriesEveryField(t *testing.T) {
 		}
 	}
 }
+
+// TestParsersRejectASecondDocument covers the one mistake these parsers used to
+// make silently. They reject an unknown field so that a typo fails where it was
+// made; dropping a whole document is larger than any typo, and a batch file with
+// tasks after a "---" dispatched the first half and never mentioned the rest.
+func TestParsersRejectASecondDocument(t *testing.T) {
+	t.Run("settings", func(t *testing.T) {
+		_, err := ParseSettings([]byte("cli: claude\n---\nmodel: ignored\n"))
+		if err == nil || !strings.Contains(err.Error(), "more than one document") {
+			t.Errorf("ParseSettings() = %v, want it to refuse a second document", err)
+		}
+	})
+
+	t.Run("batch", func(t *testing.T) {
+		body := "defaults:\n  cli: claude\ntasks:\n  - id: A\n    prompt: x\n---\ntasks:\n  - id: B\n    prompt: y\n"
+		if _, err := Parse([]byte(body)); err == nil || !strings.Contains(err.Error(), "more than one document") {
+			t.Errorf("Parse() = %v, want it to refuse rather than dispatch half the file", err)
+		}
+	})
+
+	// A leading separator is one document, not two, and is how plenty of tools
+	// write yaml. It has to keep working.
+	t.Run("a leading separator is still one document", func(t *testing.T) {
+		got, err := ParseSettings([]byte("---\ncli: claude\n"))
+		if err != nil {
+			t.Fatalf("ParseSettings() = %v", err)
+		}
+		if got.CLI != task.CLIClaude {
+			t.Errorf("cli = %q, want it parsed normally", got.CLI)
+		}
+	})
+
+	// And an empty file still means an empty settings file, not a failure.
+	t.Run("empty", func(t *testing.T) {
+		if _, err := ParseSettings(nil); err != nil {
+			t.Errorf("ParseSettings(nil) = %v, want no error", err)
+		}
+	})
+}

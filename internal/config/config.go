@@ -9,8 +9,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,9 +115,7 @@ func Load(path string) (*File, error) {
 // differently from what was written.
 func Parse(data []byte) (*File, error) {
 	var f File
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil {
+	if err := decodeStrict(data, &f); err != nil {
 		return nil, fmt.Errorf("parsing yaml: %w", err)
 	}
 	if len(f.Tasks) == 0 {
@@ -125,6 +125,35 @@ func Parse(data []byte) (*File, error) {
 		return nil, err
 	}
 	return &f, nil
+}
+
+// decodeStrict reads exactly one YAML document into v, rejecting unknown
+// fields.
+//
+// Anything after the first document is an error rather than something to skip.
+// These parsers exist to fail on what a file got wrong instead of quietly doing
+// something else, and dropping a whole document is the largest thing they could
+// get wrong: a batch file with tasks after a "---" would dispatch the first
+// half and never mention the rest.
+//
+// An empty file gives io.EOF from the first decode, which is passed back for
+// the caller to read as it likes: a batch file with nothing in it is a failure,
+// and a settings file with nothing in it is not.
+func decodeStrict(data []byte, v any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	var rest yaml.Node
+	switch err := dec.Decode(&rest); {
+	case err == nil:
+		return errors.New(`more than one document; everything after the first "---" would be ignored`)
+	case errors.Is(err, io.EOF):
+		return nil
+	default:
+		return err
+	}
 }
 
 // resolvePaths makes every repo path absolute relative to base.

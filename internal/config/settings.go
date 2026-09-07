@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
@@ -111,11 +109,9 @@ func LoadRepoSettings(repo string) (Settings, error) {
 // is worse than one that fails at the point it was made.
 func ParseSettings(data []byte) (Settings, error) {
 	var s Settings
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
-	dec.KnownFields(true)
 	// An empty file decodes to io.EOF rather than to an empty document, and
 	// an empty settings file means the same thing as no settings file.
-	if err := dec.Decode(&s); err != nil && !errors.Is(err, io.EOF) {
+	if err := decodeStrict(data, &s); err != nil && !errors.Is(err, io.EOF) {
 		return Settings{}, fmt.Errorf("parsing yaml: %w", err)
 	}
 	if err := s.validate(); err != nil {
