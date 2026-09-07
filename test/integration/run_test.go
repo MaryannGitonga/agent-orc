@@ -397,3 +397,33 @@ func TestRunReportsAnUnreadableWorktreePath(t *testing.T) {
 		t.Errorf("run = %q, want it to say the path could not be inspected", out)
 	}
 }
+
+// TestDoneIsRecordedOnceTheSupervisorIsFinished covers an ordering anything
+// watching a task depends on: when the record says done, the supervisor has
+// stopped writing to it. The status used to be recorded twice for a task with
+// no gates and no draft PR to open, once as the agent exited and again when
+// the supervisor finished, so a reader that acted on the first one was working
+// against a record still being written.
+func TestDoneIsRecordedOnceTheSupervisorIsFinished(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"),
+		"printf 'work\\n' > out.txt\ngit add . && git commit --no-gpg-sign -m 'feat: work' >/dev/null")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "ONCE-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "ONCE-1", "done", "failed")
+
+	// The supervisor says what it recorded as the agent exits, and the only
+	// thing that writes done is the step that runs last. Seeing it declared
+	// here means it was written before the supervisor had finished.
+	log := readFile(t, filepath.Join(home, "logs", "ONCE-1.supervisor.log"))
+	if strings.Contains(log, "task is done") {
+		t.Errorf("the supervisor recorded done as the agent exited:\n%s", log)
+	}
+	if !strings.Contains(log, "finishing up") {
+		t.Errorf("the supervisor did not leave the task for its last step to finish:\n%s", log)
+	}
+}
