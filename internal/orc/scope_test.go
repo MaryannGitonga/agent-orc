@@ -1,11 +1,17 @@
 package orc
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/MaryannGitonga/agent-orc/internal/paths"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
@@ -86,5 +92,77 @@ func TestStaleWriteCannotClobberARedispatchedTask(t *testing.T) {
 			t.Fatalf("iteration %d: the new run was overwritten by the old one: status=%q pid=%d",
 				i, got.Status, got.PID)
 		}
+	}
+}
+
+// TestCleanupDeletesOnlyTheRunItLoaded covers the other end of the same window.
+// Cleanup decides what to remove, tears down a worktree and a branch, and only
+// then drops the record, by which point the id may have been dispatched again.
+//
+// The interleaving is pinned rather than raced for: the task's lock is held so
+// cleanup stops at the delete, the new run is written while it waits, and the
+// lock is then released to let it finish against a record it never loaded.
+func TestCleanupDeletesOnlyTheRunItLoaded(t *testing.T) {
+	home := t.TempDir()
+	layout := paths.Layout{Root: home, State: filepath.Join(home, "state"), Logs: filepath.Join(home, "logs")}
+	store := state.NewStore(layout.State)
+	firstRun := time.Now().UTC().Add(-time.Hour)
+	secondRun := time.Now().UTC()
+
+	// A finished task whose worktree is already gone, so cleanup has no git to
+	// do and reaches the delete directly.
+	if err := store.Save(state.Task{
+		Task:      task.Task{ID: "Y", CLI: task.CLIClaude},
+		Worktree:  filepath.Join(home, "gone"),
+		Status:    state.StatusDone,
+		StartedAt: firstRun,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := os.OpenFile(filepath.Join(layout.State, "Y.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- NewCleaner(layout, io.Discard).Clean("Y", false, false) }()
+
+	// Long enough for cleanup to load the finished run and block on the lock:
+	// all it has to do first is one stat.
+	time.Sleep(200 * time.Millisecond)
+
+	// The id, dispatched again while cleanup waits. Written directly because
+	// Save would want the lock this test is holding.
+	replacement, err := json.Marshal(state.Task{
+		Task:      task.Task{ID: "Y", CLI: task.CLIClaude},
+		Status:    state.StatusRunning,
+		PID:       222,
+		StartedAt: secondRun,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.State, "Y.json"), replacement, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Clean() = %v", err)
+	}
+
+	got, err := store.Load("Y")
+	if err != nil {
+		t.Fatalf("the new run's record did not survive cleanup: %v", err)
+	}
+	if !got.StartedAt.Equal(secondRun) || got.PID != 222 {
+		t.Errorf("record is %v pid=%d, want the second run untouched", got.StartedAt, got.PID)
 	}
 }

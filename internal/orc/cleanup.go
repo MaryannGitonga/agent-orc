@@ -98,9 +98,22 @@ func (c *Cleaner) Clean(id string, force, deleteBranch bool) error {
 		}
 	}
 
-	if err := c.store.Delete(id); err != nil {
+	// Only the run this started on. Tearing down a worktree and a branch takes
+	// long enough that a second cleanup of the same id can finish first and the
+	// id be dispatched again, and dropping the record then would leave the new
+	// run with no state at all.
+	deleted, err := c.store.DeleteIf(id, func(cur state.Task) bool {
+		return cur.StartedAt.Equal(record.StartedAt)
+	})
+	if err != nil {
 		return err
 	}
+	if !deleted {
+		fmt.Fprintf(c.out, "%s  cleaned up; branch %s %s; the record now belongs to a newer run and was left alone\n",
+			id, record.Branch, branch)
+		return nil
+	}
+
 	// Logs are the record of what happened and outlive the worktree, so they
 	// are only removed when explicitly forced.
 	if force {

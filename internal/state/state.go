@@ -262,10 +262,33 @@ func (s *Store) List() ([]Task, error) {
 
 // Delete removes the record for id. Deleting a missing record is not an error.
 func (s *Store) Delete(id string) error {
-	return s.withLock(id, func() error {
+	_, err := s.DeleteIf(id, func(Task) bool { return true })
+	return err
+}
+
+// DeleteIf removes the record for id only if want says so, reporting whether it
+// did. The record is read and removed under one lock, so what want judges is
+// what gets deleted.
+//
+// Removing a task is not one write: the caller tears down a worktree and a
+// branch first, and only then drops the record. An id freed that way can be
+// dispatched again, so a caller that decided to delete some time ago has to say
+// which run it meant. Deleting a record that is already gone is not an error.
+func (s *Store) DeleteIf(id string, want func(Task) bool) (deleted bool, err error) {
+	err = s.withLock(id, func() error {
+		switch cur, err := s.Load(id); {
+		case errors.Is(err, ErrNotFound):
+			return nil
+		case err != nil:
+			return err
+		case !want(cur):
+			return nil
+		}
 		if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("deleting state for %q: %w", id, err)
 		}
+		deleted = true
 		return nil
 	})
+	return deleted, err
 }

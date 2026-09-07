@@ -307,3 +307,53 @@ func TestDeleteLeavesTheLockInPlace(t *testing.T) {
 		t.Errorf("List() = %v, want the deleted record to be gone", tasks)
 	}
 }
+
+// TestDeleteIfOnlyRemovesTheRunItWasAskedFor covers the tail of a cleanup: the
+// caller decided to delete some time ago, and by now the id may have been
+// dispatched again.
+func TestDeleteIfOnlyRemovesTheRunItWasAskedFor(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	firstRun := time.Now().UTC().Add(-time.Hour)
+	secondRun := time.Now().UTC()
+	wantFirstRun := func(cur Task) bool { return cur.StartedAt.Equal(firstRun) }
+
+	// Nothing there at all is not an error, the way an already-cleaned task is.
+	switch deleted, err := store.DeleteIf("GEN-1", wantFirstRun); {
+	case err != nil:
+		t.Fatal(err)
+	case deleted:
+		t.Error("DeleteIf() reported deleting a record that was never there")
+	}
+
+	// The id has been taken by a newer run, so the old cleanup keeps its hands off.
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "GEN-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: secondRun,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	switch deleted, err := store.DeleteIf("GEN-1", wantFirstRun); {
+	case err != nil:
+		t.Fatal(err)
+	case deleted:
+		t.Error("DeleteIf() removed a newer run's record")
+	}
+	if got, err := store.Load("GEN-1"); err != nil || !got.StartedAt.Equal(secondRun) {
+		t.Errorf("Load() = %v, %v; want the newer run untouched", got.StartedAt, err)
+	}
+
+	// The run it was asked for does go.
+	switch deleted, err := store.DeleteIf("GEN-1", func(cur Task) bool {
+		return cur.StartedAt.Equal(secondRun)
+	}); {
+	case err != nil:
+		t.Fatal(err)
+	case !deleted:
+		t.Error("DeleteIf() left the run it was asked to remove")
+	}
+	if _, err := store.Load("GEN-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Load() = %v, want ErrNotFound", err)
+	}
+}
