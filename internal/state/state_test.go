@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -219,15 +220,30 @@ func TestUpdateIfLeavesTheFileAloneWhenItDeclines(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(filepath.Join(dir, "SKIP-1.json"))
+	record := filepath.Join(dir, "SKIP-1.json")
+	before, err := os.Stat(record)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Another writer moves the record on, then a declining update runs.
+	// Another writer moves the record on. Its timestamp is the one a second
+	// write would have to disturb, so it is also the yardstick for whether
+	// this filesystem can tell two writes apart at all.
 	if err := store.Update("SKIP-1", func(k *Task) { k.Status = StatusDone }); err != nil {
 		t.Fatal(err)
 	}
+	mid, err := os.Stat(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mid.ModTime().Equal(before.ModTime()) {
+		t.Skip("the filesystem's timestamps are too coarse to tell the writes apart")
+	}
+
 	if err := store.UpdateIf("SKIP-1", func(k *Task) bool {
 		k.Status = StatusFailed // written to the copy, and meant to be discarded
 		return false
@@ -235,18 +251,18 @@ func TestUpdateIfLeavesTheFileAloneWhenItDeclines(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := store.Load("SKIP-1")
+	got, err := os.ReadFile(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusDone {
-		t.Errorf("status = %q, want the declining update to have changed nothing", got.Status)
+	if !bytes.Equal(got, want) {
+		t.Errorf("the declining update rewrote the record:\n got %s\nwant %s", got, want)
 	}
-	after, err := os.Stat(filepath.Join(dir, "SKIP-1.json"))
+	after, err := os.Stat(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.ModTime().Equal(before.ModTime()) {
-		t.Skip("the filesystem's timestamps are too coarse to tell the writes apart")
+	if !after.ModTime().Equal(mid.ModTime()) {
+		t.Errorf("modtime = %v, want the declining update to have left it at %v", after.ModTime(), mid.ModTime())
 	}
 }

@@ -268,7 +268,11 @@ func (s *Store) Delete(id string) error {
 		return err
 	}
 	// The lock outlives the record it guarded, so it goes too. Any holder
-	// still has it open, and unlinking does not disturb them.
+	// still has it open, and unlinking does not disturb them. A caller that
+	// opens the file after this creates a new one, so a delete landing between
+	// another caller's open and its flock leaves the two on separate inodes.
+	// The lock serializes the common case; the generation check in the write
+	// is what actually refuses a lost update.
 	if err := os.Remove(s.lockFile(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("removing the lock for %q: %w", id, err)
 	}
