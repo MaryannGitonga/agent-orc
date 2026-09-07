@@ -123,8 +123,9 @@ jobs:
             "$PCT" "$colour" > /tmp/coverage.json
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # --orphan leaves the index and worktree empty, so there is
+          # nothing to remove before writing the one file this branch holds.
           git switch --orphan badges
-          git rm -rqf .
           mv /tmp/coverage.json coverage.json
           git add coverage.json
           git commit -qm "chore: coverage ${PCT}%"
