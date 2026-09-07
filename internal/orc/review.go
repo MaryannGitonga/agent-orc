@@ -37,21 +37,14 @@ func NewReviewer(layout paths.Layout, out io.Writer) *Reviewer {
 
 // mayContinue says why this reviewer should stop working on the task, or nil to
 // carry on. It answers nothing for a reviewer that is not scoped to a run,
-// which is what `agent-orc review` builds.
-//
-// Both reasons come from one read: a stop lands as a killed child or as a
-// record change, and between rounds there is no child, so the record is the
-// only place either shows.
+// which is what `agent-orc review` builds: that one acts on whatever the id
+// names now, and there is no earlier run for it to have lost.
 func (r *Reviewer) mayContinue(id string) error {
 	if r.scope.since.IsZero() {
 		return nil
 	}
-	rec, ok := r.scope.mine(id)
-	if !ok {
-		return fmt.Errorf("task %q now belongs to a later run; no further review rounds", id)
-	}
-	if rec.Status == state.StatusStopped {
-		return fmt.Errorf("task %q was stopped; no further review rounds", id)
+	if reason := r.scope.halted(id); reason != nil {
+		return fmt.Errorf("%w; no further review rounds", reason)
 	}
 	return nil
 }

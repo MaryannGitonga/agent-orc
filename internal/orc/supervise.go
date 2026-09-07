@@ -71,10 +71,29 @@ func (s *Supervisor) Supervise(id string, since time.Time) error {
 		return s.fail(id, fmt.Errorf("starting %s: %w", argv[0], err))
 	}
 
-	if err := s.scope.update(id, func(k *state.Task) {
+	// The agent is running, and the record has to say so. A write that declines
+	// says the id was cleaned up and dispatched again between the check at the
+	// top of this function and the agent starting, which leaves an agent from
+	// the old run loose in the new run's worktree. Declining the write is not
+	// enough on its own: the process is already there and has to be stopped
+	// before it changes anything.
+	//
+	// Only a definite answer counts. A store that cannot be read says nothing
+	// about who owns the id, and killing a healthy agent over a transient read
+	// failure would be the worse mistake.
+	owned, err := s.scope.updateOwned(id, func(k *state.Task) {
 		k.Status = state.StatusRunning
 		k.PID = cmd.Process.Pid
-	}); err != nil {
+	})
+	switch {
+	case (err == nil && !owned) || errors.Is(err, state.ErrNotFound):
+		s.logf("this task's id no longer belongs to this run; stopping the agent that just started")
+		if killErr := signalGroup(cmd.Process.Pid); killErr != nil {
+			s.logf("warning: could not stop it: %v", killErr)
+		}
+		_ = cmd.Wait()
+		return fmt.Errorf("task %q no longer belongs to the run this supervisor was started for; its agent was stopped", id)
+	case err != nil:
 		s.logf("warning: could not record running state: %v", err)
 	}
 	s.logf("agent running as pid %d", cmd.Process.Pid)
@@ -188,8 +207,8 @@ func (s *Supervisor) afterAgent(id string, record state.Task) {
 		s.mark(id, state.StatusReviewing, "")
 		if err := s.autoReview(&record); err != nil {
 			s.logf("not publishing: %v", err)
-			if s.scope.stopped(id) {
-				s.logf("task was stopped during review: %v", err)
+			if reason := s.scope.halted(id); reason != nil {
+				s.logf("%v, so its review failure is not being recorded: %v", reason, err)
 			} else {
 				s.mark(id, state.StatusReviewFailed, err.Error())
 			}
@@ -203,8 +222,8 @@ func (s *Supervisor) afterAgent(id string, record state.Task) {
 	// Untested, and not testable without a hook here: a stop during a gate
 	// kills that gate's child, so it gives up above instead. Kept because the
 	// window is real and losing the race means an unwanted push and PR.
-	if s.scope.stopped(id) {
-		s.logf("task was stopped; not publishing")
+	if reason := s.scope.halted(id); reason != nil {
+		s.logf("%v; not publishing", reason)
 		return
 	}
 
@@ -307,11 +326,12 @@ func (s *Supervisor) publish(id string, record state.Task) {
 	s.mark(id, state.StatusPublishFailed, err.Error())
 }
 
-// failUnlessStopped records a phase's failure, unless a human stopped the task,
-// in which case the stop is the reason it failed and stays the record of it.
+// failUnlessStopped records a phase's failure, unless the run is over for a
+// reason that outranks it: a human stopped it, and the stop is the record of
+// why it ended, or the id is no longer this run's to write to at all.
 func (s *Supervisor) failUnlessStopped(id string, cause error) {
-	if s.scope.stopped(id) {
-		s.logf("task was stopped: %v", cause)
+	if reason := s.scope.halted(id); reason != nil {
+		s.logf("%v, so its failure is not being recorded: %v", reason, cause)
 		return
 	}
 	s.mark(id, state.StatusFailed, cause.Error())

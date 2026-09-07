@@ -54,11 +54,8 @@ func (s *Supervisor) verify(record state.Task) error {
 		// same read covers the id having been dispatched again, since this
 		// loop runs until the suite passes and that is long enough for a task
 		// to be cleaned up and replaced underneath it.
-		if s.scope.stopped(record.ID) {
-			return fmt.Errorf("task %q was stopped before its tests could be run again", record.ID)
-		}
-		if !s.scope.ownsID(record.ID) {
-			return fmt.Errorf("task %q now belongs to a later run; its tests are not ours to run", record.ID)
+		if reason := s.scope.halted(record.ID); reason != nil {
+			return fmt.Errorf("%w; not starting another test run", reason)
 		}
 		s.logf("running the test command (attempt %d): %s", attempt, command)
 		output, runErr := s.runTestCommand(record.ID, record.Worktree, command, record.TestRunTimeout())
@@ -82,8 +79,8 @@ func (s *Supervisor) verify(record state.Task) error {
 		// The failure may be the stop itself: `agent-orc stop` kills whatever
 		// child is running, and a non-zero exit from a killed test command is
 		// not a reason to hand it back to the agent and try again.
-		if s.scope.stopped(record.ID) {
-			return fmt.Errorf("task %q was stopped while its tests were running", record.ID)
+		if reason := s.scope.halted(record.ID); reason != nil {
+			return fmt.Errorf("%w while its tests were running", reason)
 		}
 		if !resumable {
 			return fmt.Errorf("%w: %s", ErrTestsFailed, strings.TrimSpace(lastLines(output, 5)))
@@ -92,8 +89,8 @@ func (s *Supervisor) verify(record state.Task) error {
 		if err := s.handBackFailure(record, command, output); err != nil {
 			return err
 		}
-		if s.scope.stopped(record.ID) {
-			return fmt.Errorf("task %q was stopped while the agent was fixing its tests", record.ID)
+		if reason := s.scope.halted(record.ID); reason != nil {
+			return fmt.Errorf("%w while the agent was fixing its tests", reason)
 		}
 		// A round that committed nothing has not changed the code under test,
 		// so running it again would fail in exactly the same way. Stopping

@@ -1,6 +1,8 @@
 package orc
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/state"
@@ -39,40 +41,56 @@ func (s runScope) owns(rec state.Task) bool {
 // saving an unchanged copy would still stamp this run's snapshot over whatever
 // the newer one had written.
 func (s runScope) update(id string, mutate func(*state.Task)) error {
-	return s.store.UpdateIf(id, func(k *state.Task) bool {
+	_, err := s.updateOwned(id, mutate)
+	return err
+}
+
+// updateOwned is update, reporting whether the record was still this run's. It
+// is for the caller that has something to undo when the write does not land,
+// rather than only a line to log.
+func (s runScope) updateOwned(id string, mutate func(*state.Task)) (bool, error) {
+	owned := false
+	err := s.store.UpdateIf(id, func(k *state.Task) bool {
 		if !s.owns(*k) {
 			return false
 		}
+		owned = true
 		mutate(k)
 		return true
 	})
+	return owned, err
 }
 
-// ownsID reads the record and reports whether it is still this run's.
+// ownsID reads the record and reports whether it is still this run's. A record
+// that cannot be read is not, which is the safe answer for a guard on a write:
+// it is the same as the task having gone. Callers that report why they stopped
+// want halted instead, which says what it found.
 func (s runScope) ownsID(id string) bool {
-	_, ok := s.mine(id)
-	return ok
-}
-
-// mine reads the record and reports whether it is still this run's. A record
-// that cannot be read is not, which is the safe answer: it is the same as the
-// task having gone.
-func (s runScope) mine(id string) (state.Task, bool) {
 	rec, err := s.store.Load(id)
-	if err != nil {
-		return state.Task{}, false
-	}
-	return rec, s.owns(rec)
+	return err == nil && s.owns(rec)
 }
 
-// stopped reports whether this run should go no further. Between commands there
-// is no child to be killed, so the record is the only place a stop shows.
+// halted reports why this run must go no further, or nil to carry on.
 //
-// A record that has gone or moved to a later run counts as stopped: this run is
-// over either way, and carrying on would mean working in a worktree that now
-// belongs to someone else. It comes from the same read as the ownership check
-// so the two cannot disagree about which record they saw.
-func (s runScope) stopped(id string) bool {
-	rec, ok := s.mine(id)
-	return !ok || rec.Status == state.StatusStopped
+// Between commands there is no child to be killed, so a stop shows up only on
+// the record. So do the other endings: a task that was cleaned up, or an id
+// taken by a later run. They are different things and say so, because a run
+// that lost its id is not one a human stopped, and a store that cannot be read
+// is neither and must not be reported as either.
+//
+// All of it comes from one read. Asking twice would let the answer be
+// assembled from two different snapshots, with the id cleaned up in between.
+func (s runScope) halted(id string) error {
+	rec, err := s.store.Load(id)
+	switch {
+	case errors.Is(err, state.ErrNotFound):
+		return fmt.Errorf("task %q no longer exists", id)
+	case err != nil:
+		return fmt.Errorf("reading task %q: %w", id, err)
+	case !s.owns(rec):
+		return fmt.Errorf("task %q now belongs to a later run", id)
+	case rec.Status == state.StatusStopped:
+		return fmt.Errorf("task %q was stopped", id)
+	}
+	return nil
 }
