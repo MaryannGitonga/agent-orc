@@ -352,7 +352,12 @@ func shellQuote(s string) string {
 // conventions do not describe, and "none" is how a repository whose tests
 // agent-orc should not run says so.
 func resolveTestCommand(t task.Task) (task.Task, string) {
-	switch strings.TrimSpace(t.TestCommand) {
+	// Trimmed once, into the task, so the record, the logs and the phase the
+	// supervisor enters all agree on what is set. Deciding on a trimmed copy
+	// and storing the original is how a whitespace-only setting ends up
+	// putting a task into verifying for a command that will never run.
+	t.TestCommand = strings.TrimSpace(t.TestCommand)
+	switch t.TestCommand {
 	case testcmd.None:
 		t.TestCommand = ""
 		t.SkipTests = true

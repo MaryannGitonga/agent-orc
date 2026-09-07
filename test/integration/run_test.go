@@ -26,6 +26,7 @@ type record struct {
 	Model       string `json:"model"`
 	DCOSignoff  bool   `json:"dco_signoff"`
 	TestRuns    int    `json:"test_runs"`
+	TestCommand string `json:"test_command"`
 	TestsPassed *bool  `json:"tests_passed"`
 	PRURL       string `json:"pr_url"`
 	Review      struct {

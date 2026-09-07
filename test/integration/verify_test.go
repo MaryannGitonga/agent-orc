@@ -76,6 +76,55 @@ func TestVerifyDiscoversTestsFromTheRepository(t *testing.T) {
 	}
 }
 
+// TestVerifyTrimsTheConfiguredCommand covers three places that have to agree on
+// whether a command is set: the record, the log line naming the phase, and the
+// gate that decides whether to run anything. Deciding on a trimmed copy while
+// storing the original is how a whitespace-only setting puts a task into
+// verifying for a command that will never run.
+func TestVerifyTrimsTheConfiguredCommand(t *testing.T) {
+	t.Run("whitespace only is nothing at all", func(t *testing.T) {
+		repo := initRepo(t)
+		home := t.TempDir()
+		stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+		write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_command: \"   \"\n")
+
+		out, err := orcRun(t, home, stub, "run",
+			"--id", "WS-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+		if err != nil {
+			t.Fatalf("agent-orc run = %v\n%s", err, out)
+		}
+		got := waitForStatus(t, home, "WS-1", "done", "failed")
+		if got.TestCommand != "" {
+			t.Errorf("test_command = %q, want nothing recorded", got.TestCommand)
+		}
+		if log := readFile(t, filepath.Join(home, "logs", "WS-1.supervisor.log")); strings.Contains(log, "task is verifying") {
+			t.Errorf("the task entered verifying for a command that never runs:\n%s", log)
+		}
+		if got.TestRuns != 0 {
+			t.Errorf("test_runs = %d, want nothing run", got.TestRuns)
+		}
+	})
+
+	t.Run("a real command keeps no stray whitespace", func(t *testing.T) {
+		repo := initRepo(t)
+		home := t.TempDir()
+		stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+		write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_command: \"true   \"\n")
+
+		if out, err := orcRun(t, home, stub, "run",
+			"--id", "WS-2", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+			t.Fatalf("agent-orc run = %v\n%s", err, out)
+		}
+		got := waitForStatus(t, home, "WS-2", "done", "failed")
+		if got.TestCommand != "true" {
+			t.Errorf("test_command = %q, want it stored trimmed", got.TestCommand)
+		}
+		if got.TestRuns != 1 {
+			t.Errorf("test_runs = %d, want the command to have run once", got.TestRuns)
+		}
+	})
+}
+
 // TestVerifyNoneOptsOut is how a repository whose tests agent-orc should not be
 // running says so, without giving up the rest of the config.
 func TestVerifyNoneOptsOut(t *testing.T) {
