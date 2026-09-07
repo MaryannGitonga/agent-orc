@@ -77,9 +77,9 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 	// Decide again inside the update, against the record as it is on disk
 	// rather than the copy this listing read. The supervisor may have written
 	// its own outcome in between, and saving the stale copy would discard that
-	// along with the spend and session it recorded. A window still remains
-	// between that load and its save; for a reporting command in a single-user
-	// tool that is an acceptable trade rather than a lock.
+	// along with the spend and session it recorded. The store reads, mutates
+	// and writes under the task's lock, so that second look and the write it
+	// leads to are one step.
 	_ = store.Update(t.ID, func(k *state.Task) {
 		if !k.Status.Active() || k.PID == 0 || groupAlive(k.PID) {
 			return
