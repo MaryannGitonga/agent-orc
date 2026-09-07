@@ -248,7 +248,8 @@ func TestSHA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SHA(main) = %v", err)
 	}
-	if len(got) != 40 {
+	// 40 for a SHA-1 repository, 64 for a SHA-256 one.
+	if len(got) != 40 && len(got) != 64 {
 		t.Errorf("SHA(main) = %q, want a full commit id", got)
 	}
 	// The same commit by another name resolves the same way.
