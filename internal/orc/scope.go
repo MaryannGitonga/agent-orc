@@ -33,11 +33,18 @@ func (s runScope) owns(rec state.Task) bool {
 }
 
 // update applies mutate unless the id has moved on to a later run.
+//
+// The check and the write are one locked step, so a task cleaned up and
+// dispatched again cannot slip between them. Declining writes nothing at all:
+// saving an unchanged copy would still stamp this run's snapshot over whatever
+// the newer one had written.
 func (s runScope) update(id string, mutate func(*state.Task)) error {
-	return s.store.Update(id, func(k *state.Task) {
-		if s.owns(*k) {
-			mutate(k)
+	return s.store.UpdateIf(id, func(k *state.Task) bool {
+		if !s.owns(*k) {
+			return false
 		}
+		mutate(k)
+		return true
 	})
 }
 

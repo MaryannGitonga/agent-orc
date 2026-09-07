@@ -170,8 +170,15 @@ func (d *Dispatcher) preflight(t task.Task) (launchPlan, error) {
 			t.Branch, repo.Dir,
 			shellCommand("git", "-C", repo.Dir, "branch", "-D", "--", t.Branch)))
 	}
-	if worktree := d.layout.Worktree(t.ID); !isMissing(worktree) {
+	// Only a directory that is really there is a task in the way. Any other
+	// stat failure means its state is unknown, and sending someone to cleanup
+	// over a permission or mount problem would be telling them the wrong thing.
+	worktree := d.layout.Worktree(t.ID)
+	switch _, err := os.Stat(worktree); {
+	case err == nil:
 		return fail(fmt.Errorf("worktree %s already exists; run 'agent-orc cleanup %s' first", worktree, t.ID))
+	case !errors.Is(err, fs.ErrNotExist):
+		return fail(fmt.Errorf("checking whether %s is free: %w", worktree, err))
 	}
 
 	// The repository root, whatever --repo said, so discovery reads the
@@ -253,12 +260,6 @@ func (d *Dispatcher) launch(plan launchPlan) error {
 		fmt.Fprintf(d.out, "  warning   %s\n", budgetNote)
 	}
 	return nil
-}
-
-// isMissing reports whether nothing exists at path.
-func isMissing(path string) bool {
-	_, err := os.Stat(path)
-	return errors.Is(err, fs.ErrNotExist)
 }
 
 func (d *Dispatcher) seedSubagents(t task.Task, a adapter.Adapter, worktree string) ([]string, error) {

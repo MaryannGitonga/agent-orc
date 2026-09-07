@@ -362,3 +362,38 @@ func TestSuperviseRecordsAnAgentThatCannotStart(t *testing.T) {
 		t.Errorf("pid = %d, want none recorded for an agent that never ran", got.PID)
 	}
 }
+
+// TestRunReportsAnUnreadableWorktreePath covers the difference between a task
+// already occupying the worktree and one whose path cannot be inspected. Only
+// the first is a reason to send someone to cleanup.
+func TestRunReportsAnUnreadableWorktreePath(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	// Close the worktrees directory to searches, so stat on a path inside it
+	// fails with something other than "not there".
+	worktrees := filepath.Join(home, "worktrees")
+	if err := os.MkdirAll(worktrees, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(worktrees, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(worktrees, 0o755) }()
+	if _, err := os.Stat(filepath.Join(worktrees, "PERM-1")); err == nil || os.IsNotExist(err) {
+		t.Skip("stat still succeeds here, so this cannot be exercised (running as root?)")
+	}
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "PERM-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+	if err == nil {
+		t.Fatalf("agent-orc run = nil, want the unreadable path reported\n%s", out)
+	}
+	if strings.Contains(out, "already exists") {
+		t.Errorf("run = %q, want it not to claim a task is in the way", out)
+	}
+	if !strings.Contains(out, "checking whether") {
+		t.Errorf("run = %q, want it to say the path could not be inspected", out)
+	}
+}

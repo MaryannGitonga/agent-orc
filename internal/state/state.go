@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/task"
@@ -119,9 +120,46 @@ func NewStore(dir string) *Store { return &Store{Dir: dir} }
 
 func (s *Store) path(id string) string { return filepath.Join(s.Dir, id+".json") }
 
-// Save writes t, replacing any existing record. The write goes to a temporary
-// file first so a reader never sees a half-written record.
+// lockFile is where a task's lock lives. It is a sibling of the record rather
+// than the record itself, so locking never depends on the record existing.
+func (s *Store) lockFile(id string) string { return filepath.Join(s.Dir, id+".lock") }
+
+// withLock runs fn while holding a task's lock.
+//
+// A record is read, changed and written back, and the processes doing that are
+// separate: one detached supervisor per task, plus whatever the user is typing.
+// Without a lock a supervisor can load a record, have cleanup delete it and a
+// new dispatch write its own underneath, and then save its stale copy over the
+// top. The generation check inside the write is what refuses that, and it can
+// only refuse what it sees, so the check and the save have to be one step.
+//
+// flock is advisory and per open file description, so every caller takes its
+// own descriptor and the kernel serializes them, in one process or many.
+func (s *Store) withLock(id string, fn func() error) error {
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return fmt.Errorf("creating state directory: %w", err)
+	}
+	f, err := os.OpenFile(s.lockFile(id), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("locking task %q: %w", id, err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("locking task %q: %w", id, err)
+	}
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	return fn()
+}
+
+// Save writes t, replacing any existing record.
 func (s *Store) Save(t Task) error {
+	return s.withLock(t.ID, func() error { return s.save(t) })
+}
+
+// save writes t without taking the lock, for callers that already hold it. The
+// write goes to a temporary file first so a reader never sees a half-written
+// record.
+func (s *Store) save(t Task) error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
@@ -165,14 +203,32 @@ func (s *Store) Load(id string) (Task, error) {
 	return t, nil
 }
 
-// Update loads a record, applies mutate to it and saves the result.
+// Update loads a record, applies mutate to it and saves the result, all while
+// holding the task's lock.
 func (s *Store) Update(id string, mutate func(*Task)) error {
-	t, err := s.Load(id)
-	if err != nil {
-		return err
-	}
-	mutate(&t)
-	return s.Save(t)
+	return s.UpdateIf(id, func(t *Task) bool {
+		mutate(t)
+		return true
+	})
+}
+
+// UpdateIf is Update for a change that may decline to happen: mutate reports
+// whether it changed anything, and a false leaves the file alone.
+//
+// Writing back an unchanged copy is not harmless. It is a whole record written
+// from a snapshot, so a caller that declined would still stamp what it read
+// over anything written in the meantime.
+func (s *Store) UpdateIf(id string, mutate func(*Task) bool) error {
+	return s.withLock(id, func() error {
+		t, err := s.Load(id)
+		if err != nil {
+			return err
+		}
+		if !mutate(&t) {
+			return nil
+		}
+		return s.save(t)
+	})
 }
 
 // List returns every record in the store, ordered by start time, newest last.
@@ -202,8 +258,19 @@ func (s *Store) List() ([]Task, error) {
 
 // Delete removes the record for id. Deleting a missing record is not an error.
 func (s *Store) Delete(id string) error {
-	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("deleting state for %q: %w", id, err)
+	err := s.withLock(id, func() error {
+		if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("deleting state for %q: %w", id, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	// The lock outlives the record it guarded, so it goes too. Any holder
+	// still has it open, and unlinking does not disturb them.
+	if err := os.Remove(s.lockFile(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing the lock for %q: %w", id, err)
 	}
 	return nil
 }

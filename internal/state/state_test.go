@@ -2,7 +2,9 @@ package state
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -161,5 +163,90 @@ func TestHasProcessCoversThePhasesAfterTheAgent(t *testing.T) {
 		if s.HasProcess() {
 			t.Errorf("%q.HasProcess() = true, want false", s)
 		}
+	}
+}
+
+// TestUpdateIsAtomicAcrossWriters covers the lock around load, change and save.
+// One detached supervisor per task plus whatever the user is typing means
+// several processes write one record, and without the lock each would save a
+// copy read before the others' changes: the last writer wins and the rest are
+// lost.
+func TestUpdateIsAtomicAcrossWriters(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "RACE-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 40
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Each opens the store for itself, the way a separate process does.
+			if err := NewStore(dir).Update("RACE-1", func(k *Task) { k.ReviewRound++ }); err != nil {
+				t.Errorf("Update() = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	got, err := store.Load("RACE-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReviewRound != writers {
+		t.Errorf("review_round = %d, want %d: %d update(s) were lost",
+			got.ReviewRound, writers, writers-got.ReviewRound)
+	}
+}
+
+// TestUpdateIfLeavesTheFileAloneWhenItDeclines covers the other half: a caller
+// that decides not to change anything must not write back the copy it read,
+// which would undo whatever another writer had done in the meantime.
+func TestUpdateIfLeavesTheFileAloneWhenItDeclines(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "SKIP-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(filepath.Join(dir, "SKIP-1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Another writer moves the record on, then a declining update runs.
+	if err := store.Update("SKIP-1", func(k *Task) { k.Status = StatusDone }); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateIf("SKIP-1", func(k *Task) bool {
+		k.Status = StatusFailed // written to the copy, and meant to be discarded
+		return false
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Load("SKIP-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusDone {
+		t.Errorf("status = %q, want the declining update to have changed nothing", got.Status)
+	}
+	after, err := os.Stat(filepath.Join(dir, "SKIP-1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ModTime().Equal(before.ModTime()) {
+		t.Skip("the filesystem's timestamps are too coarse to tell the writes apart")
 	}
 }

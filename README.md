@@ -347,7 +347,7 @@ not about one run, so the override lives in the repository's own file:
 ```yaml
 # .agent-orc.yaml
 test_command: pytest -q -m "not slow"   # when discovery does not describe it
-test_timeout: 10m                       # per run; 30m default, "none" to skip
+test_timeout: 10m                       # cap per run; 30m default, "none" for no cap
 ```
 
 `test_command: none` turns verification off for a suite agent-orc should not be

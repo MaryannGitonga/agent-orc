@@ -76,8 +76,8 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      pct: ${{ steps.cov.outputs.pct }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -87,16 +87,31 @@ jobs:
       # built binary, so this merges their subprocess coverage with the unit
       # profile; unit coverage alone understates it by about thirty points.
       - name: Coverage
+        id: cov
         run: |
           total=$(make -s coverage)
           echo "$total"
           echo "### ${total}" >> "$GITHUB_STEP_SUMMARY"
-          echo "PCT=$(printf '%s' "$total" | grep -oE '[0-9.]+')" >> "$GITHUB_ENV"
+          echo "pct=$(printf '%s' "$total" | grep -oE '[0-9.]+')" >> "$GITHUB_OUTPUT"
 
+  # Separate from the job that measures, and never running any of the
+  # repository's code: only this one holds a token that can write, and it does
+  # so on push alone. Measuring happens on pull requests too, where the code
+  # being run is the pull request's own.
+  coverage-badge:
+    name: coverage badge
+    if: github.event_name == 'push'
+    needs: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
       # The README badge reads this file through shields.io. It lives on its own
       # branch so publishing it never touches main's history, which CI checks.
-      - name: Publish the coverage badge
-        if: github.event_name == 'push'
+      - name: Publish the shields endpoint
+        env:
+          PCT: ${{ needs.coverage.outputs.pct }}
         run: |
           case "${PCT%%.*}" in
             9?|100) colour=brightgreen ;;
@@ -109,6 +124,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch --orphan badges
+          git rm -rqf .
           mv /tmp/coverage.json coverage.json
           git add coverage.json
           git commit -qm "chore: coverage ${PCT}%"
