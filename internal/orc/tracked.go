@@ -53,6 +53,20 @@ func (t tracker) run(cmd *exec.Cmd) error {
 	// timer on the way out is not enough on its own: Stop does not wait for a
 	// callback that has already begun.
 	//
+	// The obvious alternative, waiting in a goroutine and selecting between the
+	// result and a timer channel, is worse rather than better. A timer that has
+	// fired leaves its value in the channel, so once both are ready select
+	// picks between them at random and takes the timeout branch about half the
+	// time for a child that finished on its own. The lock has no such memory: a
+	// callback that arrives after the wait finds reaped set and does nothing.
+	//
+	// What remains is the gap between wait4 returning inside cmd.Wait and the
+	// lock being taken on the next line, which is a few instructions and cannot
+	// be closed in portable Go, since no userspace flag can be set atomically
+	// with the kernel reaping a child. The standard library carries the same
+	// residual in Process.Signal after Wait. Nothing is left between those two
+	// lines for that reason.
+	//
 	// The kill covers the whole group, not just the leader: a test command runs
 	// a build and a test runner of its own, and killing only the shell would
 	// leave those holding the worktree while the task moved on.
