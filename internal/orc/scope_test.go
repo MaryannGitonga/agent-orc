@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -100,79 +101,100 @@ func TestStaleWriteCannotClobberARedispatchedTask(t *testing.T) {
 // Cleanup decides what to remove, tears down a worktree and a branch, and only
 // then drops the record, by which point the id may have been dispatched again.
 //
-// The interleaving is pinned rather than raced for: the task's lock is held so
-// cleanup stops at the delete, the new run is written while it waits, and the
-// lock is then released to let it finish against a record it never loaded.
+// The interleaving is arranged rather than waited for: the task's lock is held
+// so cleanup stops at the delete, the new run is written while it waits, and
+// the lock is then released to let it finish against a record it never loaded.
+// Whether cleanup reached the lock in time is not assumed, it is read back from
+// what it returned, and an attempt that lost the ordering is retried rather
+// than asserted on.
 func TestCleanupDeletesOnlyTheRunItLoaded(t *testing.T) {
 	home := t.TempDir()
 	layout := paths.Layout{Root: home, State: filepath.Join(home, "state"), Logs: filepath.Join(home, "logs")}
 	store := state.NewStore(layout.State)
+	record := filepath.Join(layout.State, "Y.json")
 	firstRun := time.Now().UTC().Add(-time.Hour)
-	secondRun := time.Now().UTC()
 
-	// A finished task whose worktree is already gone, so cleanup has no git to
-	// do and reaches the delete directly.
-	if err := store.Save(state.Task{
-		Task:      task.Task{ID: "Y", CLI: task.CLIClaude},
-		Worktree:  filepath.Join(home, "gone"),
-		Status:    state.StatusDone,
-		StartedAt: firstRun,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	for attempt := 1; ; attempt++ {
+		if attempt > 20 {
+			t.Fatal("cleanup never reached the delete while the lock was held")
+		}
+		secondRun := time.Now().UTC()
 
-	lock, err := os.OpenFile(filepath.Join(layout.State, "Y.lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		t.Fatal(err)
-	}
+		// A finished task whose worktree is already gone, so cleanup has no git
+		// to do and reaches the delete directly.
+		if err := store.Save(state.Task{
+			Task:      task.Task{ID: "Y", CLI: task.CLIClaude},
+			Worktree:  filepath.Join(home, "gone"),
+			Status:    state.StatusDone,
+			StartedAt: firstRun,
+		}); err != nil {
+			t.Fatal(err)
+		}
 
-	done := make(chan error, 1)
-	go func() { done <- NewCleaner(layout, io.Discard).Clean("Y", false, false) }()
+		lock, err := os.OpenFile(filepath.Join(layout.State, "Y.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+			t.Fatal(err)
+		}
 
-	// Long enough for cleanup to load the finished run and block on the lock:
-	// all it has to do first is one stat.
-	time.Sleep(200 * time.Millisecond)
+		done := make(chan error, 1)
+		go func() { done <- NewCleaner(layout, io.Discard).Clean("Y", false, false) }()
 
-	// The id, dispatched again while cleanup waits. Written directly because
-	// Save would want the lock this test is holding.
-	replacement, err := json.Marshal(state.Task{
-		Task:      task.Task{ID: "Y", CLI: task.CLIClaude},
-		Status:    state.StatusRunning,
-		PID:       222,
-		StartedAt: secondRun,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(layout.State, "Y.json"), replacement, 0o644); err != nil {
-		t.Fatal(err)
-	}
+		// Time for cleanup to load the finished run and block on the lock: all
+		// it has to do first is one stat. Whether it managed to is checked
+		// below rather than trusted.
+		time.Sleep(200 * time.Millisecond)
 
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("Clean() = %v", err)
-	}
+		// The id, dispatched again while cleanup waits. Written directly
+		// because Save would want the lock this test is holding.
+		replacement, err := json.Marshal(state.Task{
+			Task:      task.Task{ID: "Y", CLI: task.CLIClaude},
+			Status:    state.StatusRunning,
+			PID:       222,
+			StartedAt: secondRun,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(record, replacement, 0o644); err != nil {
+			t.Fatal(err)
+		}
 
-	got, err := store.Load("Y")
-	if err != nil {
-		t.Fatalf("the new run's record did not survive cleanup: %v", err)
-	}
-	if !got.StartedAt.Equal(secondRun) || got.PID != 222 {
-		t.Errorf("record is %v pid=%d, want the second run untouched", got.StartedAt, got.PID)
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+			t.Fatal(err)
+		}
+		lock.Close()
+
+		// Cleanup refuses an active task, so an error naming that is proof it
+		// read the replacement instead of the finished run: the ordering this
+		// test needs did not happen, and there is nothing to assert on.
+		switch err := <-done; {
+		case err == nil: // it deleted against the record it loaded
+		case strings.Contains(err.Error(), "stop it first"):
+			continue
+		default:
+			t.Fatalf("Clean() = %v", err)
+		}
+
+		got, err := store.Load("Y")
+		if err != nil {
+			t.Fatalf("the new run's record did not survive cleanup: %v", err)
+		}
+		if !got.StartedAt.Equal(secondRun) || got.PID != 222 {
+			t.Errorf("record is %v pid=%d, want the second run untouched", got.StartedAt, got.PID)
+		}
+		return
 	}
 }
 
-// TestStoppedTreatsAReplacedRunAsStopped covers what the loops that outlive the
-// agent ask before each round. A stop is not the only reason to stop: the task
-// having been cleaned up, or the id having been taken by a newer run, ends this
-// run just as firmly, and the worktree it would carry on in is not its own.
-func TestStoppedTreatsAReplacedRunAsStopped(t *testing.T) {
+// TestHaltedNamesTheReasonThisRunIsOver covers what the loops that outlive the
+// agent ask before each round. A stop is not the only ending: the task having
+// been cleaned up, or its id taken by a newer run, ends this run just as
+// firmly. They are reported apart, because a run that lost its id is not one a
+// human stopped, and a store that cannot be read is neither.
+func TestHaltedNamesTheReasonThisRunIsOver(t *testing.T) {
 	dir := t.TempDir()
 	store := state.NewStore(dir)
 	firstRun := time.Now().UTC().Add(-time.Hour)
@@ -188,33 +210,46 @@ func TestStoppedTreatsAReplacedRunAsStopped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	wantReason := func(what string, got error, want string) {
+		t.Helper()
+		if got == nil {
+			t.Errorf("halted() = nil for %s, want %q", what, want)
+			return
+		}
+		if !strings.Contains(got.Error(), want) {
+			t.Errorf("halted() = %q for %s, want it to say %q", got, what, want)
+		}
+	}
 
 	save(state.StatusRunning, firstRun)
-	if mine.stopped("S") {
-		t.Error("stopped() = true for this run, still running")
+	if reason := mine.halted("S"); reason != nil {
+		t.Errorf("halted() = %v for this run, still running", reason)
 	}
 
 	save(state.StatusStopped, firstRun)
-	if !mine.stopped("S") {
-		t.Error("stopped() = false for this run, stopped")
-	}
+	wantReason("a stopped task", mine.halted("S"), "was stopped")
 
 	// Cleaned up and dispatched again: a healthy record, but not this one's.
 	save(state.StatusRunning, time.Now().UTC())
-	if !mine.stopped("S") {
-		t.Error("stopped() = false for a record that belongs to a later run")
-	}
+	wantReason("a replaced run", mine.halted("S"), "belongs to a later run")
 	// An unscoped caller is asking about whatever the id names now.
-	if scopeTo(store, time.Time{}).stopped("S") {
-		t.Error("stopped() = true unscoped, for a running task")
+	if reason := scopeTo(store, time.Time{}).halted("S"); reason != nil {
+		t.Errorf("halted() = %v unscoped, for a running task", reason)
 	}
 
-	if err := store.Delete("S"); err != nil {
+	// A store that cannot be read is not an answer about ownership, and saying
+	// the run was replaced would send someone looking for a task that is fine.
+	if err := os.WriteFile(filepath.Join(dir, "S.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !mine.stopped("S") {
-		t.Error("stopped() = false for a record that is gone")
+	wantReason("an unreadable record", mine.halted("S"), "reading task")
+
+	// Removed directly: a record that cannot be parsed cannot be judged, so
+	// Delete declines to guess which run it would be removing.
+	if err := os.Remove(filepath.Join(dir, "S.json")); err != nil {
+		t.Fatal(err)
 	}
+	wantReason("a deleted task", mine.halted("S"), "no longer exists")
 }
 
 // TestSuperviseRefusesARunItWasNotStartedFor covers the gap between a record
@@ -251,5 +286,99 @@ func TestSuperviseRefusesARunItWasNotStartedFor(t *testing.T) {
 	}
 	if got.Status != state.StatusPending || got.Error != "" {
 		t.Errorf("record is %q/%q, want the newer run untouched", got.Status, got.Error)
+	}
+}
+
+// TestSuperviseStopsAnAgentItNoLongerOwns covers the gap between the check at
+// the top of Supervise and the agent actually starting. A forced cleanup and a
+// redispatch in that window leave an agent from the old run loose in the new
+// run's worktree, and declining to record its pid does not make it stop: it has
+// to be killed, or it goes on committing in a checkout that is not its own.
+func TestSuperviseStopsAnAgentItNoLongerOwns(t *testing.T) {
+	home := t.TempDir()
+	layout := paths.Layout{Root: home, State: filepath.Join(home, "state"), Logs: filepath.Join(home, "logs")}
+	store := state.NewStore(layout.State)
+	dispatchedFor := time.Now().UTC().Add(-time.Hour)
+	if err := os.MkdirAll(layout.Logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A stub on PATH that outlives this test unless something stops it, and
+	// says where to find it.
+	pidFile := filepath.Join(home, "agent.pid")
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := "#!/bin/sh\necho $$ > " + pidFile + "\nsleep 30\n"
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := store.Save(state.Task{
+		Task:      task.Task{ID: "K", CLI: task.CLIClaude, Prompt: "do it"},
+		Worktree:  home,
+		LogPath:   filepath.Join(layout.Logs, "K.log"),
+		Status:    state.StatusPending,
+		StartedAt: dispatchedFor,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Held so the supervisor blocks where it records the running agent, which
+	// is the first thing it does after starting one.
+	lock, err := os.OpenFile(filepath.Join(layout.State, "K.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- NewSupervisor(layout, io.Discard).Supervise("K", dispatchedFor) }()
+
+	// Long enough for the agent to have started and written its pid.
+	var agentPID int
+	for waited := 0; agentPID == 0 && waited < 100; waited++ {
+		time.Sleep(50 * time.Millisecond)
+		if b, err := os.ReadFile(pidFile); err == nil {
+			agentPID, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		}
+	}
+	if agentPID == 0 {
+		t.Fatal("the stub agent never started")
+	}
+
+	// Cleaned up and dispatched again while the supervisor waits to record it.
+	replacement, err := json.Marshal(state.Task{
+		Task:      task.Task{ID: "K", CLI: task.CLIClaude},
+		Status:    state.StatusRunning,
+		StartedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.State, "K.json"), replacement, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "no longer belongs") {
+			t.Fatalf("Supervise() = %v, want it to report the id had moved on", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Supervise() waited for an agent it does not own")
+	}
+
+	// The point of all this: the agent is gone, not merely unrecorded.
+	if err := syscall.Kill(agentPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Errorf("kill(%d, 0) = %v, want the agent to have been stopped", agentPID, err)
 	}
 }
