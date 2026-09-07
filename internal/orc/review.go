@@ -24,54 +24,29 @@ type Reviewer struct {
 	layout paths.Layout
 	store  *state.Store
 	out    io.Writer
-	// owns scopes writes to one dispatch; see OwnRun.
-	owns time.Time
+	// scope ties this reviewer to one dispatch; unset for `agent-orc review`,
+	// which acts on whatever the id names now.
+	scope runScope
 }
 
 // NewReviewer returns a reviewer writing progress to out.
 func NewReviewer(layout paths.Layout, out io.Writer) *Reviewer {
-	return &Reviewer{layout: layout, store: state.NewStore(layout.State), out: out}
+	store := state.NewStore(layout.State)
+	return &Reviewer{layout: layout, store: store, out: out, scope: runScope{store: store}}
 }
-
-// OwnRun scopes this reviewer's writes to one dispatch of the task, the way the
-// publisher's are. An automatic review runs inside the supervisor after the
-// agent has exited, by which point the task can have been cleaned up and its id
-// dispatched again. `agent-orc review` leaves it unset: a human invoking it is
-// acting on whatever the id names now.
-func (r *Reviewer) OwnRun(startedAt time.Time) { r.owns = startedAt }
 
 // mayContinue says why this reviewer should stop working on the task, or nil to
 // carry on. It answers nothing for a reviewer that is not scoped to a run,
-// which is what `agent-orc review` builds.
-//
-// Both reasons come from one read: a stop lands as a killed child or as a
-// record change, and between rounds there is no child, so the record is the
-// only place either shows.
+// which is what `agent-orc review` builds: that one acts on whatever the id
+// names now, and there is no earlier run for it to have lost.
 func (r *Reviewer) mayContinue(id string) error {
-	if r.owns.IsZero() {
+	if r.scope.since.IsZero() {
 		return nil
 	}
-	current, err := r.store.Load(id)
-	switch {
-	case err != nil:
-		return fmt.Errorf("re-reading task %q: %w", id, err)
-	case !current.StartedAt.Equal(r.owns):
-		return fmt.Errorf("task %q now belongs to a later run; no further review rounds", id)
-	case current.Status == state.StatusStopped:
-		return fmt.Errorf("task %q was stopped; no further review rounds", id)
+	if reason := r.scope.halted(id); reason != nil {
+		return fmt.Errorf("%w; no further review rounds", reason)
 	}
 	return nil
-}
-
-// update applies mutate, skipping the write when the record no longer belongs
-// to the run this reviewer was scoped to.
-func (r *Reviewer) update(id string, mutate func(*state.Task)) error {
-	return r.store.Update(id, func(k *state.Task) {
-		if !r.owns.IsZero() && !k.StartedAt.Equal(r.owns) {
-			return
-		}
-		mutate(k)
-	})
 }
 
 // Review runs review rounds until the reviewer approves the branch.
@@ -99,7 +74,7 @@ func (r *Reviewer) Review(id string) error {
 	}
 	if approved {
 		now := time.Now().UTC()
-		return r.update(id, func(k *state.Task) {
+		return r.scope.update(id, func(k *state.Task) {
 			k.Status = state.StatusReviewed
 			// Reviewed is where the task stops, and `status` measures elapsed
 			// to whenever that was. Leaving the time its agent exited would
@@ -120,7 +95,7 @@ func (r *Reviewer) Review(id string) error {
 	// has been retried is worse than one explaining nothing. The status stays:
 	// the branch still has no approval and was never published, which is what
 	// review_failed says and what `agent-orc pr` is for.
-	return r.update(id, func(k *state.Task) {
+	return r.scope.update(id, func(k *state.Task) {
 		if k.Status == state.StatusReviewFailed {
 			k.Error = ""
 			fmt.Fprintf(r.out, "%s  the earlier automatic review failure no longer applies; "+
@@ -132,26 +107,19 @@ func (r *Reviewer) Review(id string) error {
 // Rounds runs review rounds until the reviewer approves, and reports whether
 // it did.
 //
-// There is no round cap. A change that was reviewed but not approved is not a
-// reviewed change, and stopping at an arbitrary count would only publish it
-// anyway. What bounds the loop instead is the same pair that bounds the test
-// gate: the budget, enforced by the CLIs themselves, and a worker that has
-// stopped acting on the comments, which is a fixed point rather than a quota.
+// There is no round cap: a change reviewed but not approved is not a reviewed
+// change, and stopping at a count would publish it anyway. The same pair bounds
+// this as the test gate, the budget and a worker that stops acting on comments.
 //
-// It is also the loop without the guards Review applies first, because the
-// caller that skips them is the supervisor: it runs this the moment the agent
-// exits, when the task is still mid-flight by every check a human invocation
-// makes, and it is itself the thing that would otherwise be moving the branch.
+// It is the loop without the guards Review applies first, because the caller
+// that skips them is the supervisor: it runs the moment the agent exits, when
+// every check a human invocation makes would say the task is still mid-flight.
 func (r *Reviewer) Rounds(record *state.Task) (bool, error) {
 	for {
-		// Only the automatic pass asks, and one load answers both questions it
-		// has. It runs inside the supervisor, where a stop is meant to end the
-		// work and where the id can be cleaned up and dispatched again while
-		// the loop is still going: scoping the writes is not enough for that,
-		// because a round checks out the branch the id names now and pays for
-		// a reviewer and a worker to work on it. A human running `agent-orc
-		// review` on a stopped task is asking for something reasonable, since
-		// the work is still sitting on the branch, so none of this applies.
+		// Only the automatic pass asks. Scoping the writes is not enough here:
+		// a round checks out whatever branch the id names now and pays a
+		// reviewer and a worker to work on it. A human reviewing a stopped
+		// task is asking for something reasonable, so this does not apply.
 		if err := r.mayContinue(record.ID); err != nil {
 			return false, err
 		}
@@ -226,7 +194,7 @@ func (r *Reviewer) round(record *state.Task) (bool, error) {
 // bump records a completed round.
 func (r *Reviewer) bump(record *state.Task, round int) error {
 	record.ReviewRound = round
-	return r.update(record.ID, func(k *state.Task) { k.ReviewRound = round })
+	return r.scope.update(record.ID, func(k *state.Task) { k.ReviewRound = round })
 }
 
 // runReviewer checks the branch out into a fresh worktree, runs the reviewing
@@ -325,7 +293,7 @@ func (r *Reviewer) capture(id, dir string, argv []string, logPath string) (strin
 	// In its own process group with its pid on the record, so an automatic
 	// review, which runs with no agent process left to stop, can still be.
 	warn := func(format string, args ...any) { fmt.Fprintf(r.out, format+"\n", args...) }
-	if err := (tracker{id: id, update: r.update, warn: warn}).run(cmd); err != nil {
+	if err := (tracker{id: id, update: r.scope.update, warn: warn}).run(cmd); err != nil {
 		return buf.String(), fmt.Errorf("task %q: %s exited with an error: %w: %s",
 			id, argv[0], err, strings.TrimSpace(lastLines(buf.String(), 5)))
 	}

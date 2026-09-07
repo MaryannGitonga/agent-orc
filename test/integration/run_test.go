@@ -316,3 +316,84 @@ func TestRunCleansUpWhenTheStateWriteFails(t *testing.T) {
 		t.Errorf("branch %q was left behind after a failed launch", b)
 	}
 }
+
+// TestSuperviseRecordsAnAgentThatCannotStart covers the supervisor's own
+// failure path. Run checks the CLI is on PATH before making anything, so this
+// is reached when the binary goes away between dispatch and launch: the task
+// has a record and a worktree, and nothing to run in it.
+func TestSuperviseRecordsAnAgentThatCannotStart(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "NOSTART-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "NOSTART-1", "done", "failed")
+
+	// Put the task back to pending and supervise it again with nothing on
+	// PATH, which is what a CLI uninstalled mid-flight looks like.
+	statePath := filepath.Join(home, "state", "NOSTART-1.json")
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(readFile(t, statePath)), &rec); err != nil {
+		t.Fatal(err)
+	}
+	rec["status"] = "pending"
+	rec["pid"] = 0
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, statePath, string(data))
+
+	out, err := orcRunWithPath(t, home, t.TempDir(), "supervise", "NOSTART-1")
+	if err == nil {
+		t.Fatalf("agent-orc supervise = nil, want the missing binary reported\n%s", out)
+	}
+	got := loadRecord(t, home, "NOSTART-1")
+	if got.Status != "failed" {
+		t.Errorf("status = %q, want failed", got.Status)
+	}
+	if !strings.Contains(got.Error, "starting claude") {
+		t.Errorf("error = %q, want it to name the binary that would not start", got.Error)
+	}
+	if got.PID != 0 {
+		t.Errorf("pid = %d, want none recorded for an agent that never ran", got.PID)
+	}
+}
+
+// TestRunReportsAnUnreadableWorktreePath covers the difference between a task
+// already occupying the worktree and one whose path cannot be inspected. Only
+// the first is a reason to send someone to cleanup.
+func TestRunReportsAnUnreadableWorktreePath(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	// Close the worktrees directory to searches, so stat on a path inside it
+	// fails with something other than "not there".
+	worktrees := filepath.Join(home, "worktrees")
+	if err := os.MkdirAll(worktrees, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(worktrees, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(worktrees, 0o755) }()
+	if _, err := os.Stat(filepath.Join(worktrees, "PERM-1")); err == nil || os.IsNotExist(err) {
+		t.Skip("stat still succeeds here, so this cannot be exercised (running as root?)")
+	}
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "PERM-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+	if err == nil {
+		t.Fatalf("agent-orc run = nil, want the unreadable path reported\n%s", out)
+	}
+	if strings.Contains(out, "already exists") {
+		t.Errorf("run = %q, want it not to claim a task is in the way", out)
+	}
+	if !strings.Contains(out, "checking whether") {
+		t.Errorf("run = %q, want it to say the path could not be inspected", out)
+	}
+}

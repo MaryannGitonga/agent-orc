@@ -1,8 +1,11 @@
 package state
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -161,5 +164,196 @@ func TestHasProcessCoversThePhasesAfterTheAgent(t *testing.T) {
 		if s.HasProcess() {
 			t.Errorf("%q.HasProcess() = true, want false", s)
 		}
+	}
+}
+
+// TestUpdateIsAtomicAcrossWriters covers the lock around load, change and save.
+// One detached supervisor per task plus whatever the user is typing means
+// several processes write one record, and without the lock each would save a
+// copy read before the others' changes: the last writer wins and the rest are
+// lost.
+func TestUpdateIsAtomicAcrossWriters(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "RACE-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 40
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Each opens the store for itself, the way a separate process does.
+			if err := NewStore(dir).Update("RACE-1", func(k *Task) { k.ReviewRound++ }); err != nil {
+				t.Errorf("Update() = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	got, err := store.Load("RACE-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReviewRound != writers {
+		t.Errorf("review_round = %d, want %d: %d update(s) were lost",
+			got.ReviewRound, writers, writers-got.ReviewRound)
+	}
+}
+
+// TestUpdateIfLeavesTheFileAloneWhenItDeclines covers the other half: a caller
+// that decides not to change anything must not write back the copy it read,
+// which would undo whatever another writer had done in the meantime.
+func TestUpdateIfLeavesTheFileAloneWhenItDeclines(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "SKIP-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(dir, "SKIP-1.json")
+	before, err := os.Stat(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Another writer moves the record on. Its timestamp is the one a second
+	// write would have to disturb, so it is also the yardstick for whether
+	// this filesystem can tell two writes apart at all.
+	if err := store.Update("SKIP-1", func(k *Task) { k.Status = StatusDone }); err != nil {
+		t.Fatal(err)
+	}
+	mid, err := os.Stat(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mid.ModTime().Equal(before.ModTime()) {
+		t.Skip("the filesystem's timestamps are too coarse to tell the writes apart")
+	}
+
+	if err := store.UpdateIf("SKIP-1", func(k *Task) bool {
+		k.Status = StatusFailed // written to the copy, and meant to be discarded
+		return false
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("the declining update rewrote the record:\n got %s\nwant %s", got, want)
+	}
+	after, err := os.Stat(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(mid.ModTime()) {
+		t.Errorf("modtime = %v, want the declining update to have left it at %v", after.ModTime(), mid.ModTime())
+	}
+}
+
+// TestDeleteLeavesTheLockInPlace pins why the lock file outlives the record it
+// guards. Unlinking it would let a caller holding the old file and a caller
+// opening a fresh one at the same path both believe they hold the task's lock.
+func TestDeleteLeavesTheLockInPlace(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "LOCK-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(dir, "LOCK-1.lock")
+	before, err := os.Stat(lock)
+	if err != nil {
+		t.Fatalf("the save should have created the lock: %v", err)
+	}
+
+	if err := store.Delete("LOCK-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.Stat(lock)
+	if err != nil {
+		t.Fatalf("the lock should have survived the delete: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("the lock file was replaced, so lockers can end up on separate inodes")
+	}
+
+	// The record is gone even so, and the leftover lock is not mistaken for one.
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Errorf("List() = %v, want the deleted record to be gone", tasks)
+	}
+}
+
+// TestDeleteIfOnlyRemovesTheRunItWasAskedFor covers the tail of a cleanup: the
+// caller decided to delete some time ago, and by now the id may have been
+// dispatched again.
+func TestDeleteIfOnlyRemovesTheRunItWasAskedFor(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	firstRun := time.Now().UTC().Add(-time.Hour)
+	secondRun := time.Now().UTC()
+	wantFirstRun := func(cur Task) bool { return cur.StartedAt.Equal(firstRun) }
+
+	// Nothing there at all is not an error, the way an already-cleaned task is.
+	switch deleted, err := store.DeleteIf("GEN-1", wantFirstRun); {
+	case err != nil:
+		t.Fatal(err)
+	case deleted:
+		t.Error("DeleteIf() reported deleting a record that was never there")
+	}
+
+	// The id has been taken by a newer run, so the old cleanup keeps its hands off.
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "GEN-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: secondRun,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	switch deleted, err := store.DeleteIf("GEN-1", wantFirstRun); {
+	case err != nil:
+		t.Fatal(err)
+	case deleted:
+		t.Error("DeleteIf() removed a newer run's record")
+	}
+	if got, err := store.Load("GEN-1"); err != nil || !got.StartedAt.Equal(secondRun) {
+		t.Errorf("Load() = %v, %v; want the newer run untouched", got.StartedAt, err)
+	}
+
+	// The run it was asked for does go.
+	switch deleted, err := store.DeleteIf("GEN-1", func(cur Task) bool {
+		return cur.StartedAt.Equal(secondRun)
+	}); {
+	case err != nil:
+		t.Fatal(err)
+	case !deleted:
+		t.Error("DeleteIf() left the run it was asked to remove")
+	}
+	if _, err := store.Load("GEN-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Load() = %v, want ErrNotFound", err)
 	}
 }

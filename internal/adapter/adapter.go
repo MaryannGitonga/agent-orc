@@ -29,29 +29,24 @@ type Adapter interface {
 	// mechanism agent-orc can seed.
 	SubagentDir() string
 	// AttributionArgs asks the CLI not to add its own attribution trailers.
-	// This is only a first line of defence: the settings are inconsistently
-	// honoured, and an agent crafting a raw `git commit` bypasses them, so
-	// the sanitization pass before push never depends on it working.
+	// A first line of defence only: the settings are inconsistently honoured
+	// and a raw `git commit` bypasses them, so sanitization never relies on it.
 	AttributionArgs() []string
-	// ParseUsage reads what the run actually cost out of its log. It returns
-	// nil when the CLI reports nothing usable, because inventing a number
-	// would be worse than admitting there isn't one.
+	// ParseUsage reads what the run cost out of its log, or nil when the CLI
+	// reports nothing usable. An invented number would be worse than none.
 	ParseUsage(logPath string) (*Usage, error)
 	// SessionArgs pins the run to a session ID agent-orc chose, so the session
 	// can be resumed later. It returns nil for a CLI that cannot be told.
 	SessionArgs(sessionID string) []string
-	// WritesJSONResult reports whether this CLI reports through a machine
-	// readable envelope rather than in prose. It is what tells a caller
-	// holding raw output whether there is anything to unwrap: for a CLI that
-	// answers in prose, the bytes are the answer, and touching them at all is
-	// a change to the record of what happened.
+	// WritesJSONResult reports whether this CLI answers in a machine-readable
+	// envelope rather than prose. For one that answers in prose the bytes are
+	// the answer, and reshaping them changes the record of what happened.
 	WritesJSONResult() bool
-	// ParseResult extracts the agent's own final message from a run's output.
-	// A CLI that answers in prose returns it unchanged; one that wraps its
-	// answer in a JSON envelope returns just the answer. Anything reading what
-	// the agent *said*, as opposed to what it spent, has to go through this:
-	// the review verdict is one field of a very large object for some CLIs and
-	// the whole of stdout for others.
+	// ParseResult extracts the agent's final message from a run's output,
+	// unwrapping the envelope where there is one. Anything reading what the
+	// agent said, rather than what it spent, goes through this: a review
+	// verdict is one field of a large object for some CLIs and all of stdout
+	// for others.
 	ParseResult(output string) string
 	// ParseSessionID reads the session ID out of the run's own output. It is
 	// the fallback for CLIs that will not accept one; "" means unavailable.

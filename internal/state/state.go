@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/task"
@@ -119,9 +120,55 @@ func NewStore(dir string) *Store { return &Store{Dir: dir} }
 
 func (s *Store) path(id string) string { return filepath.Join(s.Dir, id+".json") }
 
-// Save writes t, replacing any existing record. The write goes to a temporary
-// file first so a reader never sees a half-written record.
+// lockFile is where a task's lock lives. It is a sibling of the record rather
+// than the record itself, so locking never depends on the record existing, and
+// it outlives the record: unlinking it would put a caller that opened it before
+// the delete and one that opens it after on two different inodes, each holding
+// what it thinks is the same lock. The file is empty, List ignores anything
+// that is not a .json, and an id reused after cleanup wants the same lock.
+//
+// So these accumulate, one empty file per task id ever used, and nothing sweeps
+// them. A sweep is not a small thing left undone: removing a lock is the unlink
+// described above whenever it happens, and doing it from cleanup would put it
+// exactly where a redispatch of that id is most likely to be waiting.
+func (s *Store) lockFile(id string) string { return filepath.Join(s.Dir, id+".lock") }
+
+// withLock runs fn while holding a task's lock.
+//
+// A record is read, changed and written back, and the processes doing that are
+// separate: one detached supervisor per task, plus whatever the user is typing.
+// Without a lock a supervisor can load a record, have cleanup delete it and a
+// new dispatch write its own underneath, and then save its stale copy over the
+// top. The generation check inside the write is what refuses that, and it can
+// only refuse what it sees, so the check and the save have to be one step.
+//
+// flock is advisory and per open file description, so every caller takes its
+// own descriptor and the kernel serializes them, in one process or many.
+func (s *Store) withLock(id string, fn func() error) error {
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return fmt.Errorf("creating state directory: %w", err)
+	}
+	f, err := os.OpenFile(s.lockFile(id), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("locking task %q: %w", id, err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("locking task %q: %w", id, err)
+	}
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	return fn()
+}
+
+// Save writes t, replacing any existing record.
 func (s *Store) Save(t Task) error {
+	return s.withLock(t.ID, func() error { return s.save(t) })
+}
+
+// save writes t without taking the lock, for callers that already hold it. The
+// write goes to a temporary file first so a reader never sees a half-written
+// record.
+func (s *Store) save(t Task) error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
@@ -165,14 +212,32 @@ func (s *Store) Load(id string) (Task, error) {
 	return t, nil
 }
 
-// Update loads a record, applies mutate to it and saves the result.
+// Update loads a record, applies mutate to it and saves the result, all while
+// holding the task's lock.
 func (s *Store) Update(id string, mutate func(*Task)) error {
-	t, err := s.Load(id)
-	if err != nil {
-		return err
-	}
-	mutate(&t)
-	return s.Save(t)
+	return s.UpdateIf(id, func(t *Task) bool {
+		mutate(t)
+		return true
+	})
+}
+
+// UpdateIf is Update for a change that may decline to happen: mutate reports
+// whether it changed anything, and a false leaves the file alone.
+//
+// Writing back an unchanged copy is not harmless. It is a whole record written
+// from a snapshot, so a caller that declined would still stamp what it read
+// over anything written in the meantime.
+func (s *Store) UpdateIf(id string, mutate func(*Task) bool) error {
+	return s.withLock(id, func() error {
+		t, err := s.Load(id)
+		if err != nil {
+			return err
+		}
+		if !mutate(&t) {
+			return nil
+		}
+		return s.save(t)
+	})
 }
 
 // List returns every record in the store, ordered by start time, newest last.
@@ -202,8 +267,33 @@ func (s *Store) List() ([]Task, error) {
 
 // Delete removes the record for id. Deleting a missing record is not an error.
 func (s *Store) Delete(id string) error {
-	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("deleting state for %q: %w", id, err)
-	}
-	return nil
+	_, err := s.DeleteIf(id, func(Task) bool { return true })
+	return err
+}
+
+// DeleteIf removes the record for id only if want says so, reporting whether it
+// did. The record is read and removed under one lock, so what want judges is
+// what gets deleted.
+//
+// Removing a task is not one write: the caller tears down a worktree and a
+// branch first, and only then drops the record. An id freed that way can be
+// dispatched again, so a caller that decided to delete some time ago has to say
+// which run it meant. Deleting a record that is already gone is not an error.
+func (s *Store) DeleteIf(id string, want func(Task) bool) (deleted bool, err error) {
+	err = s.withLock(id, func() error {
+		switch cur, err := s.Load(id); {
+		case errors.Is(err, ErrNotFound):
+			return nil
+		case err != nil:
+			return err
+		case !want(cur):
+			return nil
+		}
+		if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("deleting state for %q: %w", id, err)
+		}
+		deleted = true
+		return nil
+	})
+	return deleted, err
 }

@@ -348,3 +348,36 @@ func TestParseResultTellsAnEmptyAnswerFromNoEnvelope(t *testing.T) {
 		})
 	}
 }
+
+// TestProseCLIsReportTheirShape pins what the two prose CLIs claim about
+// themselves. Everything that reads an agent's answer keys off these, so a
+// wrong answer here would have agent-orc reshape output that is already the
+// record of what happened.
+func TestProseCLIsReportTheirShape(t *testing.T) {
+	for _, a := range []Adapter{Copilot{}, Codex{}} {
+		t.Run(string(a.Name()), func(t *testing.T) {
+			if a.WritesJSONResult() {
+				t.Error("WritesJSONResult() = true, want false for a CLI that answers in prose")
+			}
+			const out = `{"result":"not an envelope"}` + "\nplain text\n"
+			if got := a.ParseResult(out); got != out {
+				t.Errorf("ParseResult() = %q, want the output byte for byte", got)
+			}
+			// Neither CLI has a per-run flag that suppresses its own
+			// attribution trailers; sanitization is what removes them.
+			if got := a.AttributionArgs(); len(got) != 0 {
+				t.Errorf("AttributionArgs() = %v, want none", got)
+			}
+		})
+	}
+}
+
+// TestCopilotParseSessionIDReportsNothing covers the fallback that Copilot does
+// not have: agent-orc assigns its session id at launch, so nothing needs to be
+// read back out of the log.
+func TestCopilotParseSessionIDReportsNothing(t *testing.T) {
+	got, err := Copilot{}.ParseSessionID("/nonexistent/copilot.log")
+	if err != nil || got != "" {
+		t.Errorf("ParseSessionID() = %q, %v; want an empty id and no error", got, err)
+	}
+}

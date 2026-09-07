@@ -235,3 +235,28 @@ func TestHasUncommittedChanges(t *testing.T) {
 		t.Error("HasUncommittedChanges outside a repository = nil, want an error")
 	}
 }
+
+// TestSHA covers resolving a branch to the commit it points at, which is how
+// cleanup tells a branch already pushed from one holding unpushed work.
+func TestSHA(t *testing.T) {
+	dir := newRepo(t)
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.SHA("main")
+	if err != nil {
+		t.Fatalf("SHA(main) = %v", err)
+	}
+	// 40 for a SHA-1 repository, 64 for a SHA-256 one.
+	if len(got) != 40 && len(got) != 64 {
+		t.Errorf("SHA(main) = %q, want a full commit id", got)
+	}
+	// The same commit by another name resolves the same way.
+	if head, err := r.SHA("HEAD"); err != nil || head != got {
+		t.Errorf("SHA(HEAD) = %q, %v; want %q", head, err, got)
+	}
+	if _, err := r.SHA("no-such-branch"); err == nil {
+		t.Error("SHA(no-such-branch) = nil, want an error")
+	}
+}

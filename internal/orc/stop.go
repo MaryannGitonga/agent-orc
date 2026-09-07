@@ -86,22 +86,16 @@ func (r *Reporter) Stop(id string) error {
 // rather than a wait.
 const stopGrace = 5 * time.Second
 
-// killGrace is how long the group is given to disappear after SIGKILL, which
-// it cannot refuse. It is short because the only thing that outlasts it is a
-// process stuck in the kernel, which no amount of waiting will fix.
+// killGrace is how long the group is given after SIGKILL, which it cannot
+// refuse. Short, because only a process stuck in the kernel outlasts it.
 const killGrace = 2 * time.Second
 
-// signalGroup terminates the agent and everything it spawned, and makes sure it
-// is actually gone.
+// signalGroup terminates the agent and everything it spawned, and confirms it.
 //
-// An agent runs compilers, test runners and git of its own, and signalling only
-// the leader would orphan them. It is started with Setpgid, so the negative pid
-// addresses exactly that process's descendants and nothing else, and nothing
-// here ever signals a bare pid: see signal for why.
-//
-// SIGTERM is a request, and a process is free to ignore it. Returning as soon
-// as it was sent would record a task as stopped while it carried on running, so
-// this waits for the process to go and escalates to SIGKILL if it does not.
+// An agent runs compilers, test runners and git of its own, so the negative pid
+// addresses the whole group; nothing here signals a bare pid, for the reason on
+// signal. SIGTERM is only a request, and returning as soon as it was sent would
+// record a task as stopped while it carried on, so this waits and escalates.
 func signalGroup(pid int) error {
 	if err := signal(pid, syscall.SIGTERM); err != nil {
 		return err

@@ -17,28 +17,21 @@ import (
 var ErrTestsFailed = errors.New("the task's test command did not pass")
 
 // testOutputLines is how much of a failing run is handed back to the agent.
-// Enough to name what broke, short enough not to crowd out the task itself:
-// test runners put the summary at the end, which is the part that matters.
+// Test runners put the summary last, so the tail is the part worth sending.
 const testOutputLines = 60
 
 // verify runs a task's test command in its worktree, handing failures back to
-// the agent to fix, until the suite passes.
+// the agent to fix, until the suite passes. It is the difference between an
+// agent that says the tests pass and a branch where they do.
 //
-// It is the difference between an agent that says the tests pass and a branch
-// where they do. An agent asked to iterate until green will sometimes stop
-// short, and nothing downstream would notice: the commit is there, the branch
-// looks finished, and the draft PR opens over a red suite.
+// There is no attempt cap: getting the suite green is part of the work. Three
+// real conditions end the loop instead. The tests pass; the agent's CLI ends
+// the session, which is how a budget is enforced; or the agent commits nothing
+// in a round, a fixed point since the next run would be identical.
 //
-// There is no attempt cap. Getting the suite green is part of the work, not an
-// optional extra with a quota, so the loop runs until it is. What ends it
-// instead is one of three real conditions: the tests pass; the agent's own CLI
-// stops the session, which is how a budget is enforced and why a budget is the
-// gate here; or the agent stops changing anything, which is a fixed point,
-// since a round that commits nothing leaves the next run identical to the last.
-//
-// A CLI that cannot resume a session gets one run and no loop: there is no
-// session to hand the failure back to. It is still checked, because blocking a
-// red branch is worth more than the iteration is.
+// A CLI that cannot resume a session gets one run and no loop, there being no
+// session to hand the failure back to. It is still checked: blocking a red
+// branch is worth more than the iteration.
 func (s *Supervisor) verify(record state.Task) error {
 	command := strings.TrimSpace(record.TestCommand)
 	if command == "" {
@@ -61,11 +54,8 @@ func (s *Supervisor) verify(record state.Task) error {
 		// same read covers the id having been dispatched again, since this
 		// loop runs until the suite passes and that is long enough for a task
 		// to be cleaned up and replaced underneath it.
-		if s.wasStopped(record.ID) {
-			return fmt.Errorf("task %q was stopped before its tests could be run again", record.ID)
-		}
-		if !s.owns(record.ID) {
-			return fmt.Errorf("task %q now belongs to a later run; its tests are not ours to run", record.ID)
+		if reason := s.scope.halted(record.ID); reason != nil {
+			return fmt.Errorf("%w; not starting another test run", reason)
 		}
 		s.logf("running the test command (attempt %d): %s", attempt, command)
 		output, runErr := s.runTestCommand(record.ID, record.Worktree, command, record.TestRunTimeout())
@@ -89,8 +79,8 @@ func (s *Supervisor) verify(record state.Task) error {
 		// The failure may be the stop itself: `agent-orc stop` kills whatever
 		// child is running, and a non-zero exit from a killed test command is
 		// not a reason to hand it back to the agent and try again.
-		if s.wasStopped(record.ID) {
-			return fmt.Errorf("task %q was stopped while its tests were running", record.ID)
+		if reason := s.scope.halted(record.ID); reason != nil {
+			return fmt.Errorf("%w while its tests were running", reason)
 		}
 		if !resumable {
 			return fmt.Errorf("%w: %s", ErrTestsFailed, strings.TrimSpace(lastLines(output, 5)))
@@ -99,8 +89,8 @@ func (s *Supervisor) verify(record state.Task) error {
 		if err := s.handBackFailure(record, command, output); err != nil {
 			return err
 		}
-		if s.wasStopped(record.ID) {
-			return fmt.Errorf("task %q was stopped while the agent was fixing its tests", record.ID)
+		if reason := s.scope.halted(record.ID); reason != nil {
+			return fmt.Errorf("%w while the agent was fixing its tests", reason)
 		}
 		// A round that committed nothing has not changed the code under test,
 		// so running it again would fail in exactly the same way. Stopping
@@ -193,13 +183,13 @@ func (s *Supervisor) runTestCommand(id, dir, command string, timeout time.Durati
 // tracker runs a child on this task's behalf, in its own process group and
 // with its pid on the record while it runs.
 func (s *Supervisor) tracker(id string, timeout time.Duration) tracker {
-	return tracker{id: id, update: s.update, timeout: timeout, warn: s.logf}
+	return tracker{id: id, update: s.scope.update, timeout: timeout, warn: s.logf}
 }
 
 // recordTests notes how the verification went, so 'agent-orc status' can say
 // whether a branch was checked and what came of it.
 func (s *Supervisor) recordTests(id string, attempts int, passed bool) {
-	if err := s.update(id, func(k *state.Task) {
+	if err := s.scope.update(id, func(k *state.Task) {
 		k.TestRuns = attempts
 		k.TestsPassed = &passed
 	}); err != nil {

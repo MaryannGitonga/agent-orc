@@ -58,102 +58,162 @@ func NewDispatcher(layout paths.Layout, out io.Writer) (*Dispatcher, error) {
 // Run prepares a worktree for t and starts a detached supervisor in it. It
 // returns as soon as the supervisor is up; the agent keeps going after that.
 func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
-	if err := t.ValidateSpec(); err != nil {
-		return fmt.Errorf("invalid task %q: %w", t.ID, err)
-	}
-	t, err := d.resolvePrompt(ctx, t)
+	t, err := d.resolve(ctx, t)
 	if err != nil {
 		return err
 	}
-	if t.Instructions, err = d.standingInstructions(t); err != nil {
+	plan, err := d.preflight(t)
+	if err != nil {
 		return err
+	}
+	return d.launch(plan)
+}
+
+// resolve turns a dispatched task into the one that will actually run: the
+// prompt its source describes, the standing instructions around it, and the
+// state directories it needs.
+func (d *Dispatcher) resolve(ctx context.Context, t task.Task) (task.Task, error) {
+	if err := t.ValidateSpec(); err != nil {
+		return t, fmt.Errorf("invalid task %q: %w", t.ID, err)
+	}
+	t, err := d.resolvePrompt(ctx, t)
+	if err != nil {
+		return t, err
+	}
+	if t.Instructions, err = d.standingInstructions(t); err != nil {
+		return t, err
 	}
 	if err := t.Validate(); err != nil {
-		return fmt.Errorf("invalid task %q: %w", t.ID, err)
+		return t, fmt.Errorf("invalid task %q: %w", t.ID, err)
 	}
-	if err := d.layout.Ensure(); err != nil {
-		return err
+	return t, d.layout.Ensure()
+}
+
+// ResolveGitDefaults fills in the fields that need git or the filesystem to
+// work out: the repository's absolute path, the base branch, and the branch
+// name. It is shared by the single-task and batch paths so both get the same
+// defaults from the same code.
+func ResolveGitDefaults(t task.Task) (task.Task, error) {
+	if t.Repo == "" {
+		t.Repo = "."
 	}
+	abs, err := filepath.Abs(t.Repo)
+	if err != nil {
+		return t, fmt.Errorf("resolving repo %q: %w", t.Repo, err)
+	}
+	r, err := gitx.Open(abs)
+	if err != nil {
+		return t, err
+	}
+	t.Repo = r.Dir
+
+	if t.BaseBranch == "" {
+		if t.BaseBranch, err = r.DefaultBranch(); err != nil {
+			return t, err
+		}
+	}
+	if t.Branch == "" {
+		t.Branch = task.DefaultBranch(t.ID)
+	}
+	return t, t.ValidateSpec()
+}
+
+// launchPlan is what preflight settled: the task as it will run, and what
+// launch needs so it does not look any of it up again.
+type launchPlan struct {
+	task     task.Task
+	repo     *gitx.Repo
+	adapter  adapter.Adapter
+	testNote string
+}
+
+// preflight answers whether the task can run, before anything on disk is made
+// for it: the id is free, the CLI is installed, and the repository has room for
+// the branch and worktree it wants.
+//
+// Ordering is the point. A worktree, a branch and a state file left behind by a
+// task that never had a chance to start are worse than the error itself.
+func (d *Dispatcher) preflight(t task.Task) (launchPlan, error) {
+	fail := func(err error) (launchPlan, error) { return launchPlan{}, err }
+
 	// Only a missing record means the id is free. Any other load failure is a
 	// record that exists but cannot be read, and overwriting it would destroy
 	// whatever it was tracking.
 	switch _, err := d.store.Load(t.ID); {
 	case err == nil:
-		return fmt.Errorf("task %q already exists; pick another --id or run 'agent-orc cleanup %s'", t.ID, t.ID)
+		return fail(fmt.Errorf("task %q already exists; pick another --id or run 'agent-orc cleanup %s'", t.ID, t.ID))
 	case !errors.Is(err, state.ErrNotFound):
-		return fmt.Errorf("checking for an existing task %q: %w", t.ID, err)
+		return fail(fmt.Errorf("checking for an existing task %q: %w", t.ID, err))
 	}
 
-	// Check the agent's binary before touching the repository. The supervisor
-	// would otherwise fail on exec, after a worktree, a branch and a state file
-	// already exist for a task that never had a chance to run.
+	a, err := adapter.For(t.CLI)
+	if err != nil {
+		return fail(err)
+	}
 	bin, err := agentBinary(t)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	if _, err := exec.LookPath(bin); err != nil {
-		return fmt.Errorf("task %q needs %s, but %q is not on PATH: %w", t.ID, t.CLI, bin, err)
+		return fail(fmt.Errorf("task %q needs %s, but %q is not on PATH: %w", t.ID, t.CLI, bin, err))
 	}
 
 	repo, err := gitx.Open(t.Repo)
 	if err != nil {
-		return err
+		return fail(err)
 	}
-	// The top of the working tree, whatever was passed. Both callers resolve
-	// this before getting here, but RunBatch takes its preparation step as a
-	// parameter, so nothing enforces that: settling it here means discovery
-	// reads the repository's own markers, and the record names the repository,
-	// however this was reached.
-	t.Repo = repo.Dir
-
-	t, testNote := resolveTestCommand(t)
 	if !repo.RevExists(t.BaseBranch) {
-		return fmt.Errorf("base branch %q does not exist in %s", t.BaseBranch, repo.Dir)
+		return fail(fmt.Errorf("base branch %q does not exist in %s", t.BaseBranch, repo.Dir))
 	}
 	if repo.BranchExists(t.Branch) {
-		// The branch outliving its task is the normal case, since cleanup
-		// leaves it behind on purpose, so this fires most often on a retry of
-		// an id that was cleaned up. Name the command that clears it: by now
-		// the state file is gone, so 'agent-orc cleanup' no longer knows the
-		// branch and cannot be the answer.
-		return fmt.Errorf("branch %q already exists in %s; delete it with %s if it holds nothing you want, or pick another --branch",
+		return fail(fmt.Errorf("branch %q already exists in %s; delete it with %s if it holds nothing you want, or pick another --branch",
 			t.Branch, repo.Dir,
-			shellCommand("git", "-C", repo.Dir, "branch", "-D", "--", t.Branch))
+			shellCommand("git", "-C", repo.Dir, "branch", "-D", "--", t.Branch)))
+	}
+	// Only a directory that is really there is a task in the way. Any other
+	// stat failure means its state is unknown, and sending someone to cleanup
+	// over a permission or mount problem would be telling them the wrong thing.
+	worktree := d.layout.Worktree(t.ID)
+	switch _, err := os.Stat(worktree); {
+	case err == nil:
+		return fail(fmt.Errorf("worktree %s already exists; run 'agent-orc cleanup %s' first", worktree, t.ID))
+	case !errors.Is(err, fs.ErrNotExist):
+		return fail(fmt.Errorf("checking whether %s is free: %w", worktree, err))
 	}
 
+	// The repository root, whatever --repo said, so discovery reads the
+	// repository's own markers and the record names the repository.
+	t.Repo = repo.Dir
+	t, testNote := resolveTestCommand(t)
+	return launchPlan{task: t, repo: repo, adapter: a, testNote: testNote}, nil
+}
+
+// launch creates the task's worktree, record and supervisor, undoing whatever
+// it has already made if a later step fails.
+func (d *Dispatcher) launch(plan launchPlan) error {
+	t, repo, a, testNote := plan.task, plan.repo, plan.adapter, plan.testNote
 	worktree := d.layout.Worktree(t.ID)
-	if _, err := os.Stat(worktree); err == nil {
-		return fmt.Errorf("worktree %s already exists; run 'agent-orc cleanup %s' first", worktree, t.ID)
-	}
-	a, err := adapter.For(t.CLI)
-	if err != nil {
+	if err := repo.AddWorktree(worktree, t.Branch, t.BaseBranch); err != nil {
 		return err
 	}
-	if err := repo.AddWorktree(worktree, t.Branch, t.BaseBranch); err != nil {
+	// From here on a failure has something to undo, so each one rolls back
+	// what it found rather than leaving a half-made task behind.
+	undo := func(err error) error {
+		_ = repo.RemoveWorktree(worktree, true)
+		_ = repo.DeleteBranch(t.Branch)
 		return err
 	}
 
 	seeded, err := d.seedSubagents(t, a, worktree)
 	if err != nil {
-		// Nothing is running yet. A task that asked for subagents and did not
-		// get them would run differently from what was asked for, so undo the
-		// worktree and fail rather than launching it anyway.
-		_ = repo.RemoveWorktree(worktree, true)
-		return err
+		return undo(err)
 	}
-
-	// The session ID is assigned here rather than discovered afterwards, so a
-	// CLI that accepts one is resumable even if it says nothing about its own
-	// session. That is what lets review feedback go back to this session.
-	// Only mint an ID for a CLI that can actually pin a session to one. The
-	// probe value is discarded; it just asks the adapter whether it emits
-	// session flags at all, so a CLI like Codex neither carries an unusable id
-	// nor can fail a launch on generating one.
+	// Only for a CLI that takes one at launch, so a CLI like Codex neither
+	// carries an unusable id nor fails on generating one.
 	var sessionID string
 	if len(a.SessionArgs("probe")) > 0 {
 		if sessionID, err = adapter.NewSessionID(); err != nil {
-			_ = repo.RemoveWorktree(worktree, true)
-			return err
+			return undo(err)
 		}
 	}
 
@@ -169,37 +229,26 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 		SessionID:    sessionID,
 	}
 	if err := d.store.Save(record); err != nil {
-		// Nothing is running yet, so undo both halves of what AddWorktree did.
-		// The branch has to go too: left behind, it is an empty branch at base
-		// that makes a retry with the same id fail on the collision check.
-		_ = repo.RemoveWorktree(worktree, true)
-		_ = repo.DeleteBranch(t.Branch)
-		return err
+		return undo(err)
 	}
 
-	// A task id is reusable once its predecessor has been cleaned up, and the
-	// log paths are derived from the id alone, so a stale log would otherwise
-	// be appended to and 'agent-orc logs' would open with the previous run's
-	// output. Everything within one task still appends: the review rounds
-	// write into the same files as the worker.
+	// The record exists now, so a failure past this point is recorded on it
+	// rather than rolled back: the task is real, it simply never started. The
+	// write is scoped, because a forced cleanup can free the id while this is
+	// still getting going and the next run must not inherit the failure.
+	scope := scopeTo(d.store, record.StartedAt)
+	markFailed := func(err error) error {
+		_ = scope.update(t.ID, func(k *state.Task) {
+			k.Status = state.StatusFailed
+			k.Error = err.Error()
+		})
+		return err
+	}
 	if err := d.truncateLogs(t.ID); err != nil {
-		// The record already exists, so returning here without marking it
-		// would leave a task that is pending forever: nothing to stop, since
-		// there is no pid, and an id that is taken. Fail it the way the
-		// startSupervisor path below does, so ordinary cleanup can recover it.
-		_ = d.store.Update(t.ID, func(k *state.Task) {
-			k.Status = state.StatusFailed
-			k.Error = err.Error()
-		})
-		return err
+		return markFailed(err)
 	}
-
-	if err := d.startSupervisor(t.ID); err != nil {
-		_ = d.store.Update(t.ID, func(k *state.Task) {
-			k.Status = state.StatusFailed
-			k.Error = err.Error()
-		})
-		return err
+	if err := d.startSupervisor(t.ID, record.StartedAt); err != nil {
+		return markFailed(err)
 	}
 
 	fmt.Fprintf(d.out, "%s  started\n", t.ID)
@@ -216,8 +265,6 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	return nil
 }
 
-// seedSubagents copies the CLI's subagent definitions into the worktree when
-// the task asked for them, and returns what it copied.
 func (d *Dispatcher) seedSubagents(t task.Task, a adapter.Adapter, worktree string) ([]string, error) {
 	if !t.Subagents {
 		return nil, nil
@@ -263,14 +310,17 @@ func (d *Dispatcher) warnIfTracked(t task.Task, worktree, dir string) {
 // startSupervisor re-execs agent-orc as a detached supervisor. Its own session
 // is what lets the agent survive the dispatching terminal going away, so a
 // batch can run unattended without a daemon.
-func (d *Dispatcher) startSupervisor(id string) error {
+func (d *Dispatcher) startSupervisor(id string, since time.Time) error {
 	logFile, err := os.OpenFile(d.layout.SupervisorLogFile(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("opening supervisor log: %w", err)
 	}
 	defer logFile.Close()
 
-	cmd := exec.Command(d.self, "supervise", id)
+	// The generation goes with the id: between the record being written and
+	// this starting, a forced cleanup can free the id and another run take it,
+	// and the supervisor must not adopt a task it was not started for.
+	cmd := exec.Command(d.self, "supervise", id, since.Format(time.RFC3339Nano))
 	cmd.Dir = filepath.Dir(d.layout.Root)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
@@ -350,19 +400,13 @@ func shellQuote(s string) string {
 }
 
 // resolveTestCommand fills in how the repository runs its tests when the task
-// did not say.
-//
-// Nobody should have to tell agent-orc something the repository already
-// states: a project that has a make test target, or a go.mod, or a pytest
-// layout has said how it is tested, and reading that is better than asking for
-// it again in a config file. The explicit setting stays for the projects those
-// conventions do not describe, and "none" is how a repository whose tests
-// agent-orc should not run says so.
+// did not say. A project with a make test target, a go.mod or a pytest layout
+// has already stated it; the explicit setting is for projects those
+// conventions do not describe, and "none" opts out.
 func resolveTestCommand(t task.Task) (task.Task, string) {
-	// Trimmed once, into the task, so the record, the logs and the phase the
-	// supervisor enters all agree on what is set. Deciding on a trimmed copy
-	// and storing the original is how a whitespace-only setting ends up
-	// putting a task into verifying for a command that will never run.
+	// Trimmed into the task, so the record, the logs and the phase the
+	// supervisor enters agree. Deciding on a trimmed copy while storing the
+	// original put tasks into verifying for a command that never ran.
 	t.TestCommand = strings.TrimSpace(t.TestCommand)
 	switch t.TestCommand {
 	case testcmd.None:
@@ -390,16 +434,12 @@ func timeoutNote(t task.Task) string {
 	return "uncapped"
 }
 
-// truncateLogs clears whatever a previous task of the same id left behind. It
-// is called once the launch is certain, so a run that fails its checks leaves
-// the earlier task's record readable.
+// truncateLogs clears what a previous task of the same id left behind, once
+// the launch is certain so a failed check leaves the earlier record readable.
 //
-// The files are unlinked rather than truncated in place. An orphaned supervisor
-// from the previous task can still hold one of them open, and its handle is in
-// append mode, so truncating would leave that writer appending into the file
-// the new run is using and interleave two tasks' output. Unlinking leaves the
-// old handle writing into an inode nobody can reach, which goes away when it
-// closes, and the new run opens a file of its own.
+// Unlinked rather than truncated: an orphaned supervisor may still hold one
+// open in append mode, and truncating would leave it writing into the file the
+// new run is using.
 func (d *Dispatcher) truncateLogs(id string) error {
 	for _, path := range []string{
 		d.layout.LogFile(id),
@@ -436,11 +476,11 @@ func (d *Dispatcher) standingInstructions(t task.Task) (string, error) {
 // A task that cannot be launched does not stop the rest: the tasks are
 // independent by construction, so failing the whole batch over one bad entry
 // would throw away work that was fine. Every failure is reported at the end.
-func (d *Dispatcher) RunBatch(ctx context.Context, f *config.File, prepare func(task.Task) (task.Task, error)) error {
+func (d *Dispatcher) RunBatch(ctx context.Context, f *config.File) error {
 	var errs []error
 	launched := 0
 	for _, entry := range f.Tasks {
-		t, err := prepare(f.Resolved(entry))
+		t, err := ResolveGitDefaults(f.Resolved(entry))
 		if err == nil {
 			err = d.Run(ctx, t)
 		}
