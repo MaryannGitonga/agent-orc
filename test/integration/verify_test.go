@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -123,6 +124,38 @@ func TestVerifyTrimsTheConfiguredCommand(t *testing.T) {
 			t.Errorf("test_runs = %d, want the command to have run once", got.TestRuns)
 		}
 	})
+}
+
+// TestVerifyDiscoversFromTheRepositoryRoot covers where discovery looks. The
+// markers it reads sit at the top of the working tree, so a --repo pointing
+// into the tree has to be resolved to that top or a repository with tests reads
+// as having none.
+func TestVerifyDiscoversFromTheRepositoryRoot(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	write(t, filepath.Join(repo, "go.mod"), "module example.com/x\n\ngo 1.22\n")
+	write(t, filepath.Join(repo, "x.go"), "package x\n")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "--no-gpg-sign", "-m", "chore: module")
+
+	deep := filepath.Join(repo, "pkg", "deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := orcRun(t, home, stub, "run",
+		"--id", "ROOT-1", "--repo", deep, "--cli", "claude", "--prompt", "do it", "--no-auto-pr")
+	if err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "go test ./... (from go.mod)") {
+		t.Errorf("run = %q, want the root's marker found from a subdirectory", out)
+	}
+	got := waitForStatus(t, home, "ROOT-1", "done", "failed")
+	if got.TestRuns != 1 {
+		t.Errorf("test_runs = %d, want the discovered command to have run", got.TestRuns)
+	}
 }
 
 // TestVerifyNoneOptsOut is how a repository whose tests agent-orc should not be

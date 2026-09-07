@@ -99,6 +99,13 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	if err != nil {
 		return err
 	}
+	// The top of the working tree, whatever was passed. Both callers resolve
+	// this before getting here, but RunBatch takes its preparation step as a
+	// parameter, so nothing enforces that: settling it here means discovery
+	// reads the repository's own markers, and the record names the repository,
+	// however this was reached.
+	t.Repo = repo.Dir
+
 	t, testNote := resolveTestCommand(t)
 	if !repo.RevExists(t.BaseBranch) {
 		return fmt.Errorf("base branch %q does not exist in %s", t.BaseBranch, repo.Dir)
