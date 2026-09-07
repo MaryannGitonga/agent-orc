@@ -2,7 +2,9 @@ package orc
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,5 +63,40 @@ func TestTrackerReportsATimeout(t *testing.T) {
 func TestTrackerLeavesAnUntimedChildAlone(t *testing.T) {
 	if err := noopTracker(0).run(exec.Command("sh", "-c", "sleep 0.3; exit 0")); err != nil {
 		t.Errorf("run() = %v, want the command to finish on its own", err)
+	}
+}
+
+// TestTrackerWarnsWhenItCannotRecordThePID covers the two writes that are the
+// only handle `agent-orc stop` has on a tracked child. Neither failure is worth
+// killing the work over, but both leave the record wrong in a way somebody has
+// to be able to see: one loses the child, the other leaves a number that the
+// kernel will hand to a stranger.
+func TestTrackerWarnsWhenItCannotRecordThePID(t *testing.T) {
+	var warnings []string
+	tr := tracker{
+		id:     "T",
+		update: func(string, func(*state.Task)) error { return errors.New("the state file is unwritable") },
+		warn:   func(format string, args ...any) { warnings = append(warnings, fmt.Sprintf(format, args...)) },
+	}
+	if err := tr.run(exec.Command("sh", "-c", "exit 0")); err != nil {
+		t.Fatalf("run() = %v, want the command to have run regardless", err)
+	}
+	if len(warnings) != 2 {
+		t.Fatalf("warnings = %v, want one for recording the pid and one for clearing it", warnings)
+	}
+	if !strings.Contains(warnings[0], "will not reach it") {
+		t.Errorf("first warning = %q, want it to say stop cannot reach the child", warnings[0])
+	}
+	if !strings.Contains(warnings[1], "still names it") {
+		t.Errorf("second warning = %q, want it to say the record kept the pid", warnings[1])
+	}
+}
+
+// TestTrackerWithoutAWarnerStillRuns keeps the field optional, so a caller that
+// has nowhere to report is not a nil dereference.
+func TestTrackerWithoutAWarnerStillRuns(t *testing.T) {
+	tr := tracker{id: "T", update: func(string, func(*state.Task)) error { return errors.New("nope") }}
+	if err := tr.run(exec.Command("sh", "-c", "exit 0")); err != nil {
+		t.Errorf("run() = %v, want it to survive having no warner", err)
 	}
 }

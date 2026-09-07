@@ -193,7 +193,7 @@ func (s *Supervisor) runTestCommand(id, dir, command string, timeout time.Durati
 // tracker runs a child on this task's behalf, in its own process group and
 // with its pid on the record while it runs.
 func (s *Supervisor) tracker(id string, timeout time.Duration) tracker {
-	return tracker{id: id, update: s.update, timeout: timeout}
+	return tracker{id: id, update: s.update, timeout: timeout, warn: s.logf}
 }
 
 // recordTests notes how the verification went, so 'agent-orc status' can say

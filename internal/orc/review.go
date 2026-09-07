@@ -17,7 +17,9 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
-// Reviewer runs bounded worker and reviewer round-trips for a task.
+// Reviewer runs worker and reviewer round-trips for a task, until the reviewer
+// approves. What ends the loop short of that is the budget the CLIs enforce, a
+// worker that stops acting on the comments, or a stop; there is no round cap.
 type Reviewer struct {
 	layout paths.Layout
 	store  *state.Store
@@ -322,7 +324,8 @@ func (r *Reviewer) capture(id, dir string, argv []string, logPath string) (strin
 
 	// In its own process group with its pid on the record, so an automatic
 	// review, which runs with no agent process left to stop, can still be.
-	if err := (tracker{id: id, update: r.update}).run(cmd); err != nil {
+	warn := func(format string, args ...any) { fmt.Fprintf(r.out, format+"\n", args...) }
+	if err := (tracker{id: id, update: r.update, warn: warn}).run(cmd); err != nil {
 		return buf.String(), fmt.Errorf("task %q: %s exited with an error: %w: %s",
 			id, argv[0], err, strings.TrimSpace(lastLines(buf.String(), 5)))
 	}

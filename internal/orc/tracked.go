@@ -31,6 +31,17 @@ type tracker struct {
 	// alone, which is right for a child whose own caller ends it: only the
 	// test command can hang in a way nothing else would ever notice.
 	timeout time.Duration
+	// warn reports a record this could not write. Both writes here are the
+	// handle `agent-orc stop` reaches the child by, so losing one is worth
+	// saying out loud even though there is nothing useful to do about it.
+	warn func(format string, args ...any)
+}
+
+// warnf reports through the caller's log if it gave one.
+func (t tracker) warnf(format string, args ...any) {
+	if t.warn != nil {
+		t.warn(format, args...)
+	}
 }
 
 // ErrTimedOut means a tracked child was killed for running too long.
@@ -44,7 +55,12 @@ func (t tracker) run(cmd *exec.Cmd) error {
 		return err
 	}
 	pid := cmd.Process.Pid
-	_ = t.update(t.id, func(k *state.Task) { k.PID = pid })
+	if err := t.update(t.id, func(k *state.Task) { k.PID = pid }); err != nil {
+		// The child is already running, so there is nothing to undo; what is
+		// lost is the handle. Killing it here to keep the record honest would
+		// throw away the work for a failure that has nothing to do with it.
+		t.warnf("warning: could not record the child's pid (%v); 'agent-orc stop' will not reach it", err)
+	}
 
 	// The timer and the wait race for the same process, so they share a lock.
 	// Once the child has been reaped its pid means nothing and the kernel may
@@ -102,10 +118,14 @@ func (t tracker) run(cmd *exec.Cmd) error {
 
 	// Clear it only if it is still ours. Anything else means another writer
 	// has moved on and this pid is no longer what the record is tracking.
-	_ = t.update(t.id, func(k *state.Task) {
+	if uerr := t.update(t.id, func(k *state.Task) {
 		if k.PID == pid {
 			k.PID = 0
 		}
-	})
+	}); uerr != nil {
+		// A number left behind names whoever the kernel hands it to next, so
+		// a later stop or reconcile would be reading about a stranger.
+		t.warnf("warning: could not clear the child's pid %d (%v); the record still names it", pid, uerr)
+	}
 	return err
 }
