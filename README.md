@@ -2,7 +2,7 @@
 
 ![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FMaryannGitonga%2Fagent-orc%2Fbadges%2Fcoverage.json)
 ![go](https://img.shields.io/badge/go-1.22%2B-00ADD8)
-![version](https://img.shields.io/badge/version-v0.1.0-blue)
+![release](https://img.shields.io/github/v/release/MaryannGitonga/agent-orc)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 Run several agentic coding CLIs at once, each on its own task, each in its own
@@ -118,7 +118,7 @@ file locks, so there is no Windows build.
 Download a binary from the [latest release](https://github.com/MaryannGitonga/agent-orc/releases/latest):
 
 ```sh
-VERSION=v0.1.0
+VERSION=$(gh release view --repo MaryannGitonga/agent-orc --json tagName -q .tagName)
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # linux or darwin
 ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 gh release download "$VERSION" --repo MaryannGitonga/agent-orc \
