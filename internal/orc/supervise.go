@@ -111,7 +111,14 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	// The task is not done until the publish chain has run: §12's whole point
 	// is that nothing reaches the remote unsanitized, so "done" has to mean
 	// "sanitized, pushed and open as a draft", not "the agent stopped".
-	status := state.StatusDone
+	//
+	// Which is why nothing here is terminal on the success path. afterAgent
+	// runs next and it is the one that says the task is done, so saying it
+	// here as well would put "done" on the record twice, the first time while
+	// the supervisor still had work to do. Anything watching for the task to
+	// finish would be told so too early, and act on a record still being
+	// written. An empty status leaves whatever the record says alone.
+	var status state.Status
 	message := ""
 	switch {
 	case runErr != nil:
@@ -140,9 +147,12 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	if err := s.scope.update(id, func(k *state.Task) {
 		// A task a human stopped stays stopped; the non-zero exit that came
 		// from the signal is not a failure of the agent's own making.
-		if k.Status == state.StatusStopped {
+		switch {
+		case k.Status == state.StatusStopped:
 			recorded = state.StatusStopped
-		} else {
+		case status == "":
+			// Nothing recorded here: afterAgent decides what this task ends as.
+		default:
 			k.Status = status
 			k.Error = message
 		}
@@ -166,7 +176,11 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 		return err
 	}
 
-	s.logf("agent exited with code %d; task is %s", code, recorded)
+	if recorded == "" {
+		s.logf("agent exited with code %d; finishing up", code)
+	} else {
+		s.logf("agent exited with code %d; task is %s", code, recorded)
+	}
 	if runErr != nil {
 		return fmt.Errorf("task %s failed: %w", id, runErr)
 	}
