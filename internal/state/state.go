@@ -126,6 +126,11 @@ func (s *Store) path(id string) string { return filepath.Join(s.Dir, id+".json")
 // the delete and one that opens it after on two different inodes, each holding
 // what it thinks is the same lock. The file is empty, List ignores anything
 // that is not a .json, and an id reused after cleanup wants the same lock.
+//
+// So these accumulate, one empty file per task id ever used, and nothing sweeps
+// them. A sweep is not a small thing left undone: removing a lock is the unlink
+// described above whenever it happens, and doing it from cleanup would put it
+// exactly where a redispatch of that id is most likely to be waiting.
 func (s *Store) lockFile(id string) string { return filepath.Join(s.Dir, id+".lock") }
 
 // withLock runs fn while holding a task's lock.
