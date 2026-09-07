@@ -195,6 +195,14 @@ func runBatch(ctx context.Context, d *orc.Dispatcher, layout paths.Layout, path 
 // dispatch's job, and reporting it here as well would report it twice, from the
 // half of the program that was only trying to read an optional file.
 func repoRoot(dir string) string {
+	// No path means no repository, and it has to stay that way. A batch file
+	// that names no repo of its own leaves this empty, and filepath.Abs would
+	// turn that into the directory agent-orc happened to be run from: the
+	// tasks would then inherit settings from whatever repository the user was
+	// standing in, which is not theirs and may not be related to them at all.
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return dir

@@ -154,3 +154,56 @@ func TestSettingsFoundFromASubdirectory(t *testing.T) {
 		t.Errorf("cli/model = %q/%q, want them read from the repository root", got.CLI, got.Model)
 	}
 }
+
+// TestBatchWithoutARepoTakesNoRepoSettings covers a boundary between
+// repositories. A batch file that names no repo of its own has no repository
+// layer to read, and resolving that emptiness to the directory agent-orc was
+// run from would have its tasks inherit settings from whatever repository the
+// user happened to be standing in, which is not theirs.
+func TestBatchWithoutARepoTakesNoRepoSettings(t *testing.T) {
+	home := t.TempDir()
+	target := initRepo(t)
+	// An unrelated repository, with settings of its own, that the command is
+	// run from.
+	elsewhere := initRepo(t)
+	write(t, filepath.Join(elsewhere, ".agent-orc.yaml"), "model: from-somewhere-else\n")
+
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	batch := filepath.Join(t.TempDir(), "tasks.yaml")
+	// No top-level repo; the task names its own.
+	write(t, batch, "defaults:\n  cli: claude\ntasks:\n  - id: NOREPO-1\n    prompt: do it\n    auto_pr: false\n    repo: "+target+"\n")
+
+	cmd := exec.Command(buildBinary(t), "run", batch)
+	cmd.Dir = elsewhere
+	cmd.Env = append(os.Environ(), gitEnv...)
+	cmd.Env = append(cmd.Env,
+		"AGENT_ORC_HOME="+home,
+		"PATH="+stub+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+
+	if got := waitForStatus(t, home, "NOREPO-1", "done", "failed"); got.Model != "" {
+		t.Errorf("model = %q, want nothing inherited from the directory it was run in", got.Model)
+	}
+}
+
+// TestBatchWithARepoTakesItsSettings is the other half: naming a repo is what
+// asks for that repository's file, and it still arrives.
+func TestBatchWithARepoTakesItsSettings(t *testing.T) {
+	home := t.TempDir()
+	target := initRepo(t)
+	write(t, filepath.Join(target, ".agent-orc.yaml"), "model: from-the-target\n")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+
+	batch := filepath.Join(t.TempDir(), "tasks.yaml")
+	write(t, batch, "repo: "+target+"\ndefaults:\n  cli: claude\ntasks:\n  - id: REPO-1\n    prompt: do it\n    auto_pr: false\n")
+
+	if out, err := orcRun(t, home, stub, "run", batch); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	if got := waitForStatus(t, home, "REPO-1", "done", "failed"); got.Model != "from-the-target" {
+		t.Errorf("model = %q, want the named repository's own setting", got.Model)
+	}
+}
