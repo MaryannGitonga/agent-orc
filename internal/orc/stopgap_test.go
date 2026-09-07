@@ -1,7 +1,9 @@
 package orc
 
 import (
+	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -67,5 +69,48 @@ func TestStopStillRefusesATaskThatNeverStarted(t *testing.T) {
 	}
 	if got, _ := store.Load("PROJ-2"); got.Status != state.StatusPending {
 		t.Errorf("status = %q, want pending left alone", got.Status)
+	}
+}
+
+// TestStopClearsThePID covers what the record says once a stop has finished.
+// signalGroup does not return until the group is confirmed gone, so by then the
+// number the record holds names nothing, and leaving it there points at whoever
+// the kernel hands it to next.
+func TestStopClearsThePID(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+
+	// A real process in a group of its own, the way the supervisor starts one.
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+	pid := cmd.Process.Pid
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+
+	if err := store.Save(state.Task{
+		Task:      task.Task{ID: "PID-1", CLI: task.CLIClaude},
+		Status:    state.StatusRunning,
+		PID:       pid,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	if err := NewReporter(dir, &out).Stop("PID-1"); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	got, err := store.Load("PID-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusStopped {
+		t.Errorf("status = %q, want stopped", got.Status)
+	}
+	if got.PID != 0 {
+		t.Errorf("pid = %d, want it cleared once the process is confirmed gone", got.PID)
 	}
 }

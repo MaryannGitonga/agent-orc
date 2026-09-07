@@ -57,6 +57,7 @@ func (r *Reporter) Stop(id string) error {
 		if errors.Is(err, syscall.ESRCH) {
 			_ = r.store.Update(id, func(k *state.Task) {
 				k.Error = "process was already gone when stop ran"
+				k.PID = 0
 			})
 			fmt.Fprintf(r.out, "%s  was already gone; recorded as stopped\n", id)
 			return nil
@@ -70,6 +71,11 @@ func (r *Reporter) Stop(id string) error {
 		})
 		return fmt.Errorf("stopping task %q (pid %d): %w", id, t.PID, err)
 	}
+	// The pid named a process that is now confirmed gone, so the record should
+	// stop naming it. A stopped task has no child to signal, and a number left
+	// behind is one somebody else holds by the time anyone reads it.
+	_ = r.store.Update(id, func(k *state.Task) { k.PID = 0 })
+
 	fmt.Fprintf(r.out, "%s  stopped (pid %d); worktree %s left in place\n", id, t.PID, t.Worktree)
 	return nil
 }

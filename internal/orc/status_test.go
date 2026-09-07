@@ -211,6 +211,13 @@ func TestStopOnAProcessThatIsAlreadyGone(t *testing.T) {
 	if err := NewReporter(dir, &out).Stop("GONE"); err != nil {
 		t.Fatalf("Stop() on a gone process = %v, want nil", err)
 	}
+	// The pid named a process that had already exited, so the record must stop
+	// naming it: that number belongs to whoever the kernel gives it to next.
+	if got, err := store.Load("GONE"); err != nil {
+		t.Fatal(err)
+	} else if got.PID != 0 {
+		t.Errorf("pid = %d, want it cleared for a process that was already gone", got.PID)
+	}
 	got, err := store.Load("GONE")
 	if err != nil {
 		t.Fatal(err)
