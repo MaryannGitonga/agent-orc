@@ -85,7 +85,8 @@ sequenceDiagram
     end
 
     Sup->>Git: rebase --exec, stripping attribution trailers
-    Sup->>Forge: push, then pr create --draft
+    Sup->>Git: push -u the task's branch
+    Sup->>Forge: pr create --draft
     Forge-->>Sup: pull request url
     Sup->>State: done
     You->>CLI: status
