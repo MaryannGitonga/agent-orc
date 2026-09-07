@@ -242,7 +242,7 @@ func TestHaltedNamesTheReasonThisRunIsOver(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "S.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wantReason("an unreadable record", mine.halted("S"), "reading task")
+	wantReason("an unreadable record", mine.halted("S"), "parsing state")
 
 	// Removed directly: a record that cannot be parsed cannot be judged, so
 	// Delete declines to guess which run it would be removing.
@@ -380,5 +380,55 @@ func TestSuperviseStopsAnAgentItNoLongerOwns(t *testing.T) {
 	// The point of all this: the agent is gone, not merely unrecorded.
 	if err := syscall.Kill(agentPID, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Errorf("kill(%d, 0) = %v, want the agent to have been stopped", agentPID, err)
+	}
+}
+
+// TestHaltedRidesOutAMomentaryReadFailure covers the difference between a store
+// that is broken and one that was busy. The test and review loops run for as
+// long as they need to, and ending one for good because a single read failed is
+// not the same as noticing the task has gone.
+func TestHaltedRidesOutAMomentaryReadFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; file permissions would not block the read")
+	}
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	firstRun := time.Now().UTC().Add(-time.Hour)
+	mine := scopeTo(store, firstRun)
+
+	if err := store.Save(state.Task{
+		Task:      task.Task{ID: "R", CLI: task.CLIClaude},
+		Status:    state.StatusRunning,
+		StartedAt: firstRun,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	record := filepath.Join(dir, "R.json")
+	if err := os.Chmod(record, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(record, 0o644) })
+
+	// Readable again before the retries run out.
+	restored := make(chan struct{})
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		_ = os.Chmod(record, 0o644)
+		close(restored)
+	}()
+
+	if reason := mine.halted("R"); reason != nil {
+		t.Errorf("halted() = %v, want a momentary read failure to be ridden out", reason)
+	}
+	<-restored
+
+	// A failure that does not clear is still reported, and not as something else.
+	if err := os.Chmod(record, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	reason := mine.halted("R")
+	if reason == nil || !strings.Contains(reason.Error(), "reading state") {
+		t.Errorf("halted() = %v, want a lasting read failure reported as one", reason)
 	}
 }

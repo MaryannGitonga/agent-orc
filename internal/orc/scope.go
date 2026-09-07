@@ -80,13 +80,28 @@ func (s runScope) ownsID(id string) bool {
 //
 // All of it comes from one read. Asking twice would let the answer be
 // assembled from two different snapshots, with the id cleaned up in between.
+//
+// That read is retried briefly before a failure counts as an ending. A record
+// is written to a temporary file and renamed, so a half-read one is not
+// something that happens; a momentary failure to open one is, and ending a loop
+// that has been running for an hour over a single one of those would be its own
+// kind of bug. A failure that persists is still reported rather than guessed at.
 func (s runScope) halted(id string) error {
-	rec, err := s.store.Load(id)
+	var rec state.Task
+	var err error
+	for attempt := 0; ; attempt++ {
+		if rec, err = s.store.Load(id); err == nil || errors.Is(err, state.ErrNotFound) || attempt == 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	switch {
 	case errors.Is(err, state.ErrNotFound):
 		return fmt.Errorf("task %q no longer exists", id)
 	case err != nil:
-		return fmt.Errorf("reading task %q: %w", id, err)
+		// Returned as it stands: the store's error already names the task and
+		// what it was doing, and wrapping it again only says so twice.
+		return err
 	case !s.owns(rec):
 		return fmt.Errorf("task %q now belongs to a later run", id)
 	case rec.Status == state.StatusStopped:
