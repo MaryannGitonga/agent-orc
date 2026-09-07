@@ -54,6 +54,7 @@ sequenceDiagram
     participant CLI as agent-orc
     participant Sup as supervisor<br/>(detached)
     participant Agent as agent CLI
+    participant Rev as reviewer CLI<br/>(fresh session)
     participant Git as git
     participant Forge as gh / glab
     participant State as ~/.agent-orc
@@ -77,8 +78,9 @@ sequenceDiagram
     end
     opt --auto-review
         loop until approved, or the worker stops committing
-            Sup->>Agent: a second CLI reviews the diff
-            Sup->>Agent: its comments, back to the worker
+            Sup->>Rev: review the diff, in a throwaway worktree
+            Rev-->>Sup: LGTM, or a list of comments
+            Sup->>Agent: the comments, back to the worker
         end
     end
 
