@@ -121,7 +121,11 @@ func NewStore(dir string) *Store { return &Store{Dir: dir} }
 func (s *Store) path(id string) string { return filepath.Join(s.Dir, id+".json") }
 
 // lockFile is where a task's lock lives. It is a sibling of the record rather
-// than the record itself, so locking never depends on the record existing.
+// than the record itself, so locking never depends on the record existing, and
+// it outlives the record: unlinking it would put a caller that opened it before
+// the delete and one that opens it after on two different inodes, each holding
+// what it thinks is the same lock. The file is empty, List ignores anything
+// that is not a .json, and an id reused after cleanup wants the same lock.
 func (s *Store) lockFile(id string) string { return filepath.Join(s.Dir, id+".lock") }
 
 // withLock runs fn while holding a task's lock.
@@ -258,23 +262,10 @@ func (s *Store) List() ([]Task, error) {
 
 // Delete removes the record for id. Deleting a missing record is not an error.
 func (s *Store) Delete(id string) error {
-	err := s.withLock(id, func() error {
+	return s.withLock(id, func() error {
 		if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("deleting state for %q: %w", id, err)
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	// The lock outlives the record it guarded, so it goes too. Any holder
-	// still has it open, and unlinking does not disturb them. A caller that
-	// opens the file after this creates a new one, so a delete landing between
-	// another caller's open and its flock leaves the two on separate inodes.
-	// The lock serializes the common case; the generation check in the write
-	// is what actually refuses a lost update.
-	if err := os.Remove(s.lockFile(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("removing the lock for %q: %w", id, err)
-	}
-	return nil
 }

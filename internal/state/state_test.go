@@ -266,3 +266,44 @@ func TestUpdateIfLeavesTheFileAloneWhenItDeclines(t *testing.T) {
 		t.Errorf("modtime = %v, want the declining update to have left it at %v", after.ModTime(), mid.ModTime())
 	}
 }
+
+// TestDeleteLeavesTheLockInPlace pins why the lock file outlives the record it
+// guards. Unlinking it would let a caller holding the old file and a caller
+// opening a fresh one at the same path both believe they hold the task's lock.
+func TestDeleteLeavesTheLockInPlace(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "LOCK-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(dir, "LOCK-1.lock")
+	before, err := os.Stat(lock)
+	if err != nil {
+		t.Fatalf("the save should have created the lock: %v", err)
+	}
+
+	if err := store.Delete("LOCK-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.Stat(lock)
+	if err != nil {
+		t.Fatalf("the lock should have survived the delete: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("the lock file was replaced, so lockers can end up on separate inodes")
+	}
+
+	// The record is gone even so, and the leftover lock is not mistaken for one.
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Errorf("List() = %v, want the deleted record to be gone", tasks)
+	}
+}
