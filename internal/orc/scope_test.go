@@ -1,6 +1,7 @@
 package orc
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -34,12 +35,15 @@ func TestStaleWriteCannotClobberARedispatchedTask(t *testing.T) {
 		}
 		secondRun := time.Now().UTC()
 
+		// Each goroutine keeps its own error for the main one to check, so a
+		// lock or disk failure cannot pass for the race resolving cleanly.
+		var staleErr, deleteErr, saveErr error
 		var wg sync.WaitGroup
 		wg.Add(2)
 		// The supervisor of the run that is being replaced, finishing up.
 		go func() {
 			defer wg.Done()
-			_ = stale.update("X", func(k *state.Task) {
+			staleErr = stale.update("X", func(k *state.Task) {
 				k.Status = state.StatusDone
 				k.PID = 0
 			})
@@ -47,8 +51,8 @@ func TestStaleWriteCannotClobberARedispatchedTask(t *testing.T) {
 		// cleanup, then a new task taking the id.
 		go func() {
 			defer wg.Done()
-			_ = store.Delete("X")
-			_ = store.Save(state.Task{
+			deleteErr = store.Delete("X")
+			saveErr = store.Save(state.Task{
 				Task:      task.Task{ID: "X", CLI: task.CLIClaude},
 				Status:    state.StatusRunning,
 				PID:       222,
@@ -57,9 +61,23 @@ func TestStaleWriteCannotClobberARedispatchedTask(t *testing.T) {
 		}()
 		wg.Wait()
 
+		// The stale update is allowed to find the record gone, and nothing else.
+		if staleErr != nil && !errors.Is(staleErr, state.ErrNotFound) {
+			t.Fatalf("iteration %d: stale update: %v", i, staleErr)
+		}
+		if deleteErr != nil {
+			t.Fatalf("iteration %d: delete: %v", i, deleteErr)
+		}
+		if saveErr != nil {
+			t.Fatalf("iteration %d: redispatch: %v", i, saveErr)
+		}
+
 		got, err := store.Load("X")
-		if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
 			continue // the delete won; nothing to check
+		}
+		if err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
 		}
 		if !got.StartedAt.Equal(secondRun) {
 			continue // the old run is still on disk, about to be cleaned up
