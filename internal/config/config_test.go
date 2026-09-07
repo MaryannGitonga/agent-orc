@@ -145,7 +145,7 @@ defaults:
   cli: claude
   review:
     enabled: false
-    max_rounds: 2
+    cli: copilot
 tasks:
   - id: A
     prompt: inherits
@@ -165,8 +165,8 @@ tasks:
 	if a.Enabled {
 		t.Error("task A review is enabled, want the default's false")
 	}
-	if a.MaxRounds != 2 {
-		t.Errorf("task A max_rounds = %d, want the default 2", a.MaxRounds)
+	if a.CLI != task.CLICopilot {
+		t.Errorf("task A reviewer = %q, want the default's copilot", a.CLI)
 	}
 
 	b := f.Resolved(f.Tasks[1]).Review
@@ -175,10 +175,6 @@ tasks:
 	}
 	if b.CLI != task.CLICopilot || b.Model != "gpt-5.1" {
 		t.Errorf("task B reviewer = %q/%q, want copilot/gpt-5.1", b.CLI, b.Model)
-	}
-	// Fields the task did not restate still come from the defaults.
-	if b.MaxRounds != 2 {
-		t.Errorf("task B max_rounds = %d, want the inherited 2", b.MaxRounds)
 	}
 }
 
@@ -195,7 +191,7 @@ func TestReviewIsOffWhenNothingSaysOtherwise(t *testing.T) {
 func TestParseRejectsABadReviewBlock(t *testing.T) {
 	tests := map[string]string{
 		"unknown review cli": "tasks:\n  - id: A\n    prompt: x\n    review:\n      cli: gemini\n",
-		"negative rounds":    "tasks:\n  - id: A\n    prompt: x\n    review:\n      max_rounds: -1\n",
+		"unknown review key": "tasks:\n  - id: A\n    prompt: x\n    review:\n      max_rounds: 2\n",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -229,5 +225,19 @@ func TestShippedExampleIsValid(t *testing.T) {
 			t.Errorf("tasks[%d] instructions carry a literal #, which would reach the agent:\n%s",
 				i, got.Instructions)
 		}
+	}
+}
+
+// TestBatchAutoReviewImpliesEnabled covers the file half of the same invariant:
+// a batch that asks for review on finishing has asked for review, and the
+// supervisor only runs it when both are set.
+func TestBatchAutoReviewImpliesEnabled(t *testing.T) {
+	f, err := Parse([]byte("defaults:\n  cli: claude\n  review:\n    auto: true\ntasks:\n  - id: A\n    prompt: x\n"))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	got := f.Resolved(f.Tasks[0]).Review
+	if !got.Enabled || !got.Auto {
+		t.Errorf("review = %+v, want auto to have enabled it", got)
 	}
 }

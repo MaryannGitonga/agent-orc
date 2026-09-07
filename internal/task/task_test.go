@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func valid() Task {
@@ -104,26 +105,11 @@ func TestReviewerCLIHonoursAnExplicitChoice(t *testing.T) {
 	}
 }
 
-func TestReviewRoundsDefaultsToOne(t *testing.T) {
-	tests := map[int]int{0: 1, -1: 1, 3: 3}
-	for set, want := range tests {
-		if got := (Review{MaxRounds: set}).Rounds(); got != want {
-			t.Errorf("Review{MaxRounds: %d}.Rounds() = %d, want %d", set, got, want)
-		}
-	}
-}
-
 func TestValidateRejectsABadReviewBlock(t *testing.T) {
 	tk := valid()
 	tk.Review = Review{Enabled: true, CLI: "gemini"}
 	if err := tk.Validate(); err == nil || !strings.Contains(err.Error(), "review cli") {
 		t.Errorf("Validate() = %v, want an error naming the review cli", err)
-	}
-
-	tk = valid()
-	tk.Review = Review{Enabled: true, MaxRounds: -2}
-	if err := tk.Validate(); err == nil || !strings.Contains(err.Error(), "max_rounds") {
-		t.Errorf("Validate() = %v, want an error naming max_rounds", err)
 	}
 }
 
@@ -225,5 +211,73 @@ func TestValidateRejectsABranchThatLooksLikeAFlag(t *testing.T) {
 	tk.Branch, tk.BaseBranch = "agent-orc/proj-1", "main"
 	if err := tk.Validate(); err != nil {
 		t.Errorf("Validate() = %v, want an ordinary branch accepted", err)
+	}
+}
+
+// TestTestRunTimeout covers the three states the field encodes: unset takes the
+// default, negative means run uncapped, and anything else is itself.
+func TestTestRunTimeout(t *testing.T) {
+	tests := map[time.Duration]time.Duration{
+		0:                DefaultTestTimeout,
+		NoTestTimeout:    0,
+		-time.Hour:       0,
+		90 * time.Second: 90 * time.Second,
+		45 * time.Minute: 45 * time.Minute,
+	}
+	for set, want := range tests {
+		if got := (Task{TestTimeout: set}).TestRunTimeout(); got != want {
+			t.Errorf("Task{TestTimeout: %v}.TestRunTimeout() = %v, want %v", set, got, want)
+		}
+	}
+}
+
+// TestRenderTestRuleFollowsTheThreeStates covers what the agent is told about
+// tests. Turning verification off and finding no command both leave the command
+// empty, but they are opposite instructions: one is a reason to ask the agent to
+// go looking, the other is somebody saying not to run the suite at all, and
+// asking anyway spends the task's budget on the one thing it was told to skip.
+func TestRenderTestRuleFollowsTheThreeStates(t *testing.T) {
+	base := Task{Prompt: "do it"}
+
+	named := base
+	named.TestCommand = "pytest -q"
+	if got := named.Render(); !strings.Contains(got, "run `pytest -q`") {
+		t.Errorf("a known command was not named to the agent:\n%s", got)
+	}
+
+	// Nothing found, so the agent is the only one who can look.
+	if got := base.Render(); !strings.Contains(got, "If this project has a test suite") {
+		t.Errorf("no command left the agent unasked:\n%s", got)
+	}
+
+	// Turned off, so tests are not mentioned at all.
+	off := base
+	off.SkipTests = true
+	got := off.Render()
+	for _, unwanted := range []string{"test suite", "run `", "make it pass"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("an opted-out task was still told about tests (%q):\n%s", unwanted, got)
+		}
+	}
+	// The rest of the operating rules survive.
+	if !strings.Contains(got, "Do NOT push") {
+		t.Errorf("the operating rules went missing with the test rule:\n%s", got)
+	}
+}
+
+// TestReviewNormalizeMakesAutoImplyEnabled covers the invariant that used to be
+// written at two construction sites and missing from the third, which left a
+// batch file setting only `auto` with no review at all.
+func TestReviewNormalizeMakesAutoImplyEnabled(t *testing.T) {
+	if got := (Review{Auto: true}).Normalize(); !got.Enabled {
+		t.Error("auto did not imply enabled, so the supervisor's Enabled && Auto never fires")
+	}
+	// It only ever adds: a review that was asked for by hand stays that way,
+	// and one nobody asked for is not turned on.
+	if got := (Review{Enabled: true}).Normalize(); got.Auto {
+		t.Error("enabled turned auto on; review is meant to stay manual unless asked")
+	}
+	if got := (Review{}).Normalize(); got.Enabled || got.Auto {
+		t.Errorf("an empty block became %+v, want it left alone", got)
 	}
 }

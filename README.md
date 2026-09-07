@@ -49,7 +49,7 @@ flowchart TB
         MORE["further commits on the same branch"]
         REV --> VERDICT
         VERDICT -->|"comments"| RESUME --> MORE
-        MORE -->|"another round, up to max_rounds"| REV
+        MORE -->|"another round, until approved"| REV
     end
 
     RUN --> SUP
@@ -168,6 +168,8 @@ with `agent-orc status`, and read its output with `agent-orc logs PROJ-1234 -f`.
 | `--base-branch` | the repository's default branch |
 | `--branch` | `agent-orc/<id>` |
 | `--model` | the CLI's own default |
+| `--auto-review` | off; review is triggered by hand |
+| `--review-cli` | a CLI other than `--cli` |
 
 There is no default CLI on purpose: agent-orc dispatches to whichever agent you
 actually have, and checks the binary is on PATH before creating anything.
@@ -180,7 +182,7 @@ actually have, and checks the binary is on PATH before creating anything.
 | `run <tasks.yaml>` | dispatch a batch |
 | `status` | one row per task: status, spend, branch, elapsed |
 | `logs <id> [-f] [--raw]` | print the agent's output, or follow it until the task ends |
-| `stop <id>` | terminate a running agent and everything it spawned |
+| `stop <id>` | terminate the agent, or the tests or reviewer running after it, and everything they spawned |
 | `pr <id>` | run the publish chain by hand, or retry one that failed |
 | `review <id>` | run an agentic review round |
 | `cleanup <id\|--all> [--force] [--delete-branch]` | remove the worktree and state; keep the branch unless told otherwise |
@@ -287,12 +289,15 @@ waiting for is never going to appear.
 | --- | --- |
 | `pending` | dispatched; the agent has not started yet |
 | `running` | the agent is working |
+| `verifying` | the task's own test command is running |
+| `reviewing` | an automatic review round is under way |
 | `publishing` | the sanitize, push and draft-PR chain is running |
 | `done` | published as a draft PR, or sanitized and left on the branch when there is no remote |
 | `publish_failed` | no draft PR was opened: the chain stopped part way, or the agent committed nothing |
-| `failed` | the agent exited non-zero, or never launched |
+| `failed` | the agent exited non-zero or never launched, or the test command never passed |
 | `stopped` | you killed it with `agent-orc stop` |
 | `reviewed` | an agentic review round approved the branch |
+| `review_failed` | an automatic review could not finish; the work is on its branch, retry with `agent-orc review` |
 | `policy_violation` | the agent pushed its own branch, bypassing sanitization |
 
 ## Commit sanitization
@@ -323,15 +328,118 @@ If the agent pushes its own branch despite being told not to, that branch never
 went through this pass, so the task is flagged `policy_violation` rather than
 treated as though agent-orc had published it.
 
+## Test verification
+
+agent-orc works out how your repository runs its own tests, runs them in the
+worktree once the agent has finished, hands any failure back to the agent's own
+session to fix, and refuses to publish while they are red. No configuration:
+
+| Found in the repository | Command |
+| --- | --- |
+| a `test:` target in a `Makefile` | `make test` |
+| `go.mod` | `go test ./...` |
+| a `test` script in `package.json` | `npm test` |
+| `Cargo.toml` | `cargo test` |
+| a pytest section in `pyproject.toml`, `setup.cfg` or `tox.ini`, a `pytest.ini`, or `test_*.py` files | `python -m pytest -q` |
+
+The pytest row reads those files rather than trusting their names: a
+`pyproject.toml` usually belongs to packaging or a linter, and pytest is the one
+convention here that fails a project for having no tests, exiting 5 when it
+collects nothing where `go test` and `cargo test` exit 0.
+
+The `Makefile` comes first on purpose: a repository that wrote a test target has
+already decided how its tests are run, and that beats anything inferred from the
+language underneath. `test-unit` and `test-integration` are not a `test` target,
+so a repository with only those is left alone rather than failing on a missing
+rule.
+
+Whatever is found is reported at dispatch and named in the agent's own operating
+rules, so the agent runs the same command agent-orc is about to:
+
+```
+PROJ-1234  started
+  branch    agent-orc/proj-1234 (from main)
+  tests     python -m pytest -q (from a pytest layout)
+```
+
+There is no flag for this. How a project is tested is a fact about that
+project, not about one run of one task, so the override lives in the
+repository's own file: `test_command` when the conventions above do not
+describe it, and `test_command: none` for a suite agent-orc should not be
+running, one that is too slow or needs something the worktree does not have.
+`none` also stops the agent being asked about tests at all, since a suite
+somebody turned off is not one to spend the task on looking for.
+
+```yaml
+# .agent-orc.yaml
+test_command: pytest -q -m "not slow"
+```
+
+When nothing is found and nothing is set, the agent is still asked to find and
+run the project's tests itself. That instruction is worth having, but it is not
+the mechanism: an agent asked to iterate until green will sometimes stop short
+and say it did, and nothing downstream would notice, because the commit is there
+and the branch looks finished. Running the suite is what makes the difference
+between an agent that says the tests pass and a branch where they do.
+
+There is no attempt cap. Getting the suite green is part of the work, not an
+optional extra with a quota, so the loop runs until it is. `agent-orc stop`
+reaches it: the test command runs in its own process group with its pid on the
+record, so a run you want to end is something you can end, and the task stays
+stopped rather than going round again on the killed command. Stopping between
+two commands works too, when there is nothing running to signal: the stop is
+recorded, and both loops check for one before starting anything else.
+
+One run of the command is capped, at 30 minutes by default. That cap is the one
+bound the loop's own stop conditions cannot supply: a command that never returns
+never passes, never fails, and never gives the agent anything to act on, so
+nothing else would ever notice. It is deliberately generous, because firing on a
+slow suite would be worse than not firing on a hung one, and `test_timeout`
+moves it or removes it:
+
+```yaml
+# .agent-orc.yaml
+test_timeout: 10m      # a duration, or "none" to let it run as long as it likes
+```
+
+A run that is killed is reported as killed rather than as a failing suite, and
+goes back to the agent with that said plainly, since a suite that hangs looks
+nothing like one that fails. Three real conditions
+end it instead:
+
+- **the tests pass**, and the branch goes on to be published;
+- **the agent's own CLI ends the session**, which is how a budget is enforced,
+  and is why the budget is the gate here rather than a count;
+- **the agent stops changing anything**: a round that commits nothing leaves the
+  next run identical to the last, so repeating it is not another attempt at
+  anything. The task is left `failed` with the last of the output, and no PR.
+
+A CLI that cannot resume a session, which is Codex, gets one run and no loop:
+there is nowhere to hand the failure back to. It is still checked, because
+blocking a red branch is worth more than the iteration is.
+
 ## Agentic review
 
-Off by default, triggered by hand. With `review.enabled` set for a task,
-`agent-orc review <id>` runs an independent review of the finished branch:
+Off by default. With `review.enabled` set for a task, `agent-orc review <id>`
+runs an independent review of the finished branch:
 
 ```sh
 agent-orc run --id PROJ-1234 --cli claude --prompt "..." \
   --review --review-cli copilot --review-model gpt-5.1
 agent-orc review PROJ-1234
+```
+
+Asking for review on finishing is asking for review, so `auto` turns `enabled`
+on by itself, in a batch file and in the settings layers as well as on the
+command line.
+
+`--auto-review` runs it for you instead, the moment the agent finishes and
+before the branch is published, so the draft PR that opens has already been
+through a round rather than being opened and then changed under whoever started
+reading it:
+
+```sh
+agent-orc run --id PROJ-1234 --cli claude --prompt "..." --auto-review
 ```
 
 The reviewer is a fresh session in its own disposable worktree, never a resume
@@ -346,10 +454,17 @@ worker's own session, resumed by the session ID assigned at launch, to address
 on the same branch. Anything that is neither is an error: the round stops and
 waits for a human rather than guessing.
 
-The loop is sequential and hard-capped by `max_rounds`, default 1. Worker and
-reviewer never run at the same time and never message each other, and a review
-round draws on the same per-task budget rather than a separate pool. None of
-this replaces the human "Ready for review" click.
+There is no round cap. A change that was reviewed but not approved is not a
+reviewed change, and stopping at some number would only publish it anyway, so
+the loop runs until the reviewer approves. The same two conditions that bound
+the test loop bound this one: the budget, enforced by the CLIs themselves, and a
+worker that stops acting on the comments. A round the worker commits nothing in
+leaves the reviewer the branch it just read, so it would raise the same comments
+again; agent-orc stops there and leaves the rest to a human.
+
+The loop is sequential. Worker and reviewer never run at the same time and never
+message each other, and a review round draws on the same per-task budget rather
+than a separate pool. None of this replaces the human "Ready for review" click.
 
 Codex tasks cannot be reviewed this way: Codex sessions cannot be resumed, so
 there is nowhere to send the feedback. agent-orc says so rather than silently
@@ -367,6 +482,67 @@ That ignore covers untracked files, which is what a seeded definition normally
 is. It cannot hide one that landed on a path the repository already tracks,
 because git does not consult `.gitignore` for tracked files. agent-orc warns at
 launch when that happens rather than letting it pass quietly.
+
+## Defaults
+
+Standing instructions say how work is done. Defaults say how a run is
+configured, and exist so the same flags are not retyped every time. They come
+from two optional files:
+
+```sh
+cat ~/.agent-orc/defaults.yaml       # true of every task on this machine
+cat myrepo/.agent-orc.yaml           # true of that repository, checked in
+```
+```yaml
+cli: claude
+model: claude-sonnet-5
+dco_signoff: true
+review:
+  enabled: true
+  auto: true          # review on finishing, before the PR opens
+  cli: claude
+  model: claude-opus-5
+```
+
+With that in place, a run is only the part that is actually about this task:
+
+```sh
+agent-orc run --id PROJ-1234 --prompt "Fix the retry handler"
+```
+
+Four layers, narrowest wins:
+
+| Layer | Where | For |
+| --- | --- | --- |
+| machine | `~/.agent-orc/defaults.yaml` | how you work, everywhere |
+| repository | `<repo>/.agent-orc.yaml` | what is true of that codebase |
+| batch | a batch file's `defaults` | one run of many tasks |
+| task | a flag, or a batch entry | this task alone |
+
+The keys follow the run flags, dashes swapped for underscores, so there is one
+vocabulary rather than three: `cli`, `model`, `base_branch`, `subagents`,
+`budget_usd`, `budget_credits`, `auto_pr`, `dco_signoff`, and the `review` block
+(`enabled`, `auto`, `cli`, `model`). `test_command` and `test_timeout` follow
+the same naming but have no flag of their own: how a project is tested is a
+fact about the project, so it is set in a file or discovered, never per run.
+
+What is inherently per-task cannot be defaulted at all: the id, the prompt or
+source, the branch, and the repository.
+
+A repository's file is read from the top of its working tree, so it applies the
+same whether you run from the root or from somewhere deep inside it.
+
+An empty value means "not set here", never "put this back to the default", so a
+narrower layer overrides an inherited setting by naming the one it wants: under
+a machine-wide `test_timeout: none`, a repository gets a cap back by writing the
+duration it wants, not by blanking the field.
+
+A flag you type always wins, and a flag you leave off is not an override, so
+`--cli copilot` changes the CLI without disturbing an inherited `dco_signoff`.
+A narrower layer can turn an inherited setting off as well as on: `auto_pr:
+false` in a repository file beats `auto_pr: true` in the machine-wide one.
+Unknown keys are rejected rather than ignored, so a typo fails at the point it
+was made instead of silently doing nothing.
 
 ## Standing instructions
 
@@ -415,6 +591,7 @@ Everything lives under `~/.agent-orc`, overridable with `AGENT_ORC_HOME`:
   reviews/PROJ-1234/            a review round's disposable checkout
   agents/claude/*.md            your subagent definitions, seeded on request
   instructions.md               standing instructions added to every prompt
+  defaults.yaml                 machine-wide task defaults
   trailers.txt                  extra sanitization patterns, one per line
 ```
 
@@ -423,11 +600,11 @@ because the branch is the work. Logs go only with `--force`, which is also what
 gets past a worktree that cannot be inspected at all, a permission or a mount
 problem rather than a missing one: cleanup stops there by default rather than
 removing the record and leaving a checkout nothing points at. The branch goes
-only with `--delete-branch`, which refuses a branch holding commits that are neither
-in its base branch nor pushed, unless `--force` says otherwise. That question is
-asked against the base the task was cut from rather than whatever the repository
-currently has checked out, which is what `git branch -d` would ask and is the
-wrong question for a task branch.
+only with `--delete-branch`, which refuses a branch holding commits that are
+neither in its base branch nor pushed, unless `--force` says otherwise. That
+question is asked against the base the task was cut from rather than whatever
+the repository currently has checked out, which is what `git branch -d` would
+ask and is the wrong question for a task branch.
 
 Reusing a task id is fine once its predecessor is cleaned up: the new task
 starts with empty logs. The branch is what stands in the way, since cleanup

@@ -136,3 +136,30 @@ func TestDeleteIsIdempotent(t *testing.T) {
 		t.Errorf("Load() after Delete() = %v, want ErrNotFound", err)
 	}
 }
+
+// TestHasProcessCoversThePhasesAfterTheAgent guards the property `stop` and the
+// reconciliation in `status` both key off. The phases that run once the agent
+// has exited have children of their own and run until the tests pass or the
+// reviewer approves, so leaving them out makes a task with a hung test command
+// impossible to stop and impossible to correct.
+func TestHasProcessCoversThePhasesAfterTheAgent(t *testing.T) {
+	withProcess := []Status{StatusPending, StatusRunning, StatusVerifying, StatusReviewing}
+	for _, s := range withProcess {
+		if !s.HasProcess() {
+			t.Errorf("%q.HasProcess() = false, want true: it can have a live child", s)
+		}
+		if !s.Active() {
+			t.Errorf("%q.Active() = false, want true", s)
+		}
+	}
+	// Publishing is in flight but runs no child of its own that stop could
+	// signal, and the terminal statuses have nothing running at all.
+	for _, s := range []Status{
+		StatusPublishing, StatusDone, StatusFailed, StatusStopped,
+		StatusReviewed, StatusReviewFailed, StatusPublishFailed, StatusPolicyViolation,
+	} {
+		if s.HasProcess() {
+			t.Errorf("%q.HasProcess() = true, want false", s)
+		}
+	}
+}

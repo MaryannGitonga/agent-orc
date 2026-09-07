@@ -9,11 +9,14 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -45,6 +48,10 @@ type Defaults struct {
 	BudgetCredits *float64 `yaml:"budget_credits"`
 	AutoPR        *bool    `yaml:"auto_pr"`
 	Review        *Review  `yaml:"review"`
+	// TestCommand is run in each task's worktree once its agent has finished.
+	TestCommand string `yaml:"test_command"`
+	// TestTimeout caps one run of it, as a duration such as "10m", or "none".
+	TestTimeout string `yaml:"test_timeout"`
 	// Instructions apply to every task in the batch, on top of anything in
 	// ~/.agent-orc/instructions.md.
 	Instructions string `yaml:"instructions"`
@@ -52,10 +59,10 @@ type Defaults struct {
 
 // Review is the review block as written in a batch file.
 type Review struct {
-	Enabled   *bool    `yaml:"enabled"`
-	CLI       task.CLI `yaml:"cli"`
-	Model     string   `yaml:"model"`
-	MaxRounds *int     `yaml:"max_rounds"`
+	Enabled *bool    `yaml:"enabled"`
+	Auto    *bool    `yaml:"auto"`
+	CLI     task.CLI `yaml:"cli"`
+	Model   string   `yaml:"model"`
 }
 
 // Entry is one task as written in the batch file. Every field is optional
@@ -78,6 +85,9 @@ type Entry struct {
 	BudgetCredits *float64 `yaml:"budget_credits"`
 	AutoPR        *bool    `yaml:"auto_pr"`
 	Review        *Review  `yaml:"review"`
+
+	TestCommand string `yaml:"test_command"`
+	TestTimeout string `yaml:"test_timeout"`
 }
 
 // Load reads and validates a batch file. Paths inside it are resolved relative
@@ -105,9 +115,7 @@ func Load(path string) (*File, error) {
 // differently from what was written.
 func Parse(data []byte) (*File, error) {
 	var f File
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil {
+	if err := decodeStrict(data, &f); err != nil {
 		return nil, fmt.Errorf("parsing yaml: %w", err)
 	}
 	if len(f.Tasks) == 0 {
@@ -117,6 +125,35 @@ func Parse(data []byte) (*File, error) {
 		return nil, err
 	}
 	return &f, nil
+}
+
+// decodeStrict reads exactly one YAML document into v, rejecting unknown
+// fields.
+//
+// Anything after the first document is an error rather than something to skip.
+// These parsers exist to fail on what a file got wrong instead of quietly doing
+// something else, and dropping a whole document is the largest thing they could
+// get wrong: a batch file with tasks after a "---" would dispatch the first
+// half and never mention the rest.
+//
+// An empty file gives io.EOF from the first decode, which is passed back for
+// the caller to read as it likes: a batch file with nothing in it is a failure,
+// and a settings file with nothing in it is not.
+func decodeStrict(data []byte, v any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	var rest yaml.Node
+	switch err := dec.Decode(&rest); {
+	case err == nil:
+		return errors.New(`more than one document; everything after the first "---" would be ignored`)
+	case errors.Is(err, io.EOF):
+		return nil
+	default:
+		return err
+	}
 }
 
 // resolvePaths makes every repo path absolute relative to base.
@@ -178,12 +215,12 @@ func (f *File) validate() error {
 		if err := (task.Budget{USD: t.BudgetUSD, Credits: t.BudgetCredits}).Validate(); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 		}
+		if _, err := ParseTestTimeout(t.TestTimeout); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", where, err))
+		}
 		if r := t.Review; r != nil {
 			if r.CLI != "" && !r.CLI.Known() {
 				errs = append(errs, fmt.Errorf("%s: unsupported review cli %q, want one of %v", where, r.CLI, task.KnownCLIs))
-			}
-			if r.MaxRounds != nil && *r.MaxRounds < 0 {
-				errs = append(errs, fmt.Errorf("%s: review max_rounds must not be negative", where))
 			}
 		}
 	}
@@ -191,6 +228,9 @@ func (f *File) validate() error {
 		errs = append(errs, fmt.Errorf("defaults: unsupported cli %q, want one of %v", f.Defaults.CLI, task.KnownCLIs))
 	}
 	if err := (task.Budget{USD: f.Defaults.BudgetUSD, Credits: f.Defaults.BudgetCredits}).Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("defaults: %w", err))
+	}
+	if _, err := ParseTestTimeout(f.Defaults.TestTimeout); err != nil {
 		errs = append(errs, fmt.Errorf("defaults: %w", err))
 	}
 	return errors.Join(errs...)
@@ -234,10 +274,19 @@ func (f *File) Resolved(e Entry) task.Task {
 			USD:     firstFloat(e.BudgetUSD, f.Defaults.BudgetUSD),
 			Credits: firstFloat(e.BudgetCredits, f.Defaults.BudgetCredits),
 		},
-		AutoPR:     autoPR,
-		DCOSignoff: f.DCOSignoff,
-		Review:     mergeReview(e.Review, f.Defaults.Review),
+		AutoPR:      autoPR,
+		DCOSignoff:  f.DCOSignoff,
+		Review:      mergeReview(e.Review, f.Defaults.Review).Normalize(),
+		TestCommand: pick(e.TestCommand, f.Defaults.TestCommand),
+		TestTimeout: mustTestTimeout(pick(e.TestTimeout, f.Defaults.TestTimeout)),
 	}
+}
+
+// mustTestTimeout parses a validated timeout. Parse and Load reject a bad one
+// before any task is resolved, so a failure here cannot come from a file.
+func mustTestTimeout(raw string) time.Duration {
+	d, _ := ParseTestTimeout(raw)
+	return d
 }
 
 // mergeReview layers a task's review block over the batch default, field by
@@ -251,14 +300,14 @@ func mergeReview(entry, defaults *Review) task.Review {
 		if r.Enabled != nil {
 			out.Enabled = *r.Enabled
 		}
+		if r.Auto != nil {
+			out.Auto = *r.Auto
+		}
 		if r.CLI != "" {
 			out.CLI = r.CLI
 		}
 		if r.Model != "" {
 			out.Model = r.Model
-		}
-		if r.MaxRounds != nil {
-			out.MaxRounds = *r.MaxRounds
 		}
 	}
 	return out

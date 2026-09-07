@@ -23,6 +23,7 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/source"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
+	"github.com/MaryannGitonga/agent-orc/internal/testcmd"
 )
 
 // fetchTimeout bounds resolving a task's source at launch.
@@ -98,6 +99,14 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	if err != nil {
 		return err
 	}
+	// The top of the working tree, whatever was passed. Both callers resolve
+	// this before getting here, but RunBatch takes its preparation step as a
+	// parameter, so nothing enforces that: settling it here means discovery
+	// reads the repository's own markers, and the record names the repository,
+	// however this was reached.
+	t.Repo = repo.Dir
+
+	t, testNote := resolveTestCommand(t)
 	if !repo.RevExists(t.BaseBranch) {
 		return fmt.Errorf("base branch %q does not exist in %s", t.BaseBranch, repo.Dir)
 	}
@@ -197,6 +206,7 @@ func (d *Dispatcher) Run(ctx context.Context, t task.Task) error {
 	fmt.Fprintf(d.out, "  branch    %s (from %s)\n", t.Branch, t.BaseBranch)
 	fmt.Fprintf(d.out, "  worktree  %s\n", worktree)
 	fmt.Fprintf(d.out, "  log       %s\n", record.LogPath)
+	fmt.Fprintf(d.out, "  tests     %s\n", testNote)
 	if len(seeded) > 0 {
 		fmt.Fprintf(d.out, "  subagents %s\n", strings.Join(seeded, ", "))
 	}
@@ -337,6 +347,47 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// resolveTestCommand fills in how the repository runs its tests when the task
+// did not say.
+//
+// Nobody should have to tell agent-orc something the repository already
+// states: a project that has a make test target, or a go.mod, or a pytest
+// layout has said how it is tested, and reading that is better than asking for
+// it again in a config file. The explicit setting stays for the projects those
+// conventions do not describe, and "none" is how a repository whose tests
+// agent-orc should not run says so.
+func resolveTestCommand(t task.Task) (task.Task, string) {
+	// Trimmed once, into the task, so the record, the logs and the phase the
+	// supervisor enters all agree on what is set. Deciding on a trimmed copy
+	// and storing the original is how a whitespace-only setting ends up
+	// putting a task into verifying for a command that will never run.
+	t.TestCommand = strings.TrimSpace(t.TestCommand)
+	switch t.TestCommand {
+	case testcmd.None:
+		t.TestCommand = ""
+		t.SkipTests = true
+		return t, "not run for this task, and not mentioned to the agent"
+	case "":
+		command, reason := testcmd.Discover(t.Repo)
+		if command == "" {
+			return t, "none found; the agent is asked to find them itself"
+		}
+		t.TestCommand = command
+		return t, fmt.Sprintf("%s (from %s), %s", command, reason, timeoutNote(t))
+	default:
+		return t, fmt.Sprintf("%s (set for this task), %s", t.TestCommand, timeoutNote(t))
+	}
+}
+
+// timeoutNote says how long the test command gets, so a cap that is about to
+// apply is visible before it fires rather than only in the log afterwards.
+func timeoutNote(t task.Task) string {
+	if d := t.TestRunTimeout(); d > 0 {
+		return "killed after " + d.String()
+	}
+	return "uncapped"
 }
 
 // truncateLogs clears whatever a previous task of the same id left behind. It

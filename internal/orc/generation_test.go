@@ -190,3 +190,179 @@ func TestPublishRefusesARecordFromAnotherRun(t *testing.T) {
 		t.Errorf("Publish() = %v, want the owning run to get past the check", err)
 	}
 }
+
+// TestMarkKeepsFinishedAtHonest covers what `status` reports as elapsed. The
+// phases after the agent exits run until the tests pass or the reviewer
+// approves, so stamping a finish time when the agent stopped would freeze the
+// elapsed column there and hide every minute of them.
+func TestMarkKeepsFinishedAtHonest(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	finished := time.Now().UTC().Add(-time.Hour)
+	rec := state.Task{
+		Task:       task.Task{ID: "PROJ-5", CLI: task.CLIClaude},
+		Status:     state.StatusRunning,
+		StartedAt:  time.Now().UTC().Add(-2 * time.Hour),
+		FinishedAt: &finished,
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, startedAt: rec.StartedAt}
+
+	// A phase that is still working has not finished, whatever was stamped
+	// when its agent exited.
+	for _, active := range []state.Status{state.StatusVerifying, state.StatusReviewing, state.StatusPublishing} {
+		s.mark("PROJ-5", active, "")
+		got, err := store.Load("PROJ-5")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.FinishedAt != nil {
+			t.Errorf("%s left finished_at at %v, so elapsed stops counting mid-flight", active, got.FinishedAt)
+		}
+	}
+
+	// And a terminal status finishes it, now rather than an hour ago.
+	before := time.Now().UTC().Add(-time.Second)
+	s.mark("PROJ-5", state.StatusDone, "")
+	got, err := store.Load("PROJ-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FinishedAt == nil {
+		t.Fatal("done left finished_at unset, so elapsed would keep growing forever")
+	}
+	if got.FinishedAt.Before(before) {
+		t.Errorf("finished_at = %v, want when the task finished rather than when its agent did", got.FinishedAt)
+	}
+}
+
+// TestSuccessClearsAnEarlierFailure covers what a retry leaves behind. A task
+// that failed and was then put right is not still failing, and a status row
+// carrying the old reason alongside the new outcome is worse than one carrying
+// no reason at all.
+func TestSuccessClearsAnEarlierFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	rec := state.Task{
+		Task:      task.Task{ID: "PROJ-6", CLI: task.CLIClaude},
+		Status:    state.StatusPublishFailed,
+		Error:     "the remote rejected the push",
+		StartedAt: time.Now().UTC(),
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, startedAt: rec.StartedAt}
+
+	s.mark("PROJ-6", state.StatusDone, "")
+	got, err := store.Load("PROJ-6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Error != "" {
+		t.Errorf("error = %q, want a done task to carry none", got.Error)
+	}
+
+	// And a status that does have something to say still says it.
+	s.mark("PROJ-6", state.StatusFailed, "the tests did not pass")
+	if got, _ := store.Load("PROJ-6"); got.Error != "the tests did not pass" {
+		t.Errorf("error = %q, want the new reason recorded", got.Error)
+	}
+}
+
+// TestMarkDoesNotUndoAStop covers the window a stop can land in. The phases
+// after the agent clear the pid between commands, and stop is allowed to record
+// itself there, so the next phase's own mark would otherwise write over it and
+// the loops would carry on as though nothing had been asked.
+func TestMarkDoesNotUndoAStop(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	stoppedAt := time.Now().UTC()
+	rec := state.Task{
+		Task:       task.Task{ID: "PROJ-7", CLI: task.CLIClaude},
+		Status:     state.StatusStopped,
+		Error:      "stopped by agent-orc stop",
+		StartedAt:  time.Now().UTC().Add(-time.Hour),
+		FinishedAt: &stoppedAt,
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, startedAt: rec.StartedAt}
+
+	// Everything the supervisor would go on to record after the gates.
+	for _, next := range []state.Status{
+		state.StatusVerifying, state.StatusReviewing, state.StatusPublishing,
+		state.StatusDone, state.StatusFailed, state.StatusReviewFailed,
+	} {
+		s.mark("PROJ-7", next, "")
+		got, err := store.Load("PROJ-7")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != state.StatusStopped {
+			t.Fatalf("mark(%s) overwrote the stop; status = %q", next, got.Status)
+		}
+		if got.Error != "stopped by agent-orc stop" {
+			t.Errorf("mark(%s) changed the reason to %q", next, got.Error)
+		}
+	}
+}
+
+// TestReviewRoundsStopForALaterRun covers the loop that runs longest. Scoping
+// the writes is not enough here: a round checks out whatever branch the id
+// names now and pays a reviewer and a worker to work on it, so a supervisor
+// whose task has been cleaned up and replaced has to stop before it starts one,
+// not merely have its bookkeeping dropped afterwards.
+func TestReviewRoundsStopForALaterRun(t *testing.T) {
+	dir := t.TempDir()
+	layout := paths.New(dir)
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(layout.State)
+	current := state.Task{
+		Task:      task.Task{ID: "PROJ-8", CLI: task.CLIClaude, Branch: "agent-orc/proj-8"},
+		Status:    state.StatusRunning,
+		StartedAt: time.Now().UTC(),
+		// Nonsense on purpose: reaching git at all would be the bug.
+		Worktree: filepath.Join(dir, "no-such-worktree"),
+	}
+	if err := store.Save(current); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewReviewer(layout, io.Discard)
+	r.OwnRun(current.StartedAt.Add(-time.Hour))
+	held := current
+	approved, err := r.Rounds(&held)
+	if approved {
+		t.Fatal("a stale reviewer approved a branch it does not own")
+	}
+	if err == nil || !strings.Contains(err.Error(), "belongs to a later run") {
+		t.Fatalf("Rounds() = %v, want it to decline before starting a round", err)
+	}
+
+	// A stop is the other reason to stop, from the same read.
+	if err := store.Update("PROJ-8", func(k *state.Task) { k.Status = state.StatusStopped }); err != nil {
+		t.Fatal(err)
+	}
+	r = NewReviewer(layout, io.Discard)
+	r.OwnRun(current.StartedAt)
+	held = current
+	if _, err := r.Rounds(&held); err == nil || !strings.Contains(err.Error(), "was stopped") {
+		t.Errorf("Rounds() = %v, want it to decline a stopped task", err)
+	}
+
+	// And a reviewer nobody scoped, which is what `agent-orc review` builds,
+	// is not held back by either: it gets as far as needing a real worktree.
+	r = NewReviewer(layout, io.Discard)
+	held = current
+	if _, err := r.Rounds(&held); err == nil ||
+		strings.Contains(err.Error(), "belongs to a later run") ||
+		strings.Contains(err.Error(), "was stopped") {
+		t.Errorf("Rounds() = %v, want an unscoped reviewer to proceed to the work", err)
+	}
+}

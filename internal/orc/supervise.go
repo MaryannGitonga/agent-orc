@@ -92,6 +92,14 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	case runErr != nil:
 		status = state.StatusFailed
 		message = runErr.Error()
+	// A gate that is about to run is what the task is doing, and has to be
+	// recorded before it starts rather than after. Otherwise the window where
+	// the suite is running, or the reviewer is, reads as "done" to anyone
+	// looking, on a branch that may still end up failing or being changed.
+	case record.TestCommand != "":
+		status = state.StatusVerifying
+	case record.Review.Enabled && record.Review.Auto:
+		status = state.StatusReviewing
 	case record.AutoPR:
 		status = state.StatusPublishing
 	}
@@ -99,16 +107,29 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 	usage := s.readUsage(record)
 	sessionID := s.readSessionID(record)
 
+	// What the record ends up saying, which is not always what was computed:
+	// a task a human stopped keeps that status, and logging the computed one
+	// would have the log claim a task is verifying while the record says it
+	// was stopped.
+	recorded := status
 	if err := s.update(id, func(k *state.Task) {
 		// A task a human stopped stays stopped; the non-zero exit that came
 		// from the signal is not a failure of the agent's own making.
-		if k.Status != state.StatusStopped {
+		if k.Status == state.StatusStopped {
+			recorded = state.StatusStopped
+		} else {
 			k.Status = status
 			k.Error = message
 		}
 		k.PID = 0
-		k.FinishedAt = &now
 		k.ExitCode = &code
+		// Only once the task is actually finished. The gates below run after
+		// the agent exits and can take as long as the tests and the reviewer
+		// need, so stamping this here would freeze the elapsed time `status`
+		// reports at the moment the agent stopped and hide all of it.
+		if !k.Status.Active() {
+			k.FinishedAt = &now
+		}
 		if usage != nil {
 			k.SpentUSD = usage.CostUSD
 			k.Tokens = usage.Tokens
@@ -120,15 +141,91 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 		return err
 	}
 
-	s.logf("agent exited with code %d; task is %s", code, status)
+	s.logf("agent exited with code %d; task is %s", code, recorded)
 	if runErr != nil {
 		return fmt.Errorf("task %s failed: %w", id, runErr)
 	}
-	if status == state.StatusPublishing {
-		s.publish(id, record)
-	} else {
-		s.logf("auto_pr is off; run 'agent-orc pr %s' when you want the draft opened", id)
+
+	// The gates below are what make the window between an agent exiting and its
+	// branch being published a long one: both loops run until they succeed, so
+	// this can be minutes or hours rather than the few statements it used to
+	// be. That is long enough for the task to be cleaned up and its id
+	// dispatched again, and every round of either gate costs money, so ask
+	// before starting rather than only before publishing.
+	if !s.owns(id) {
+		s.logf("this task's id now belongs to a later run; stopping here")
+		return nil
 	}
+
+	// Tests first, then review, then publish. Each gate is there to stop the
+	// next one being wasted: no point paying a reviewer to read a branch whose
+	// suite is red, and no point opening a PR over a branch the review is
+	// still changing.
+	if err := s.verify(record); err != nil {
+		s.logf("not publishing: %v", err)
+		s.failUnlessStopped(id, err)
+		return nil
+	}
+	if record.Review.Enabled && record.Review.Auto {
+		s.mark(id, state.StatusReviewing, "")
+		if err := s.autoReview(&record); err != nil {
+			s.logf("not publishing: %v", err)
+			if s.wasStopped(id) {
+				s.logf("task was stopped during review: %v", err)
+			} else {
+				s.mark(id, state.StatusReviewFailed, err.Error())
+			}
+			return nil
+		}
+	}
+
+	// Asked once more before publishing: the gates can each finish cleanly and
+	// still leave a stop recorded in the gap after them, and publishing is the
+	// step that reaches the remote.
+	//
+	// No test reaches this line. A stop issued while a gate is running kills
+	// that gate's own child, so verification or review gives up first and
+	// returns above; only a stop landing in the moment between a gate finishing
+	// and this running gets here, which is not something a test can arrange
+	// without a hook in the supervisor. It is kept because the window is real
+	// and the cost of losing that race is a push and a pull request nobody
+	// asked for.
+	if s.wasStopped(id) {
+		s.logf("task was stopped; not publishing")
+		return nil
+	}
+
+	if !record.AutoPR {
+		s.logf("auto_pr is off; run 'agent-orc pr %s' when you want the draft opened", id)
+		s.mark(id, state.StatusDone, "")
+		return nil
+	}
+	s.mark(id, state.StatusPublishing, "")
+	s.publish(id, record)
+	return nil
+}
+
+// autoReview runs the review pass inline, before the branch is published, when
+// the task asked for it. Doing it here rather than leaving it to a later
+// `agent-orc review` is the point of the flag: the draft PR that opens has
+// already been through a round, instead of being opened and then changed under
+// whoever started reading it.
+func (s *Supervisor) autoReview(record *state.Task) error {
+	r := NewReviewer(s.layout, s.out)
+	r.OwnRun(s.startedAt)
+	approved, err := r.Rounds(record)
+	if err != nil {
+		return err
+	}
+	if approved {
+		s.logf("the reviewer approved the branch after %d round(s)", record.ReviewRound)
+		return nil
+	}
+	// Not an error, and no longer a cap: the loop ends without an approval only
+	// when the worker stopped acting on the comments, which is as far as an
+	// automatic round can get on its own. The work is still worth publishing
+	// for a human to pick up, so say why it stopped and carry on.
+	s.logf("the review ended without an approval because the worker stopped changing anything; publishing anyway")
 	return nil
 }
 
@@ -155,8 +252,8 @@ func (s *Supervisor) publish(id string, record state.Task) {
 		err = p.Publish(id)
 	}
 	if err == nil {
-		s.mark(id, state.StatusDone, "")
 		s.logf("task %s is done", id)
+		s.mark(id, state.StatusDone, "")
 		return
 	}
 	if errors.Is(err, ErrRunReplaced) {
@@ -168,23 +265,23 @@ func (s *Supervisor) publish(id string, record state.Task) {
 	}
 	if errors.Is(err, ErrNoRemote) {
 		// A local-only repository is a legitimate way to work, not a failure.
-		s.mark(id, state.StatusDone, "")
 		s.logf("no %s remote; the work is sanitized and on %s, and was not pushed", defaultRemote, record.Branch)
+		s.mark(id, state.StatusDone, "")
 		return
 	}
 	if errors.Is(err, ErrNothingToPublish) {
 		// Not a publish failure: nothing was attempted, because there was
 		// nothing to attempt it with. Still not done, because the PR a human is
 		// waiting on is never going to arrive.
-		s.mark(id, state.StatusPublishFailed, err.Error())
 		s.logf("the agent committed nothing; %s is empty and no PR was opened", record.Branch)
+		s.mark(id, state.StatusPublishFailed, err.Error())
 		return
 	}
 	if errors.Is(err, ErrNoCommits) {
 		// Nothing to sanitize and nothing to publish. Say so, rather than
 		// reporting work on a branch that does not have any.
-		s.mark(id, state.StatusDone, "")
 		s.logf("the agent committed nothing; %s is empty", record.Branch)
+		s.mark(id, state.StatusDone, "")
 		return
 	}
 
@@ -236,13 +333,56 @@ func (s *Supervisor) owns(id string) bool {
 	return err == nil && current.StartedAt.Equal(s.startedAt)
 }
 
-// mark sets a task's terminal status.
+// wasStopped reports whether a human has stopped the task since it was loaded.
+// The phases that run after the agent exits are long, and a stop lands as a
+// killed child rather than as anything the loop can see for itself.
+func (s *Supervisor) wasStopped(id string) bool {
+	current, err := s.store.Load(id)
+	return err == nil && current.Status == state.StatusStopped
+}
+
+// failUnlessStopped records a phase's failure, unless a human stopped the task,
+// in which case the stop is the reason it failed and stays the record of it.
+func (s *Supervisor) failUnlessStopped(id string, cause error) {
+	if s.wasStopped(id) {
+		s.logf("task was stopped: %v", cause)
+		return
+	}
+	s.mark(id, state.StatusFailed, cause.Error())
+}
+
+// mark records a status change, terminal or not: the phases that run after the
+// agent exits are statuses in their own right, and moving into one goes through
+// here as much as finishing does. A status that is still working has its finish
+// time cleared, and one that is not has it set.
+//
+// Every caller logs before calling this, never after. The state file is what
+// anyone waiting on the task reads, so it has to be the last thing a supervisor
+// writes: a status observed while the supervisor still had a line to write
+// means the watcher can act, and delete the very directory being written to,
+// before the process has finished with it.
 func (s *Supervisor) mark(id string, status state.Status, message string) {
+	now := time.Now().UTC()
 	if err := s.update(id, func(k *state.Task) {
-		k.Status = status
-		if message != "" {
-			k.Error = message
+		// A task a human stopped stays stopped. The phases after the agent
+		// clear the pid between commands and a stop is allowed to land there,
+		// so without this the next phase's own mark would quietly undo it and
+		// the loops would carry on as though nothing had been asked.
+		if k.Status == state.StatusStopped {
+			return
 		}
+		k.Status = status
+		// A phase that is still working has no finish time yet, and a task that
+		// has one finished when this said so, not when its agent did.
+		if status.Active() {
+			k.FinishedAt = nil
+		} else {
+			k.FinishedAt = &now
+		}
+		// Assigned either way, so a status carrying no message clears whatever
+		// the last one left. A task that reached done has no error, and saying
+		// it does is worse than saying nothing.
+		k.Error = message
 	}); err != nil {
 		s.logf("warning: could not record status %s: %v", status, err)
 	}
@@ -284,6 +424,7 @@ func (s *Supervisor) readSessionID(record state.Task) string {
 
 // fail records a task that could not be run at all.
 func (s *Supervisor) fail(id string, cause error) error {
+	s.logf("task failed before the agent started: %v", cause)
 	now := time.Now().UTC()
 	if err := s.update(id, func(k *state.Task) {
 		k.Status = state.StatusFailed
@@ -293,7 +434,6 @@ func (s *Supervisor) fail(id string, cause error) error {
 	}); err != nil {
 		return errors.Join(cause, err)
 	}
-	s.logf("task failed before the agent started: %v", cause)
 	return cause
 }
 

@@ -14,13 +14,27 @@ import (
 
 // record mirrors the fields of the on-disk state file this test asserts on.
 type record struct {
-	ID       string `json:"id"`
-	Branch   string `json:"branch"`
-	Status   string `json:"status"`
-	Worktree string `json:"worktree"`
-	LogPath  string `json:"log_path"`
-	ExitCode *int   `json:"exit_code"`
-	Error    string `json:"error"`
+	ID          string `json:"id"`
+	Branch      string `json:"branch"`
+	Status      string `json:"status"`
+	Worktree    string `json:"worktree"`
+	LogPath     string `json:"log_path"`
+	ExitCode    *int   `json:"exit_code"`
+	PID         int    `json:"pid"`
+	Error       string `json:"error"`
+	CLI         string `json:"cli"`
+	Model       string `json:"model"`
+	DCOSignoff  bool   `json:"dco_signoff"`
+	TestRuns    int    `json:"test_runs"`
+	TestCommand string `json:"test_command"`
+	TestsPassed *bool  `json:"tests_passed"`
+	PRURL       string `json:"pr_url"`
+	Review      struct {
+		Enabled bool   `json:"enabled"`
+		Auto    bool   `json:"auto"`
+		CLI     string `json:"cli"`
+		Model   string `json:"model"`
+	} `json:"review"`
 }
 
 // orcRunWithPath runs agent-orc with PATH set to exactly pathDir.
