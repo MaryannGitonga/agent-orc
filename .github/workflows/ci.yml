@@ -92,7 +92,13 @@ jobs:
           total=$(make -s coverage)
           echo "$total"
           echo "### ${total}" >> "$GITHUB_STEP_SUMMARY"
-          echo "pct=$(printf '%s' "$total" | grep -oE '[0-9.]+')" >> "$GITHUB_OUTPUT"
+          pct=$(printf '%s' "$total" | grep -oE '[0-9.]+' | head -1)
+          # Rather than publish a badge reading "%" with no number in it.
+          if [ -z "$pct" ]; then
+            echo "no percentage in the coverage output: $total" >&2
+            exit 1
+          fi
+          echo "pct=$pct" >> "$GITHUB_OUTPUT"
 
   # Separate from the job that measures, and never running any of the
   # repository's code: only this one holds a token that can write, and it does
