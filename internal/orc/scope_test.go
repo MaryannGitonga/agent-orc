@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -164,5 +165,91 @@ func TestCleanupDeletesOnlyTheRunItLoaded(t *testing.T) {
 	}
 	if !got.StartedAt.Equal(secondRun) || got.PID != 222 {
 		t.Errorf("record is %v pid=%d, want the second run untouched", got.StartedAt, got.PID)
+	}
+}
+
+// TestStoppedTreatsAReplacedRunAsStopped covers what the loops that outlive the
+// agent ask before each round. A stop is not the only reason to stop: the task
+// having been cleaned up, or the id having been taken by a newer run, ends this
+// run just as firmly, and the worktree it would carry on in is not its own.
+func TestStoppedTreatsAReplacedRunAsStopped(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	firstRun := time.Now().UTC().Add(-time.Hour)
+	mine := scopeTo(store, firstRun)
+
+	save := func(status state.Status, startedAt time.Time) {
+		t.Helper()
+		if err := store.Save(state.Task{
+			Task:      task.Task{ID: "S", CLI: task.CLIClaude},
+			Status:    status,
+			StartedAt: startedAt,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	save(state.StatusRunning, firstRun)
+	if mine.stopped("S") {
+		t.Error("stopped() = true for this run, still running")
+	}
+
+	save(state.StatusStopped, firstRun)
+	if !mine.stopped("S") {
+		t.Error("stopped() = false for this run, stopped")
+	}
+
+	// Cleaned up and dispatched again: a healthy record, but not this one's.
+	save(state.StatusRunning, time.Now().UTC())
+	if !mine.stopped("S") {
+		t.Error("stopped() = false for a record that belongs to a later run")
+	}
+	// An unscoped caller is asking about whatever the id names now.
+	if scopeTo(store, time.Time{}).stopped("S") {
+		t.Error("stopped() = true unscoped, for a running task")
+	}
+
+	if err := store.Delete("S"); err != nil {
+		t.Fatal(err)
+	}
+	if !mine.stopped("S") {
+		t.Error("stopped() = false for a record that is gone")
+	}
+}
+
+// TestSuperviseRefusesARunItWasNotStartedFor covers the gap between a record
+// being written and its supervisor getting going: a forced cleanup can free the
+// id and another run take it, and two agents in one worktree is the worst thing
+// that can come of it.
+func TestSuperviseRefusesARunItWasNotStartedFor(t *testing.T) {
+	home := t.TempDir()
+	layout := paths.Layout{Root: home, State: filepath.Join(home, "state"), Logs: filepath.Join(home, "logs")}
+	store := state.NewStore(layout.State)
+	dispatchedFor := time.Now().UTC().Add(-time.Hour)
+
+	// The record the id names now: a different run from the one being started.
+	if err := store.Save(state.Task{
+		Task:      task.Task{ID: "Z", CLI: task.CLIClaude},
+		Worktree:  filepath.Join(home, "worktree"),
+		Status:    state.StatusPending,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := NewSupervisor(layout, io.Discard).Supervise("Z", dispatchedFor)
+	if err == nil {
+		t.Fatal("Supervise() = nil, want it to refuse a record from another run")
+	}
+	if !strings.Contains(err.Error(), "later run") {
+		t.Errorf("Supervise() = %v, want it to say the run had moved on", err)
+	}
+	// Refusing means leaving it alone: no status change, no failure recorded.
+	got, err := store.Load("Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != state.StatusPending || got.Error != "" {
+		t.Errorf("record is %q/%q, want the newer run untouched", got.Status, got.Error)
 	}
 }

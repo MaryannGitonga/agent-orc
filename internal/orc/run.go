@@ -233,9 +233,12 @@ func (d *Dispatcher) launch(plan launchPlan) error {
 	}
 
 	// The record exists now, so a failure past this point is recorded on it
-	// rather than rolled back: the task is real, it simply never started.
+	// rather than rolled back: the task is real, it simply never started. The
+	// write is scoped, because a forced cleanup can free the id while this is
+	// still getting going and the next run must not inherit the failure.
+	scope := scopeTo(d.store, record.StartedAt)
 	markFailed := func(err error) error {
-		_ = d.store.Update(t.ID, func(k *state.Task) {
+		_ = scope.update(t.ID, func(k *state.Task) {
 			k.Status = state.StatusFailed
 			k.Error = err.Error()
 		})
@@ -244,7 +247,7 @@ func (d *Dispatcher) launch(plan launchPlan) error {
 	if err := d.truncateLogs(t.ID); err != nil {
 		return markFailed(err)
 	}
-	if err := d.startSupervisor(t.ID); err != nil {
+	if err := d.startSupervisor(t.ID, record.StartedAt); err != nil {
 		return markFailed(err)
 	}
 
@@ -307,14 +310,17 @@ func (d *Dispatcher) warnIfTracked(t task.Task, worktree, dir string) {
 // startSupervisor re-execs agent-orc as a detached supervisor. Its own session
 // is what lets the agent survive the dispatching terminal going away, so a
 // batch can run unattended without a daemon.
-func (d *Dispatcher) startSupervisor(id string) error {
+func (d *Dispatcher) startSupervisor(id string, since time.Time) error {
 	logFile, err := os.OpenFile(d.layout.SupervisorLogFile(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("opening supervisor log: %w", err)
 	}
 	defer logFile.Close()
 
-	cmd := exec.Command(d.self, "supervise", id)
+	// The generation goes with the id: between the record being written and
+	// this starting, a forced cleanup can free the id and another run take it,
+	// and the supervisor must not adopt a task it was not started for.
+	cmd := exec.Command(d.self, "supervise", id, since.Format(time.RFC3339Nano))
 	cmd.Dir = filepath.Dir(d.layout.Root)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile

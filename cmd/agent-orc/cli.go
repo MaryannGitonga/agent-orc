@@ -505,12 +505,22 @@ func cliNames() []string {
 // superviseCmd runs the per-task supervisor. It is spawned by 'run', so it is
 // left out of the usage text.
 func superviseCmd(argv []string, out io.Writer) error {
-	if len(argv) != 1 {
-		return errors.New("usage: agent-orc supervise <task-id>")
+	if len(argv) < 1 || len(argv) > 2 {
+		return errors.New("usage: agent-orc supervise <task-id> [started-at]")
+	}
+	// 'run' passes the run it means, so a task cleaned up and dispatched again
+	// in the meantime is left to its own supervisor. By hand there is nothing
+	// to disambiguate, and the task as it stands now is what is wanted.
+	var since time.Time
+	if len(argv) == 2 {
+		var err error
+		if since, err = time.Parse(time.RFC3339Nano, argv[1]); err != nil {
+			return fmt.Errorf("parsing the started-at %q: %w", argv[1], err)
+		}
 	}
 	layout, err := paths.Resolve()
 	if err != nil {
 		return err
 	}
-	return orc.NewSupervisor(layout, out).Supervise(argv[0])
+	return orc.NewSupervisor(layout, out).Supervise(argv[0], since)
 }

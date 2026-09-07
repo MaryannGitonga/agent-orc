@@ -32,10 +32,16 @@ func NewSupervisor(layout paths.Layout, out io.Writer) *Supervisor {
 }
 
 // Supervise runs the agent for the given task and blocks until it exits.
-func (s *Supervisor) Supervise(id string) error {
+// Supervise runs one task to completion. since names the run it was started
+// for, and a record that has moved on is left alone; a zero since adopts
+// whatever the id names now, which is what running this by hand gets.
+func (s *Supervisor) Supervise(id string, since time.Time) error {
 	record, err := s.store.Load(id)
 	if err != nil {
 		return err
+	}
+	if !since.IsZero() && !record.StartedAt.Equal(since) {
+		return fmt.Errorf("task %q now belongs to a later run; not supervising it", id)
 	}
 	s.scope.since = record.StartedAt
 
