@@ -64,7 +64,13 @@ func (r *Reporter) Status() error {
 // is gone after a machine reboot, or a supervisor killed outright. Without it,
 // `status` would report a task as running forever.
 func reconcile(store *state.Store, t state.Task) state.Task {
-	if !t.Status.HasProcess() || t.PID == 0 || processAlive(t.PID) {
+	// The group, not the leader. A recorded pid is always a group leader, and
+	// stop signals the whole group, so a leader that exited while its test
+	// runner or compiler carried on is a task that is still working. Judging it
+	// on the leader alone would mark it failed and clear the pid, which is the
+	// only handle stop has: the group would be left running with nothing left
+	// pointing at it.
+	if !t.Status.HasProcess() || t.PID == 0 || groupAlive(t.PID) {
 		return t
 	}
 	now := time.Now().UTC()
@@ -75,7 +81,7 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 	// between that load and its save; for a reporting command in a single-user
 	// tool that is an acceptable trade rather than a lock.
 	_ = store.Update(t.ID, func(k *state.Task) {
-		if !k.Status.Active() || k.PID == 0 || processAlive(k.PID) {
+		if !k.Status.Active() || k.PID == 0 || groupAlive(k.PID) {
 			return
 		}
 		k.Status = state.StatusFailed
@@ -97,7 +103,7 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 }
 
 // processGoneNote explains a task reconciled from running to failed.
-const processGoneNote = "the agent process is no longer running; it was killed or the machine restarted"
+const processGoneNote = "the task's processes are no longer running; they were killed or the machine restarted"
 
 // processAlive reports whether a pid still refers to a live process. Signal 0
 // runs the existence and permission checks without delivering anything, so

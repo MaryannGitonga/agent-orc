@@ -5,6 +5,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/MaryannGitonga/agent-orc/internal/state"
+	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
 // TestSignalGroupOutlastsAStubbornChild covers the difference between asking
@@ -82,5 +85,60 @@ func TestGroupAliveIgnoresAReusedPID(t *testing.T) {
 	}
 	if groupAlive(pid) {
 		t.Error("a live process that leads no group was read as the task's group still running")
+	}
+}
+
+// TestReconcileKeepsATaskWhoseGroupIsStillRunning covers the other half of
+// treating a recorded pid as a process group. A leader that exits while its
+// test runner or compiler carries on is a task that is still working; judging
+// it on the leader alone marks it failed and clears the pid, which is the only
+// handle stop has, and the group is left running with nothing pointing at it.
+func TestReconcileKeepsATaskWhoseGroupIsStillRunning(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+
+	// A group whose leader exits promptly and whose child does not.
+	cmd := exec.Command("sh", "-c", `sh -c 'sleep 30' & sleep 0.3`)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the group: %v", err)
+	}
+	pid := cmd.Process.Pid
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for processAlive(pid) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if processAlive(pid) {
+		t.Skip("the leader did not exit in time; nothing to assert")
+	}
+	if !groupAlive(pid) {
+		t.Skip("the child went with the leader; nothing to assert")
+	}
+
+	if err := store.Save(state.Task{
+		Task:      task.Task{ID: "GRP-1", CLI: task.CLIClaude},
+		Status:    state.StatusVerifying,
+		PID:       pid,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.Load("GRP-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := reconcile(store, rec)
+	if got.Status != state.StatusVerifying {
+		t.Errorf("status = %q, want the task left alone while its group runs", got.Status)
+	}
+	if got.PID != pid {
+		t.Errorf("pid = %d, want %d kept so stop can still reach the group", got.PID, pid)
+	}
+	if stored, err := store.Load("GRP-1"); err == nil && stored.PID != pid {
+		t.Errorf("stored pid = %d, want the record left alone too", stored.PID)
 	}
 }
