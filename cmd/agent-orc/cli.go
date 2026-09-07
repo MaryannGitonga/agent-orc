@@ -149,7 +149,7 @@ func runCmd(argv []string, out io.Writer) error {
 		subagents: *subs, budgetUSD: *usd, budgetCredits: *credits,
 		autoPR: !*noPR, dcoSignoff: *dco,
 		review: task.Review{
-			Enabled: *rev || *revAuto, Auto: *revAuto,
+			Enabled: *rev, Auto: *revAuto,
 			CLI: task.CLI(*revCLI), Model: *revMdl,
 		},
 	}
@@ -285,15 +285,21 @@ func (f *flags) applyDefaults(s config.Settings, given map[string]bool) {
 	if s.Review == nil {
 		return
 	}
-	if !given["review"] && !given["auto-review"] && s.Review.Enabled != nil {
-		f.review.Enabled = *s.Review.Enabled
-	}
-	// Automatic review implies review: a task that reviews itself on finishing
-	// is reviewed, and asking for both separately would only be a way to get
-	// the combination wrong.
-	if !given["auto-review"] && s.Review.Auto != nil {
-		f.review.Auto = *s.Review.Auto
-		f.review.Enabled = f.review.Enabled || f.review.Auto
+	// Either flag settles both halves of the question, so neither default
+	// applies once one has been typed. Auto implies enabled, so a file saying
+	// reviews here are automatic would otherwise turn one back on after an
+	// explicit --review=false, and make automatic a review that --review asked
+	// for by hand. A flag a file can overrule is not a flag.
+	//
+	// Enabled is not derived here. Review.Normalize is the one place that rule
+	// lives, and buildTask applies it to whatever this leaves behind.
+	if !given["review"] && !given["auto-review"] {
+		if s.Review.Enabled != nil {
+			f.review.Enabled = *s.Review.Enabled
+		}
+		if s.Review.Auto != nil {
+			f.review.Auto = *s.Review.Auto
+		}
 	}
 	if !given["review-cli"] && s.Review.CLI != "" {
 		f.review.CLI = s.Review.CLI

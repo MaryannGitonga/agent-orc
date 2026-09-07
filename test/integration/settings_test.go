@@ -207,3 +207,43 @@ func TestBatchWithARepoTakesItsSettings(t *testing.T) {
 		t.Errorf("model = %q, want the named repository's own setting", got.Model)
 	}
 }
+
+// TestReviewFlagsBeatADefaultsFile covers a flag that a file could overrule.
+// review.auto implies review.enabled, so a machine-wide file saying reviews
+// here are automatic could turn one back on after an explicit --review=false,
+// and make automatic a review that --review asked for by hand.
+func TestReviewFlagsBeatADefaultsFile(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "true")
+	stubInto(t, stub, "copilot", filepath.Join(t.TempDir(), "reviewer"), "true")
+	write(t, filepath.Join(home, "defaults.yaml"), "cli: claude\nreview:\n  auto: true\n  cli: copilot\n")
+
+	tests := []struct {
+		id            string
+		flag          string
+		enabled, auto bool
+	}{
+		{"RF-1", "", true, true},                 // the file applies when nothing was typed
+		{"RF-2", "--review=false", false, false}, // off means off, auto included
+		{"RF-3", "--review=true", true, false},   // asked for by hand, so it stays by hand
+		{"RF-4", "--auto-review", true, true},    // asked for automatically
+		{"RF-5", "--auto-review=false", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			args := []string{"run", "--id", tt.id, "--repo", repo, "--prompt", "do it", "--no-auto-pr"}
+			if tt.flag != "" {
+				args = append(args, tt.flag)
+			}
+			if out, err := orcRun(t, home, stub, args...); err != nil {
+				t.Fatalf("agent-orc run %s = %v\n%s", tt.flag, err, out)
+			}
+			got := waitForStatus(t, home, tt.id, "done", "failed", "reviewed", "review_failed")
+			if got.Review.Enabled != tt.enabled || got.Review.Auto != tt.auto {
+				t.Errorf("with %q: enabled/auto = %v/%v, want %v/%v",
+					tt.flag, got.Review.Enabled, got.Review.Auto, tt.enabled, tt.auto)
+			}
+		})
+	}
+}
