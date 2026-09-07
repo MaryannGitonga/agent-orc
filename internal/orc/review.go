@@ -46,10 +46,11 @@ func (r *Reviewer) mayContinue(id string) error {
 	if r.scope.since.IsZero() {
 		return nil
 	}
-	if _, ok := r.scope.mine(id); !ok {
+	rec, ok := r.scope.mine(id)
+	if !ok {
 		return fmt.Errorf("task %q now belongs to a later run; no further review rounds", id)
 	}
-	if r.scope.stopped(id) {
+	if rec.Status == state.StatusStopped {
 		return fmt.Errorf("task %q was stopped; no further review rounds", id)
 	}
 	return nil

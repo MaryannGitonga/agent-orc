@@ -65,9 +65,14 @@ func (s runScope) mine(id string) (state.Task, bool) {
 	return rec, s.owns(rec)
 }
 
-// stopped reports whether a human has stopped the task. Between commands there
+// stopped reports whether this run should go no further. Between commands there
 // is no child to be killed, so the record is the only place a stop shows.
+//
+// A record that has gone or moved to a later run counts as stopped: this run is
+// over either way, and carrying on would mean working in a worktree that now
+// belongs to someone else. It comes from the same read as the ownership check
+// so the two cannot disagree about which record they saw.
 func (s runScope) stopped(id string) bool {
-	rec, err := s.store.Load(id)
-	return err == nil && rec.Status == state.StatusStopped
+	rec, ok := s.mine(id)
+	return !ok || rec.Status == state.StatusStopped
 }
