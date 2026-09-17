@@ -3,7 +3,7 @@
 ![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FMaryannGitonga%2Fagent-orc%2Fbadges%2Fcoverage.json)
 ![go](https://img.shields.io/badge/go-1.22%2B-00ADD8)
 ![release](https://img.shields.io/github/v/release/MaryannGitonga/agent-orc)
-![license](https://img.shields.io/badge/license-MIT-blue)
+![license](https://img.shields.io/badge/license-Apache_2.0-blue)
 
 Run several agentic coding CLIs at once, each on its own task, each in its own
 git worktree, and get a draft PR out of every one that succeeds.
@@ -565,4 +565,6 @@ trailers. `make commit-check` runs the same check locally.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Contributions are accepted under the same licence, certified by the DCO
+sign-off described in [CONTRIBUTING.md](CONTRIBUTING.md).
