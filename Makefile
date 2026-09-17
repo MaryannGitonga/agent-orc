@@ -59,6 +59,11 @@ build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/agent-orc
 
+## build-tui: build the terminal dashboard
+build-tui:
+	@mkdir -p $(BIN_DIR)
+	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/agent-orc-tui ./cmd/agent-orc-tui
+
 ## test-unit: run unit tests with the race detector
 test-unit:
 	$(GO) test -race -coverprofile=coverage.out -covermode=atomic $(PKG)

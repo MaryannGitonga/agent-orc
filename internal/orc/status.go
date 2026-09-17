@@ -114,6 +114,19 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+// Spend renders what a task has cost against its budget.
+//
+// This and the two below exist for a second front end that has to render these
+// columns identically. Without them the TUI would carry its own copy of the
+// rules and the two would drift apart.
+func Spend(t state.Task) string { return spend(t) }
+
+// Rounds renders how many review round-trips a task has completed.
+func Rounds(t state.Task) string { return rounds(t) }
+
+// Elapsed renders how long a task ran, or has been running.
+func Elapsed(t state.Task) string { return elapsed(t) }
+
 // spend renders "$spent / $budget" in whichever units are known.
 func spend(t state.Task) string {
 	spent := unknown

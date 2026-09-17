@@ -201,6 +201,25 @@ in prose is copied through byte for byte, JSON it happened to print included,
 because its output is the record of what it did. `--raw` prints any log exactly
 as it was written, for piping it into something else.
 
+## Watching tasks
+
+`agent-orc status` and `agent-orc logs -f` answer different questions: one shows
+every task shallowly, the other one task deeply. `agent-orc-tui` is both at
+once, a dashboard over the same records and logs:
+
+```sh
+make build-tui && bin/agent-orc-tui
+```
+
+A table of tasks on top, the selected task's phase and log below. `tab` moves
+between the supervisor log, the agent's own output and the task's details, `f`
+follows, `/` filters by id, CLI, branch or status, and `q` quits.
+
+It only reads. It starts nothing, signals nothing and writes nothing, so it can
+be opened and closed at any point in a task's life. In particular it does not
+run the reconciliation pass `status` does, because that takes a write lock and
+this polls once a second.
+
 ## Task sources
 
 A ticket reference can stand in for the prompt. It is fetched once, at launch,
