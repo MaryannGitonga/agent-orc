@@ -304,14 +304,48 @@ func (m model) View() string {
 		b.WriteString(m.filter.View())
 		return b.String()
 	}
-	keys := []string{"↑↓ select", "tab pane", "f follow", "g/G top/end", "/ filter", "r refresh", "q quit"}
-	footer := dim.Render(strings.Join(keys, "   "))
+	var notes []string
 	if m.follow {
-		footer += "   " + tabOn.Render("following")
+		notes = append(notes, tabOn.Render("following"))
 	}
 	if q := m.filter.Value(); q != "" {
-		footer += "   " + dim.Render(fmt.Sprintf("filter %q (%d)", q, len(rows)))
+		notes = append(notes, dim.Render(fmt.Sprintf("filter %q (%d)", q, len(rows))))
 	}
-	b.WriteString(footer)
+	b.WriteString(footer(m.width, notes))
 	return b.String()
+}
+
+// footerKeys is every key worth advertising, most useful first. On a narrow
+// terminal the list is cut from the end, and quit is always kept.
+var footerKeys = []string{
+	"↑↓ select", "shift+↑↓ scroll", "pgup/pgdn page", "tab pane",
+	"/ filter", "f follow", "g/G top/end", "r refresh",
+}
+
+const footerGap = "   "
+
+// footer renders the key hints and any status notes on a single line. It has
+// to stay one line: the log below is sized on that assumption, and a footer
+// that wraps pushes the whole screen down by a row.
+func footer(width int, notes []string) string {
+	if width <= 0 {
+		width = defaultWidth
+	}
+	used := len([]rune("q quit"))
+	for _, n := range notes {
+		used += len(footerGap) + lipgloss.Width(n)
+	}
+	var keys []string
+	for _, k := range footerKeys {
+		if used+len([]rune(k))+len(footerGap) > width {
+			break
+		}
+		keys = append(keys, k)
+		used += len([]rune(k)) + len(footerGap)
+	}
+	out := dim.Render(strings.Join(append(keys, "q quit"), footerGap))
+	for _, n := range notes {
+		out += footerGap + n
+	}
+	return out
 }

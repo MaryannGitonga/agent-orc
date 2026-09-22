@@ -218,9 +218,11 @@ fails. Everything is agent-orc for real except the agent, which is a stand-in
 script, so it costs nothing, needs no credentials and is done in half a minute.
 `DEMO_HEADLESS=1 make demo` waits and prints the outcome instead.
 
-A table of tasks on top, the selected task's phase and log below. `tab` moves
-between the supervisor log, the agent's own output and the task's details, `f`
-follows, `/` filters by id, CLI, branch or status, and `q` quits.
+A table of tasks on top, the selected task's phase and log below. `↑`/`↓` choose
+a task and `shift+↑`/`shift+↓` scroll its log a line at a time, with `pgup`/`pgdn`
+for a page and `g`/`G` for the start and end. `tab` moves between the supervisor
+log, the agent's own output and the task's details, `f` follows, `/` filters by id,
+CLI, branch or status, and `q` quits.
 
 It only reads. It starts nothing, signals nothing and writes nothing, so it can
 be opened and closed at any point in a task's life. In particular it does not

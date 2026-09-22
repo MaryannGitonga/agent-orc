@@ -213,6 +213,15 @@ func (m model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.vp.GotoBottom()
 		}
 		return m, nil
+	// One line at a time. The plain arrows choose a task, and a log is read far
+	// more often than the selection changes, so the shifted arrows scroll it
+	// rather than the other way round.
+	case "shift+up":
+		m.vp.LineUp(1)
+		return m, nil
+	case "shift+down":
+		m.vp.LineDown(1)
+		return m, nil
 	case "g":
 		m.vp.GotoTop()
 		return m, nil

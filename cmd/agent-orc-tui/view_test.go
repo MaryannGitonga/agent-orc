@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
 
@@ -243,4 +244,86 @@ func stripANSI(s string) string {
 		b.WriteByte(s[i])
 	}
 	return b.String()
+}
+
+// TestShiftedArrowsScrollTheLogAndPlainOnesChooseATask covers the split between
+// the two things the arrow keys could mean. Getting it wrong either way is
+// easy to miss: a selection that scrolls instead, or a log that cannot be read
+// one line at a time.
+func TestShiftedArrowsScrollTheLogAndPlainOnesChooseATask(t *testing.T) {
+	var cur tea.Model = newModel(paths.New(t.TempDir()))
+	cur, _ = cur.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	cur, _ = cur.Update(tasksMsg{tasks: []state.Task{
+		mkTask("FIRST-1", task.CLIClaude, state.StatusRunning, "agent-orc/first-1"),
+		mkTask("SECOND-1", task.CLIClaude, state.StatusRunning, "agent-orc/second-1"),
+	}})
+	long := make([]string, 200)
+	for i := range long {
+		long[i] = "log line"
+	}
+	cur, _ = cur.Update(logMsg{id: "FIRST-1", pane: paneSupervisor, text: strings.Join(long, "\n")})
+
+	key := func(k tea.KeyType) { cur, _ = cur.Update(tea.KeyMsg{Type: k}) }
+	offset := func() int { return cur.(model).vp.YOffset }
+
+	bottom := offset()
+	if bottom == 0 {
+		t.Fatal("a new log should open at its end, not its start")
+	}
+
+	key(tea.KeyShiftUp)
+	if got := offset(); got != bottom-1 {
+		t.Errorf("shift+up moved the log to %d, want one line up from %d", got, bottom)
+	}
+	key(tea.KeyShiftDown)
+	if got := offset(); got != bottom {
+		t.Errorf("shift+down moved the log to %d, want it back at %d", got, bottom)
+	}
+	if got := cur.(model).cursor; got != 0 {
+		t.Errorf("scrolling moved the selection to row %d; it should stay put", got)
+	}
+
+	key(tea.KeyPgUp)
+	if got := offset(); got >= bottom {
+		t.Errorf("pgup left the log at %d, want it above %d", got, bottom)
+	}
+
+	scrolled := offset()
+	key(tea.KeyDown)
+	if got := cur.(model).cursor; got != 1 {
+		t.Errorf("down left the selection on row %d, want the next task", got)
+	}
+	if got := offset(); got != scrolled {
+		t.Errorf("down scrolled the log from %d to %d; it should only choose a task", scrolled, got)
+	}
+
+	if out := cur.(model).View(); !strings.Contains(out, "pgup/pgdn") || !strings.Contains(out, "shift+↑↓") {
+		t.Errorf("the footer does not say how to scroll:\n%s", out)
+	}
+}
+
+func TestFooterStaysOnOneLine(t *testing.T) {
+	notes := []string{"following", `filter "claude" (3)`}
+	for _, width := range []int{40, 60, 80, 100, 120, 200} {
+		got := footer(width, notes)
+		// One line, however narrow: the log is sized on that assumption, and a
+		// footer that wraps pushes the whole screen down by a row.
+		if w := lipgloss.Width(got); w > width && width >= 40 {
+			t.Errorf("at width %d the footer is %d wide:\n%s", width, w, got)
+		}
+		if !strings.Contains(got, "q quit") {
+			t.Errorf("at width %d the footer lost quit:\n%s", width, got)
+		}
+	}
+	// With room to spare, nothing is dropped.
+	wide := footer(200, nil)
+	for _, k := range footerKeys {
+		if !strings.Contains(wide, k) {
+			t.Errorf("a 200-column footer is missing %q:\n%s", k, wide)
+		}
+	}
+	// The most useful keys are the last to go.
+	if narrow := footer(60, nil); !strings.Contains(narrow, "↑↓ select") {
+		t.Errorf("a 60-column footer dropped the selection keys:\n%s", narrow)
+	}
 }
