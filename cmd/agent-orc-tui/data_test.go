@@ -49,7 +49,7 @@ func TestLoadTasksPutsTheNewestFirst(t *testing.T) {
 		}
 	}
 
-	tasks, err := loadTasks(store)
+	tasks, _, err := loadTasks(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestLoadTasksDoesNotWrite(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		if _, err := loadTasks(store); err != nil {
+		if _, _, err := loadTasks(store); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -160,15 +160,15 @@ func TestReadTailIsBounded(t *testing.T) {
 	dir := t.TempDir()
 	big := filepath.Join(dir, "big.log")
 	writeLines(t, big, 60000) // about 5.5 MB
-	data, cut, err := readTail(big, 1<<20)
+	data, kind, err := readTail(big, 1<<20, 8<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(data) > 1<<20 {
 		t.Errorf("read %d bytes, want at most %d", len(data), 1<<20)
 	}
-	if !cut {
-		t.Error("readTail() did not report leaving the start of the file out")
+	if kind != tailCut {
+		t.Errorf("readTail() reported kind %v, want it to say output was left out", kind)
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	// A whole line first, not the back half of one.
@@ -181,17 +181,61 @@ func TestReadTailIsBounded(t *testing.T) {
 
 	small := filepath.Join(dir, "small.log")
 	writeLines(t, small, 3)
-	if data, cut, err := readTail(small, 1<<20); err != nil || cut || strings.Count(string(data), "\n") != 3 {
-		t.Errorf("readTail() on a small file = %d bytes, cut=%v, err=%v; want all of it", len(data), cut, err)
+	if data, kind, err := readTail(small, 1<<20, 8<<20); err != nil || kind != tailWhole || strings.Count(string(data), "\n") != 3 {
+		t.Errorf("readTail() on a small file = %d bytes, kind %v, err %v; want all of it", len(data), kind, err)
 	}
 
-	// One line longer than the limit: there is no whole line to show.
-	giant := filepath.Join(dir, "giant.log")
-	if err := os.WriteFile(giant, []byte(strings.Repeat("y", 2<<20)), 0o644); err != nil {
+	// The small-file branch reads through the same bounded helper, so a log
+	// being written to between the stat and the read cannot pull in more than
+	// the limit. That race is not reproducible here; the helper is.
+	f, err := os.Open(small)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if data, cut, err := readTail(giant, 1<<20); err != nil || !cut || len(data) != 0 {
-		t.Errorf("readTail() on one giant line = %d bytes, cut=%v, err=%v; want nothing kept", len(data), cut, err)
+	defer f.Close()
+	if data, err := readFrom(f, 0, 40); err != nil || len(data) != 40 {
+		t.Errorf("readFrom() with a 40 byte limit read %d bytes, err %v", len(data), err)
+	}
+}
+
+// TestReadTailKeepsOneVeryLongLine covers the shape claude's log has: the whole
+// answer on one line. Refusing to read past the limit blanked the agent pane
+// for exactly the runs worth reading, and the note claimed there was earlier
+// output when there was none.
+func TestReadTailKeepsOneVeryLongLine(t *testing.T) {
+	dir := t.TempDir()
+	// Earlier lines, then a final line longer than the tail limit.
+	long := filepath.Join(dir, "long.log")
+	body := strings.Repeat("earlier\n", 100) + "RESULT " + strings.Repeat("z", 2<<20) + "\n"
+	if err := os.WriteFile(long, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data, kind, err := readTail(long, 1<<20, 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != tailCut {
+		t.Errorf("kind %v, want the earlier lines reported as left out", kind)
+	}
+	if !strings.HasPrefix(string(data), "RESULT ") {
+		t.Errorf("the last line is not shown from its start: %.40q", string(data))
+	}
+
+	// One line, and nothing else: there is nothing earlier to leave out.
+	only := filepath.Join(dir, "only.log")
+	if err := os.WriteFile(only, []byte("RESULT "+strings.Repeat("z", 2<<20)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if data, kind, err := readTail(only, 1<<20, 8<<20); err != nil || kind != tailWhole || !strings.HasPrefix(string(data), "RESULT ") {
+		t.Errorf("a file of one long line = %.20q, kind %v, err %v; want all of it", string(data), kind, err)
+	}
+
+	// Longer than anything worth reading: shown from part way, and said so.
+	if data, kind, err := readTail(only, 1<<10, 1<<11); err != nil || kind != tailPartial || len(data) != 1<<11 {
+		t.Errorf("a line past the hard limit = %d bytes, kind %v, err %v", len(data), kind, err)
+	}
+	if got := window("zzz", tailPartial, "/p/x.log"); !strings.Contains(got, "too long to show whole") || strings.Contains(got, "earlier output") {
+		t.Errorf("window() for a partial line = %q", got)
 	}
 }
 

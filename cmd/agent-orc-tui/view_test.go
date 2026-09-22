@@ -101,24 +101,24 @@ func TestDetailNamesThePhaseNotJustTheStatus(t *testing.T) {
 	// test_runs counts finished runs, so the one under way is the next. The
 	// first run, before anything has been recorded, is attempt 1.
 	verifying := mkTask("V-1", task.CLIClaude, state.StatusVerifying, "agent-orc/v-1")
-	if got := detail(verifying); !strings.Contains(got, "test attempt 1") {
+	if got := detail(verifying, false); !strings.Contains(got, "test attempt 1") {
 		t.Errorf("detail() = %q during the first run, want attempt 1", got)
 	}
 	verifying.TestRuns = 1
-	if got := detail(verifying); !strings.Contains(got, "test attempt 2") {
+	if got := detail(verifying, false); !strings.Contains(got, "test attempt 2") {
 		t.Errorf("detail() = %q after one finished run, want attempt 2", got)
 	}
 
 	reviewing := mkTask("R-1", task.CLIClaude, state.StatusReviewing, "agent-orc/r-1")
 	reviewing.ReviewRound = 1
 	// Rounds are counted as completed, so the one under way is the next.
-	if got := detail(reviewing); !strings.Contains(got, "round 2") {
+	if got := detail(reviewing, false); !strings.Contains(got, "round 2") {
 		t.Errorf("detail() = %q, want it to name the round under way", got)
 	}
 
 	done := mkTask("D-1", task.CLIClaude, state.StatusDone, "agent-orc/d-1")
 	done.PRURL = "https://github.com/o/r/pull/7"
-	if got := detail(done); !strings.Contains(got, done.PRURL) {
+	if got := detail(done, false); !strings.Contains(got, done.PRURL) {
 		t.Errorf("detail() = %q, want the PR url once there is one", got)
 	}
 }
@@ -201,7 +201,7 @@ func TestModelSitsBesideTheCLIUntilTheTerminalIsTooNarrow(t *testing.T) {
 	if !wide.model {
 		t.Error("columnsFor(120) dropped the model column on a wide terminal")
 	}
-	if got := wide.row(task1, lipgloss.NewStyle()); !strings.Contains(got, "claude-opus-5") {
+	if got := wide.row(task1, lipgloss.NewStyle(), false); !strings.Contains(got, "claude-opus-5") {
 		t.Errorf("row() = %q, want the model beside the CLI", got)
 	}
 	if got := wide.header(); !strings.Contains(got, "MODEL") {
@@ -213,13 +213,13 @@ func TestModelSitsBesideTheCLIUntilTheTerminalIsTooNarrow(t *testing.T) {
 	if narrow.model {
 		t.Error("columnsFor(80) kept the model column on a narrow terminal")
 	}
-	if got := narrow.row(task1, lipgloss.NewStyle()); strings.Contains(got, "claude-opus-5") {
+	if got := narrow.row(task1, lipgloss.NewStyle(), false); strings.Contains(got, "claude-opus-5") {
 		t.Errorf("row() = %q, want the model dropped when it does not fit", got)
 	}
 
 	// A task that never named a model ran on the CLI's own default.
 	task1.Model = ""
-	if got := wide.row(task1, lipgloss.NewStyle()); !strings.Contains(got, "-") {
+	if got := wide.row(task1, lipgloss.NewStyle(), false); !strings.Contains(got, "-") {
 		t.Errorf("row() = %q, want a dash for an unnamed model", got)
 	}
 
@@ -227,10 +227,10 @@ func TestModelSitsBesideTheCLIUntilTheTerminalIsTooNarrow(t *testing.T) {
 	// wraps and every row after it is pushed out of place.
 	for _, width := range []int{60, 80, 100, 120, 200} {
 		c := columnsFor(width)
-		if n := len([]rune(stripANSI(c.row(task1, lipgloss.NewStyle())))) + 2; n > width && width >= colsWithoutModel+minBranch {
+		if n := len([]rune(stripANSI(c.row(task1, lipgloss.NewStyle(), false)))) + 2; n > width && width >= colsWithoutModel+minBranch {
 			t.Errorf("at width %d a row is %d wide", width, n)
 		}
-		if len([]rune(stripANSI(c.row(task1, lipgloss.NewStyle())))) != len([]rune(c.header())) {
+		if len([]rune(stripANSI(c.row(task1, lipgloss.NewStyle(), false)))) != len([]rune(c.header())) {
 			t.Errorf("at width %d the header and the rows are different widths", width)
 		}
 	}

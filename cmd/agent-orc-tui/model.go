@@ -39,6 +39,7 @@ type (
 	tickMsg  time.Time
 	tasksMsg struct {
 		tasks []state.Task
+		gone  map[string]bool // ids whose recorded process is no longer there
 		err   error
 	}
 	logMsg struct {
@@ -55,7 +56,8 @@ type model struct {
 	layout paths.Layout
 	store  *state.Store
 
-	tasks []state.Task // every task, newest first
+	tasks []state.Task    // every task, newest first
+	gone  map[string]bool // of those, the ones whose process has gone
 
 	// The selection is the task, not the row. Rows are sorted newest first, so
 	// a row number points at a different task the moment another is
@@ -86,6 +88,7 @@ type model struct {
 	shownID   string // what the viewport is showing, so a switch to anything
 	shownPane pane   // else opens at the end rather than at an old offset
 	shownText string // and what it said, to tell when there is newer output
+	wrapWidth int    // the width it was wrapped for, so a resize can re-wrap
 	newer     bool   // newer output was held back while you read
 
 	// reading counts log reads in flight. The timer does not start another
@@ -118,8 +121,8 @@ func tick() tea.Cmd {
 // refresh re-reads every record.
 func (m model) refresh() tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := loadTasks(m.store)
-		return tasksMsg{tasks: tasks, err: err}
+		tasks, gone, err := loadTasks(m.store)
+		return tasksMsg{tasks: tasks, gone: gone, err: err}
 	}
 }
 
@@ -194,7 +197,7 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 	case tasksMsg:
 		m.err = msg.err
 		if msg.err == nil {
-			m.tasks = msg.tasks
+			m.tasks, m.gone = msg.tasks, msg.gone
 		}
 		m.syncSelection()
 		return m, nil
@@ -221,7 +224,8 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 			return m, nil
 		}
 		m.shownID, m.shownPane, m.shownText, m.newer = msg.id, msg.pane, msg.text, false
-		m.vp.SetContent(wrapTo(msg.text, m.contentWidth()))
+		m.wrapWidth = m.contentWidth()
+		m.vp.SetContent(wrapTo(msg.text, m.wrapWidth))
 		if switched || live || msg.toEnd {
 			m.vp.GotoBottom()
 		}
@@ -231,6 +235,14 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		return m.onKey(msg)
 	}
 
+	// While the filter has focus, anything that is not a key belongs to it:
+	// the cursor's own blink messages arrive this way, and sending them to the
+	// viewport instead is what leaves the prompt looking dead.
+	if m.filtering {
+		var cmd tea.Cmd
+		m.filter, cmd = m.filter.Update(msg)
+		return m, cmd
+	}
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
@@ -301,8 +313,9 @@ func (m model) onKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m, tea.Batch(m.refresh(), m.requestLog(true, false))
 	case "/":
 		m.filtering = true
-		m.filter.Focus()
-		return m, nil
+		// Focus returns the command that starts the cursor blinking. Dropping
+		// it leaves a prompt with no cursor, which reads as an unresponsive box.
+		return m, m.filter.Focus()
 	}
 
 	var cmd tea.Cmd
@@ -389,6 +402,13 @@ func (m *model) relayout() {
 	wasAtBottom := m.vp.AtBottom()
 	m.vp.Width = m.contentWidth()
 	m.vp.Height = max(1, m.contentHeight()-used)
+	// Held content was wrapped for the old width. The viewport would re-wrap it
+	// itself and then cut the overflow, so a narrowed terminal loses lines from
+	// a log that is being read rather than followed.
+	if m.shownText != "" && m.wrapWidth != m.vp.Width {
+		m.wrapWidth = m.vp.Width
+		m.vp.SetContent(wrapTo(m.shownText, m.wrapWidth))
+	}
 	if m.follow && wasAtBottom {
 		m.vp.GotoBottom()
 	} else {

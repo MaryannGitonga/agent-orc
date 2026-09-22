@@ -197,7 +197,17 @@ func (c columns) header() string {
 // resetting everything, background included. Wrapping the finished row in
 // the highlight would therefore lose it from the status onwards, so each cell
 // is styled on its own, and the status inherits the background.
-func (c columns) row(t state.Task, bg lipgloss.Style) string {
+// statusCell is the status column's text and colour. A task whose process has
+// gone keeps the status it recorded, because that is what the record says, but
+// is marked and coloured as the failure `agent-orc status` will write.
+func statusCell(t state.Task, gone bool) (string, lipgloss.Style) {
+	if gone {
+		return pad("✗ "+string(t.Status), 12), errStyle
+	}
+	return pad(mark(t.Status)+" "+string(t.Status), 12), hue(t.Status)
+}
+
+func (c columns) row(t state.Task, bg lipgloss.Style, gone bool) string {
 	lead := pad(t.ID, 14) + " " + pad(string(t.CLI), 8) + " "
 	if c.model {
 		model := t.Model
@@ -207,10 +217,10 @@ func (c columns) row(t state.Task, bg lipgloss.Style) string {
 		}
 		lead += pad(model, 16) + " "
 	}
-	status := pad(mark(t.Status)+" "+string(t.Status), 12)
+	status, style := statusCell(t, gone)
 	rest := " " + pad(orc.Spend(t), 15) + " " + pad(orc.Rounds(t), 3) + " " +
 		pad(orc.Elapsed(t), 8) + " " + pad(t.Branch, c.branch)
-	return bg.Render(lead) + hue(t.Status).Inherit(bg).Render(status) + bg.Render(rest)
+	return bg.Render(lead) + style.Inherit(bg).Render(status) + bg.Render(rest)
 }
 
 // taskInfo is the info pane: the facts that do not fit on the detail line.
@@ -248,7 +258,7 @@ func taskInfo(t state.Task) string {
 }
 
 // detail is the two lines under the table describing the selected task.
-func detail(t state.Task) string {
+func detail(t state.Task, gone bool) string {
 	phase := string(t.Status)
 	switch t.Status {
 	// Both counters are bumped when a pass finishes, so the one under way is
@@ -262,7 +272,14 @@ func detail(t state.Task) string {
 	if t.PID != 0 {
 		pid = fmt.Sprintf("%d", t.PID)
 	}
-	first := fmt.Sprintf("%s  %s", bold.Render(t.ID), hue(t.Status).Render(phase))
+	style := hue(t.Status)
+	if gone {
+		// Said plainly, because the row is the only place it shows: the record
+		// still reads as working, and nothing corrects it until status runs.
+		phase += ", but its process is gone; 'agent-orc status' records that"
+		style = errStyle
+	}
+	first := fmt.Sprintf("%s  %s", bold.Render(t.ID), style.Render(phase))
 	second := fmt.Sprintf("%s %s   %s %s   %s %s",
 		dim.Render("branch"), t.Branch,
 		dim.Render("spend"), orc.Spend(t),
@@ -329,7 +346,7 @@ func (m model) renderTop() string {
 		if i == m.cursor {
 			cursor, bg = "▸ ", selected
 		}
-		add(cursor + cols.row(rows[i], bg))
+		add(cursor + cols.row(rows[i], bg, m.gone[rows[i].ID]))
 	}
 	// Only when the table is scrolling, so a short list has no dead line.
 	if len(rows) > max(1, m.capacity) {
@@ -344,7 +361,7 @@ func (m model) renderTop() string {
 		add("")
 		return strings.Join(lines, "\n")
 	}
-	for _, l := range strings.Split(detail(t), "\n") {
+	for _, l := range strings.Split(detail(t, m.gone[t.ID]), "\n") {
 		add(l)
 	}
 	tabs := make([]string, len(paneNames))

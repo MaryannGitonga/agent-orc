@@ -127,6 +127,15 @@ tar -xzf agent-orc_${VERSION}_${OS}_${ARCH}.tar.gz
 sudo install agent-orc_${VERSION}_${OS}_${ARCH} /usr/local/bin/agent-orc
 ```
 
+The dashboard, `agent-orc-tui`, ships as its own tarball in the same release:
+
+```sh
+gh release download "$VERSION" --repo MaryannGitonga/agent-orc \
+  --pattern "agent-orc-tui_${VERSION}_${OS}_${ARCH}.tar.gz"
+tar -xzf agent-orc-tui_${VERSION}_${OS}_${ARCH}.tar.gz
+sudo install agent-orc-tui_${VERSION}_${OS}_${ARCH} /usr/local/bin/agent-orc-tui
+```
+
 Each release also ships `checksums.txt`. Or build it yourself:
 
 ```sh
@@ -208,7 +217,7 @@ every task shallowly, the other one task deeply. `agent-orc-tui` is both at
 once, a dashboard over the same records and logs:
 
 ```sh
-make build-tui && bin/agent-orc-tui
+agent-orc-tui              # from a release, or `make build-tui && bin/agent-orc-tui`
 ```
 
 To see it with something happening, `make demo` dispatches three tasks against a

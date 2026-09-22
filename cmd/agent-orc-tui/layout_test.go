@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"syscall"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -199,7 +200,7 @@ func TestHighlightCoversTheWholeRow(t *testing.T) {
 	defer lipgloss.SetColorProfile(before)
 
 	one := mkTask("PROJ-1234", task.CLIClaude, state.StatusVerifying, "agent-orc/proj-1234")
-	row := columnsFor(120).row(one, selected)
+	row := columnsFor(120).row(one, selected, false)
 
 	after := row[strings.Index(row, "verifying")+len("verifying"):]
 	if !strings.Contains(after, "48;5;236") {
@@ -420,5 +421,101 @@ func TestShortTerminalsKeepTheHeader(t *testing.T) {
 	s.load(numbered(5)...)
 	if out := s.m.View(); !strings.Contains(out, "taller terminal") || len(strings.Split(out, "\n")) > 5 {
 		t.Errorf("a 5 row terminal got:\n%s", out)
+	}
+}
+
+// TestHeldLogIsRewrappedOnResize covers narrowing the terminal while reading
+// back through a log. The held text stayed wrapped for the old width, so the
+// viewport wrapped it again and cut the overflow, and one press of a scroll key
+// then moved by more than one row.
+func TestHeldLogIsRewrappedOnResize(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("A")...)
+	var b strings.Builder
+	for i := 1; i <= 60; i++ {
+		fmt.Fprintf(&b, "line %02d %s\n", i, strings.Repeat("x", 90))
+	}
+	s.showLog(strings.TrimRight(b.String(), "\n"))
+	for i := 0; i < 10; i++ {
+		s.press(tea.KeyShiftUp)
+	}
+
+	s.send(tea.WindowSizeMsg{Width: 50, Height: 30})
+	before := strings.Split(s.m.renderLog(), "\n")
+	for i, line := range before {
+		if w := lipgloss.Width(line); w > 50 {
+			t.Fatalf("after narrowing, row %d is %d wide", i, w)
+		}
+	}
+	s.press(tea.KeyShiftDown)
+	after := strings.Split(s.m.renderLog(), "\n")
+	// One press, one row. Text still wrapped for the old width moves by as many
+	// rows as each held line now takes.
+	if before[1] != after[0] {
+		t.Errorf("one scroll moved more than one row:\nwas second row %q\nnow first row %q", before[1], after[0])
+	}
+}
+
+// TestFilterPromptHasACursor covers the prompt looking alive. Focus returns the
+// command that starts the cursor blinking, and everything that is not a key
+// press has to reach the text input for it to keep blinking.
+func TestFilterPromptHasACursor(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("A")...)
+	s.showLog(numberedLines(1, 300))
+
+	if cmd := s.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")}); cmd == nil {
+		t.Error("'/' returned no command, so the cursor never starts blinking")
+	}
+
+	// While the filter has focus, other messages belong to it, not to the log.
+	offset := s.m.vp.YOffset
+	s.send(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if s.m.vp.YOffset != offset {
+		t.Error("a message sent while filtering was handled by the log instead of the prompt")
+	}
+}
+
+// TestTaskWhoseProcessIsGoneIsMarked covers a supervisor that was killed. The
+// record still says running, and the dashboard drew it as working, with a
+// growing elapsed time, while agent-orc status called the same task failed.
+func TestTaskWhoseProcessIsGoneIsMarked(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	live := mkTask("ALIVE-1", task.CLIClaude, state.StatusRunning, "agent-orc/alive-1")
+	// agent-orc records a process group leader, and liveness is judged on the
+	// group, so this test's own group is what stands in for a live task.
+	live.PID = syscall.Getpgrp()
+	dead := mkTask("DEAD-1", task.CLIClaude, state.StatusRunning, "agent-orc/dead-1")
+	dead.PID = 0x7FFFFFFF // a pid nothing can have
+	done := mkTask("DONE-1", task.CLIClaude, state.StatusDone, "agent-orc/done-1")
+	for _, rec := range []state.Task{live, dead, done} {
+		if err := store.Save(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, gone, err := loadTasks(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gone["DEAD-1"] {
+		t.Error("a running record whose process is gone was not noticed")
+	}
+	for _, id := range []string{"ALIVE-1", "DONE-1"} {
+		if gone[id] {
+			t.Errorf("%s was marked as gone", id)
+		}
+	}
+
+	// And it shows, in the row and in the detail line.
+	s := newScreen(t, 120, 30)
+	s.send(tasksMsg{tasks: []state.Task{dead}, gone: map[string]bool{"DEAD-1": true}})
+	out := s.m.View()
+	if !strings.Contains(out, "✗ running") {
+		t.Errorf("the row does not mark the task as having no process:\n%s", out)
+	}
+	if !strings.Contains(out, "process is gone") {
+		t.Errorf("the detail line does not say the process is gone:\n%s", out)
 	}
 }
