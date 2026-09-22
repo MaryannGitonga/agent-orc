@@ -98,10 +98,15 @@ func TestEveryStatusHasAMark(t *testing.T) {
 }
 
 func TestDetailNamesThePhaseNotJustTheStatus(t *testing.T) {
+	// test_runs counts finished runs, so the one under way is the next. The
+	// first run, before anything has been recorded, is attempt 1.
 	verifying := mkTask("V-1", task.CLIClaude, state.StatusVerifying, "agent-orc/v-1")
-	verifying.TestRuns = 2
+	if got := detail(verifying); !strings.Contains(got, "test attempt 1") {
+		t.Errorf("detail() = %q during the first run, want attempt 1", got)
+	}
+	verifying.TestRuns = 1
 	if got := detail(verifying); !strings.Contains(got, "test attempt 2") {
-		t.Errorf("detail() = %q, want it to name the attempt", got)
+		t.Errorf("detail() = %q after one finished run, want attempt 2", got)
 	}
 
 	reviewing := mkTask("R-1", task.CLIClaude, state.StatusReviewing, "agent-orc/r-1")
@@ -325,5 +330,16 @@ func TestFooterStaysOnOneLine(t *testing.T) {
 	// The most useful keys are the last to go.
 	if narrow := footer(60, nil); !strings.Contains(narrow, "↑↓ select") {
 		t.Errorf("a 60-column footer dropped the selection keys:\n%s", narrow)
+	}
+}
+
+// TestFooterCutsNotesThatCannotFit covers the last line of defence: notes that
+// outgrow the terminal on their own, with every droppable hint already gone.
+func TestFooterCutsNotesThatCannotFit(t *testing.T) {
+	notes := []string{"following", strings.Repeat("a note wider than any narrow terminal ", 3)}
+	for _, width := range []int{30, 50, 80} {
+		if w := lipgloss.Width(footer(width, notes)); w > width {
+			t.Errorf("at width %d the footer is %d wide", width, w)
+		}
 	}
 }

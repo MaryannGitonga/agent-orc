@@ -133,9 +133,14 @@ sleep 1
 "$orc" run --id DEMO-3 --cli claude --repo "$repo" --budget-usd 1 \
 	--prompt "a task the stand-in will fail" >/dev/null
 
+# Captured first rather than piped. Under pipefail, grep -q exiting at its first
+# match can leave status writing into a closed pipe, and the 141 that comes back
+# reads as "no match": the loop would stop while tasks were still running. A
+# status that fails outright is "not finished" too, not a reason to stop.
 finished() {
-	"$orc" status | grep -qE ' (pending|running|verifying|reviewing|publishing) ' && return 1
-	return 0
+	local out
+	out="$("$orc" status)" || return 1
+	! grep -qE ' (pending|running|verifying|reviewing|publishing) ' <<<"$out"
 }
 
 if [ -t 1 ] && [ -z "${DEMO_HEADLESS:-}" ]; then

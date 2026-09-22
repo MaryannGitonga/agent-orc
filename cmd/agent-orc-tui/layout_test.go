@@ -243,3 +243,86 @@ func TestFollowingShowsTheNewestLineEvenWhenLinesWrap(t *testing.T) {
 		t.Errorf("following a log with wrapped lines hides its newest line:\n%s", s.m.View())
 	}
 }
+
+// TestNoLogWithoutItsTask covers the log pane outliving what it belongs to. A
+// filter matching nothing, or the selected task being cleaned up, cleared the
+// detail lines but left the previous task's log on screen beneath them.
+func TestNoLogWithoutItsTask(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("DEMO-2", "DEMO-1")...)
+	s.showLog("DEMO-2 SUPERVISOR LINE")
+	if !s.contains("DEMO-2 SUPERVISOR LINE") {
+		t.Fatal("the selected task's log is not shown to begin with")
+	}
+
+	s.typeRunes("/")
+	s.typeRunes("zzz")
+	if !s.contains("no tasks") {
+		t.Fatal("a filter matching nothing does not say so")
+	}
+	if s.contains("DEMO-2 SUPERVISOR LINE") {
+		t.Error("a filter matching nothing still shows the last task's log")
+	}
+
+	// Cleared, and the selected task is then cleaned up out from under it.
+	s.press(tea.KeyEsc)
+	s.showLog("DEMO-2 SUPERVISOR LINE")
+	s.load(tasks("DEMO-1")...)
+	if s.contains("DEMO-2 SUPERVISOR LINE") {
+		t.Error("a removed task's log is still shown under the task that replaced it")
+	}
+
+	// And the pane is still the height the layout gave it.
+	if n := len(s.lines()); n > 30 {
+		t.Errorf("with the log blanked the screen is %d lines, want at most 30", n)
+	}
+}
+
+// TestFooterNeverWraps covers the notes the footer carries alongside its key
+// hints. Dropping hints made room for them only up to a point, and a long
+// filter on an 80 column terminal still wrapped onto a second line.
+func TestFooterNeverWraps(t *testing.T) {
+	s := newScreen(t, 80, 30)
+	s.load(tasks("A")...)
+	s.typeRunes("/")
+	s.typeRunes(strings.Repeat("a-very-long-filter-", 5))
+	s.press(tea.KeyEnter)
+
+	lines := s.lines()
+	if n := len(lines); n > 30 {
+		t.Errorf("with a long filter the screen is %d lines, want at most 30", n)
+	}
+	for i, line := range lines {
+		if w := lipgloss.Width(line); w > 80 {
+			t.Errorf("line %d is %d wide:\n%s", i, w, line)
+		}
+	}
+	if !strings.Contains(lines[len(lines)-1], "filter") {
+		t.Errorf("the footer lost the filter note entirely:\n%s", lines[len(lines)-1])
+	}
+}
+
+// TestSummaryIsInLifecycleOrder covers the header's tally. It used to be
+// alphabetical, which put done and failed ahead of the tasks still working.
+func TestSummaryIsInLifecycleOrder(t *testing.T) {
+	var all []state.Task
+	for _, st := range []state.Status{state.StatusFailed, state.StatusDone, state.StatusRunning, state.StatusPending} {
+		all = append(all, mkTask(string(st), task.CLIClaude, st, "b"))
+	}
+	all = append(all, mkTask("new", task.CLIClaude, state.Status("from-the-future"), "b"))
+
+	got := strings.Join(countSummary(all), " ")
+	want := []string{"1 pending", "1 running", "1 done", "1 failed", "1 from-the-future"}
+	last := -1
+	for _, w := range want {
+		i := strings.Index(got, w)
+		if i < 0 {
+			t.Errorf("summary %q is missing %q", got, w)
+			continue
+		}
+		if i < last {
+			t.Errorf("summary %q has %q out of order", got, w)
+		}
+		last = i
+	}
+}

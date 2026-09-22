@@ -85,22 +85,52 @@ func filterTasks(tasks []state.Task, q string) []state.Task {
 	return out
 }
 
-// countSummary is the header's tally, in the order tasks move through.
+// lifecycle is the order statuses are tallied in: the order a task moves
+// through them, then the ways it can end.
+var lifecycle = []state.Status{
+	state.StatusPending, state.StatusRunning, state.StatusVerifying,
+	state.StatusReviewing, state.StatusPublishing, state.StatusDone,
+	state.StatusReviewed, state.StatusStopped, state.StatusFailed,
+	state.StatusPublishFailed, state.StatusReviewFailed, state.StatusPolicyViolation,
+}
+
+// countSummary is the header's tally, in lifecycle order. A status this build
+// does not know, from a newer version's record, still gets counted, at the end.
 func countSummary(tasks []state.Task) []string {
 	counts := map[state.Status]int{}
 	for _, t := range tasks {
 		counts[t.Status]++
 	}
+	known := map[state.Status]bool{}
 	order := make([]state.Status, 0, len(counts))
-	for s := range counts {
-		order = append(order, s)
+	for _, s := range lifecycle {
+		known[s] = true
+		if counts[s] > 0 {
+			order = append(order, s)
+		}
 	}
-	sort.Slice(order, func(i, j int) bool { return string(order[i]) < string(order[j]) })
-	out := make([]string, 0, len(order))
-	for _, s := range order {
+	var unknown []state.Status
+	for s := range counts {
+		if !known[s] {
+			unknown = append(unknown, s)
+		}
+	}
+	sort.Slice(unknown, func(i, j int) bool { return unknown[i] < unknown[j] })
+
+	out := make([]string, 0, len(counts))
+	for _, s := range append(order, unknown...) {
 		out = append(out, hue(s).Render(fmt.Sprintf("%d %s", counts[s], s)))
 	}
 	return out
+}
+
+// shorten cuts s to n characters with an ellipsis, and leaves it alone if it
+// already fits. Unlike pad, it never adds spaces.
+func shorten(s string, n int) string {
+	if len([]rune(s)) <= n {
+		return s
+	}
+	return pad(s, n)
 }
 
 // pad renders s in a column n wide, cutting it with an ellipsis when it does
@@ -221,10 +251,10 @@ func taskInfo(t state.Task) string {
 func detail(t state.Task) string {
 	phase := string(t.Status)
 	switch t.Status {
+	// Both counters are bumped when a pass finishes, so the one under way is
+	// the next: the first test run is attempt 1 while test_runs still reads 0.
 	case state.StatusVerifying:
-		if t.TestRuns > 0 {
-			phase = fmt.Sprintf("verifying, test attempt %d", t.TestRuns)
-		}
+		phase = fmt.Sprintf("verifying, test attempt %d", t.TestRuns+1)
 	case state.StatusReviewing:
 		phase = fmt.Sprintf("reviewing, round %d", t.ReviewRound+1)
 	}
@@ -247,7 +277,18 @@ func (m model) View() string {
 	if !m.ready {
 		return "loading…"
 	}
-	return m.renderTop() + "\n" + m.vp.View() + "\n" + m.renderFooter()
+	return m.renderTop() + "\n" + m.renderLog() + "\n" + m.renderFooter()
+}
+
+// renderLog is the log pane, but only while it holds the selected task's view.
+// The content lags a selection by one read, and when the filter matches nothing
+// or the task is cleaned up there is nothing new to replace it with, so without
+// this the screen shows one task's details above another task's log.
+func (m model) renderLog() string {
+	if t, ok := m.selected(); ok && t.ID == m.shownID && m.pane == m.shownPane {
+		return m.vp.View()
+	}
+	return strings.Repeat("\n", max(0, m.vp.Height-1))
 }
 
 // renderTop is everything above the log. The layout measures this very string
@@ -318,7 +359,7 @@ func (m model) renderFooter() string {
 		notes = append(notes, tabOn.Render("following"))
 	}
 	if q := m.filter.Value(); q != "" {
-		notes = append(notes, dim.Render(fmt.Sprintf("filter %q (%d)", q, len(m.visible()))))
+		notes = append(notes, dim.Render(fmt.Sprintf("filter %q (%d)", shorten(q, 20), len(m.visible()))))
 	}
 	return footer(m.width, notes)
 }
@@ -361,5 +402,7 @@ func footer(width int, notes []string) string {
 	for _, n := range notes {
 		out += footerGap + n
 	}
-	return out
+	// Dropping hints is not always enough: the notes alone can outgrow a
+	// narrow terminal. Cut rather than wrap, for the same reason as above.
+	return fit(out, width)
 }
