@@ -12,13 +12,9 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/version"
 )
 
-// maxTableRows caps the table so a long backlog cannot squeeze the log out of
-// the screen entirely.
+// maxTableRows is the most rows the table shows before it scrolls, however
+// tall the terminal.
 const maxTableRows = 12
-
-// chromeHeight is every line the log does not get: the header, the table's own
-// header, the detail block, the tab bar and the footer.
-const chromeHeight = 9
 
 var (
 	dim       = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
@@ -164,20 +160,27 @@ func (c columns) header() string {
 		pad("RDS", 3) + " " + pad("ELAPSED", 8) + " " + pad("BRANCH", c.branch)
 }
 
-func (c columns) row(t state.Task) string {
-	out := pad(t.ID, 14) + " " + pad(string(t.CLI), 8) + " "
+// row renders one task in style bg, which is the highlight for the selected row
+// and nothing for the rest.
+//
+// The status cell has a colour of its own, and a styled string ends by
+// resetting everything, background included. Wrapping the finished row in
+// the highlight would therefore lose it from the status onwards, so each cell
+// is styled on its own, and the status inherits the background.
+func (c columns) row(t state.Task, bg lipgloss.Style) string {
+	lead := pad(t.ID, 14) + " " + pad(string(t.CLI), 8) + " "
 	if c.model {
 		model := t.Model
 		if model == "" {
 			// The CLI's own default, which agent-orc never had to name.
 			model = "-"
 		}
-		out += pad(model, 16) + " "
+		lead += pad(model, 16) + " "
 	}
-	return out +
-		hue(t.Status).Render(pad(mark(t.Status)+" "+string(t.Status), 12)) + " " +
-		pad(orc.Spend(t), 15) + " " + pad(orc.Rounds(t), 3) + " " +
+	status := pad(mark(t.Status)+" "+string(t.Status), 12)
+	rest := " " + pad(orc.Spend(t), 15) + " " + pad(orc.Rounds(t), 3) + " " +
 		pad(orc.Elapsed(t), 8) + " " + pad(t.Branch, c.branch)
+	return bg.Render(lead) + hue(t.Status).Inherit(bg).Render(status) + bg.Render(rest)
 }
 
 // taskInfo is the info pane: the facts that do not fit on the detail line.
@@ -244,75 +247,86 @@ func (m model) View() string {
 	if !m.ready {
 		return "loading…"
 	}
+	return m.renderTop() + "\n" + m.vp.View() + "\n" + m.renderFooter()
+}
 
-	var b strings.Builder
+// renderTop is everything above the log. The layout measures this very string
+// to size the log, so the two cannot disagree about how tall it is.
+func (m model) renderTop() string {
+	width := m.contentWidth()
 	rows := m.visible()
+	var lines []string
+	add := func(s string) { lines = append(lines, fit(s, width)) }
 
-	// Header.
 	head := bold.Render("agent-orc")
 	if summary := countSummary(m.tasks); len(summary) > 0 {
 		head += "   " + strings.Join(summary, "  ")
 	}
-	b.WriteString(head + "   " + dim.Render(version.String()) + "\n\n")
-
+	add(head + "   " + dim.Render(version.String()))
+	add("")
 	if m.err != nil {
-		b.WriteString(errStyle.Render("could not read state: "+m.err.Error()) + "\n")
+		add(errStyle.Render("could not read state: " + m.err.Error()))
 	}
 
-	// Table.
-	cols := columnsFor(m.width)
-	b.WriteString(dim.Render("  "+cols.header()) + "\n")
-
+	cols := columnsFor(width)
+	add(dim.Render("  " + cols.header()))
 	if len(rows) == 0 {
-		b.WriteString(dim.Render("  no tasks; dispatch one with 'agent-orc run'") + "\n")
+		add(dim.Render("  no tasks; dispatch one with 'agent-orc run'"))
 	}
-	for i, t := range rows {
-		if i >= maxTableRows {
-			b.WriteString(dim.Render(fmt.Sprintf("  … %d more", len(rows)-maxTableRows)) + "\n")
-			break
-		}
-		line := cols.row(t)
-		cursor := "  "
+	last := min(len(rows), m.tableTop+m.tableCapacity())
+	for i := m.tableTop; i < last; i++ {
+		cursor, bg := "  ", lipgloss.NewStyle()
 		if i == m.cursor {
-			cursor = "▸ "
-			line = selected.Render(line)
+			cursor, bg = "▸ ", selected
 		}
-		b.WriteString(cursor + line + "\n")
+		add(cursor + cols.row(rows[i], bg))
 	}
-	b.WriteString("\n")
+	// Only when the table is scrolling, so a short list has no dead line.
+	if len(rows) > m.tableCapacity() {
+		add(dim.Render(fmt.Sprintf("  rows %d to %d of %d", m.tableTop+1, last, len(rows))))
+	}
+	add("")
 
-	// Detail and tabs for the selected task.
-	if t, ok := m.selected(); ok {
-		b.WriteString(detail(t) + "\n")
-		tabs := make([]string, len(paneNames))
-		for i, name := range paneNames {
-			if pane(i) == m.pane {
-				tabs[i] = tabOn.Render("[ " + name + " ]")
-				continue
-			}
-			tabs[i] = dim.Render("  " + name + "  ")
+	t, ok := m.selected()
+	if !ok {
+		add("")
+		add("")
+		add("")
+		return strings.Join(lines, "\n")
+	}
+	for _, l := range strings.Split(detail(t), "\n") {
+		add(l)
+	}
+	tabs := make([]string, len(paneNames))
+	for i, name := range paneNames {
+		if pane(i) == m.pane {
+			tabs[i] = tabOn.Render("[ " + name + " ]")
+			continue
 		}
-		b.WriteString(strings.Join(tabs, " ") + "\n")
-	} else {
-		b.WriteString("\n\n")
+		tabs[i] = dim.Render("  " + name + "  ")
 	}
+	add(strings.Join(tabs, " "))
+	return strings.Join(lines, "\n")
+}
 
-	b.WriteString(m.vp.View() + "\n")
-
-	// Footer.
+func (m model) renderFooter() string {
 	if m.filtering {
-		b.WriteString(m.filter.View())
-		return b.String()
+		return fit(m.filter.View(), m.contentWidth())
 	}
 	var notes []string
 	if m.follow {
 		notes = append(notes, tabOn.Render("following"))
 	}
 	if q := m.filter.Value(); q != "" {
-		notes = append(notes, dim.Render(fmt.Sprintf("filter %q (%d)", q, len(rows))))
+		notes = append(notes, dim.Render(fmt.Sprintf("filter %q (%d)", q, len(m.visible()))))
 	}
-	b.WriteString(footer(m.width, notes))
-	return b.String()
+	return footer(m.width, notes)
+}
+
+// fit cuts a line to the terminal's width. A line that wraps takes a second
+// row the layout never counted, and pushes the top of the screen out of view.
+func fit(s string, width int) string {
+	return lipgloss.NewStyle().MaxWidth(width).Render(s)
 }
 
 // footerKeys is every key worth advertising, most useful first. On a narrow

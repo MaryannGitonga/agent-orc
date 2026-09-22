@@ -1,0 +1,245 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
+	"github.com/MaryannGitonga/agent-orc/internal/paths"
+	"github.com/MaryannGitonga/agent-orc/internal/state"
+	"github.com/MaryannGitonga/agent-orc/internal/task"
+)
+
+// screen drives a model the way the program does, one message at a time, and
+// keeps the result so a test reads as a sequence of things someone did.
+type screen struct{ m model }
+
+// newScreen sizes the model before any task is read, which is the order a real
+// terminal delivers them in.
+func newScreen(t *testing.T, width, height int) *screen {
+	s := &screen{m: newModel(paths.New(t.TempDir()))}
+	s.send(tea.WindowSizeMsg{Width: width, Height: height})
+	return s
+}
+
+func (s *screen) send(msg tea.Msg) tea.Cmd {
+	next, cmd := s.m.Update(msg)
+	s.m = next.(model)
+	return cmd
+}
+
+func (s *screen) load(tasks ...state.Task) { s.send(tasksMsg{tasks: tasks}) }
+
+func (s *screen) press(k tea.KeyType)       { s.send(tea.KeyMsg{Type: k}) }
+func (s *screen) typeRunes(r string)        { s.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(r)}) }
+func (s *screen) lines() []string           { return strings.Split(s.m.View(), "\n") }
+func (s *screen) selectedID() string        { return s.m.selectedID }
+func (s *screen) showLog(text string)       { s.send(logMsg{id: s.m.selectedID, pane: s.m.pane, text: text}) }
+func (s *screen) contains(want string) bool { return strings.Contains(s.m.View(), want) }
+
+func tasks(ids ...string) []state.Task {
+	out := make([]state.Task, len(ids))
+	for i, id := range ids {
+		out[i] = mkTask(id, task.CLIClaude, state.StatusRunning, "agent-orc/"+strings.ToLower(id))
+	}
+	return out
+}
+
+func numbered(n int) []state.Task {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("T-%02d", i+1)
+	}
+	return tasks(ids...)
+}
+
+// TestScreenFitsOnceTasksLoad covers the order a real terminal works in: the
+// size arrives first, while the table is still empty, and the tasks a moment
+// later. A log sized for the empty table made the screen taller than the
+// terminal, and the top of it, header and table included, scrolled away.
+func TestScreenFitsOnceTasksLoad(t *testing.T) {
+	for _, n := range []int{0, 1, 5, 15} {
+		s := newScreen(t, 100, 30)
+		s.load(numbered(n)...)
+		lines := s.lines()
+		if len(lines) > 30 {
+			t.Errorf("with %d task(s) the screen is %d lines, want at most 30", n, len(lines))
+		}
+		if !strings.Contains(lines[0], "agent-orc") {
+			t.Errorf("with %d task(s) the header is not on the first line:\n%s", n, lines[0])
+		}
+	}
+
+	// An error line appearing later must be counted too.
+	s := newScreen(t, 100, 30)
+	s.load(numbered(5)...)
+	s.send(tasksMsg{err: errors.New("permission denied")})
+	if n := len(s.lines()); n > 30 {
+		t.Errorf("with an error showing the screen is %d lines, want at most 30", n)
+	}
+	if !s.contains("could not read state") {
+		t.Error("the read error is not shown")
+	}
+}
+
+// TestSelectionFollowsTheTaskNotTheRow covers what someone watching a task
+// expects: to keep watching it. Rows are newest first, so a new dispatch, or a
+// filter hiding a row above, used to move the selection to a different task.
+func TestSelectionFollowsTheTaskNotTheRow(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("B", "A")...)
+	s.press(tea.KeyDown)
+	if got := s.selectedID(); got != "A" {
+		t.Fatalf("selected %q after moving down, want A", got)
+	}
+
+	// Another task is dispatched and appears at the top.
+	s.load(tasks("C", "B", "A")...)
+	if got := s.selectedID(); got != "A" {
+		t.Errorf("a new dispatch moved the selection to %q, want it to stay on A", got)
+	}
+
+	// A filter hides a row above the selection.
+	mixed := tasks("C", "B", "A")
+	mixed[1].CLI = task.CLICopilot
+	s.load(mixed...)
+	s.typeRunes("/")
+	s.typeRunes("claude")
+	if got := s.selectedID(); got != "A" {
+		t.Errorf("filtering moved the selection to %q, want it to stay on A", got)
+	}
+
+	// Only when the task itself goes does the selection move, to a neighbour.
+	s.press(tea.KeyEsc)
+	s.load(tasks("C", "B")...)
+	if got := s.selectedID(); got == "" || got == "A" {
+		t.Errorf("after A was cleaned up the selection is %q, want a remaining task", got)
+	}
+}
+
+// TestTableScrollsToKeepTheSelectionVisible covers a list longer than the
+// table. Moving past the last visible row used to select rows that were never
+// drawn, with a detail block and a log for a task you could not see.
+func TestTableScrollsToKeepTheSelectionVisible(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(numbered(15)...)
+	for i := 0; i < 13; i++ {
+		s.press(tea.KeyDown)
+	}
+	if got := s.selectedID(); got != "T-14" {
+		t.Fatalf("selected %q after 13 moves, want T-14", got)
+	}
+	if !s.contains("▸ T-14") {
+		t.Errorf("the selected row T-14 is not on screen:\n%s", s.m.View())
+	}
+	if !s.contains("of 15") {
+		t.Error("a scrolling table does not say which rows it is showing")
+	}
+
+	// And back up to the top.
+	for i := 0; i < 13; i++ {
+		s.press(tea.KeyUp)
+	}
+	if !s.contains("▸ T-01") {
+		t.Errorf("after moving back up, T-01 is not on screen:\n%s", s.m.View())
+	}
+}
+
+// TestCtrlCQuitsFromTheFilter covers the one key that must work wherever the
+// focus is.
+func TestCtrlCQuitsFromTheFilter(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("A")...)
+	s.typeRunes("/")
+	if !s.m.filtering {
+		t.Fatal("'/' did not open the filter")
+	}
+	cmd := s.send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c in the filter did nothing")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("ctrl+c in the filter did not quit")
+	}
+}
+
+// TestSwitchingPanesOpensAtTheEnd covers moving from one log to another. The
+// new log used to inherit the old one's scroll position, landing somewhere in
+// the middle of a different file.
+func TestSwitchingPanesOpensAtTheEnd(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("A")...)
+	long := strings.Repeat("supervisor line\n", 200)
+	s.showLog(long)
+	for i := 0; i < 20; i++ {
+		s.press(tea.KeyShiftUp)
+	}
+	if s.m.vp.AtBottom() {
+		t.Fatal("scrolling up left the log at its end")
+	}
+
+	s.press(tea.KeyTab)
+	s.showLog(strings.Repeat("agent line\n", 200))
+	if !s.m.vp.AtBottom() {
+		t.Error("switching to the agent log kept the supervisor log's scroll position")
+	}
+}
+
+// TestHighlightCoversTheWholeRow covers the selected row's background. The
+// status cell ends by resetting its colour, and the reset used to take the
+// highlight with it, leaving spend, rounds, elapsed and branch unmarked.
+func TestHighlightCoversTheWholeRow(t *testing.T) {
+	before := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(before)
+
+	one := mkTask("PROJ-1234", task.CLIClaude, state.StatusVerifying, "agent-orc/proj-1234")
+	row := columnsFor(120).row(one, selected)
+
+	after := row[strings.Index(row, "verifying")+len("verifying"):]
+	if !strings.Contains(after, "48;5;236") {
+		t.Errorf("the columns after the status have no highlight:\n%q", after)
+	}
+}
+
+// TestNoLineIsWiderThanTheTerminal covers the lines that used to wrap: the
+// detail line once a PR url is set, and every table row below 74 columns. A
+// wrapped line takes a row the layout never counted.
+func TestNoLineIsWiderThanTheTerminal(t *testing.T) {
+	withPR := mkTask("PROJ-1234", task.CLIClaude, state.StatusDone, "agent-orc/proj-1234")
+	withPR.PRURL = "https://github.com/MaryannGitonga/agent-orc/pull/1234"
+	for _, width := range []int{50, 60, 74, 80, 100} {
+		s := newScreen(t, width, 30)
+		s.load(withPR, mkTask("DEP-88", task.CLICopilot, state.StatusRunning, "chore/dep-88"))
+		for i, line := range s.lines() {
+			if w := lipgloss.Width(line); w > width {
+				t.Errorf("at width %d, line %d is %d wide:\n%s", width, i, w, line)
+			}
+		}
+		if n := len(s.lines()); n > 30 {
+			t.Errorf("at width %d the screen is %d lines, want at most 30", width, n)
+		}
+	}
+}
+
+// TestFollowingShowsTheNewestLineEvenWhenLinesWrap covers a log with long
+// lines. The viewport wraps them and then drops whatever overflows from the
+// bottom, which while following is exactly the newest line.
+func TestFollowingShowsTheNewestLineEvenWhenLinesWrap(t *testing.T) {
+	s := newScreen(t, 60, 24)
+	s.load(tasks("A")...)
+	var b strings.Builder
+	for i := 0; i < 50; i++ {
+		b.WriteString(strings.Repeat("a long supervisor line ", 8) + "\n")
+	}
+	b.WriteString("THE NEWEST LINE")
+	s.showLog(b.String())
+	if !s.contains("THE NEWEST LINE") {
+		t.Errorf("following a log with wrapped lines hides its newest line:\n%s", s.m.View())
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
@@ -51,20 +52,29 @@ type model struct {
 	layout paths.Layout
 	store  *state.Store
 
-	tasks  []state.Task // every task, newest first
-	cursor int          // index into the filtered view
+	tasks []state.Task // every task, newest first
+
+	// The selection is the task, not the row. Rows are sorted newest first, so
+	// a row number points at a different task the moment another is
+	// dispatched or the filter hides one above it. cursor is only ever the
+	// position selectedID currently occupies.
+	selectedID string
+	cursor     int
+	tableTop   int // the first row the table shows
+
 	pane   pane
 	follow bool
 
 	filter    textinput.Model
 	filtering bool
 
-	vp      viewport.Model
-	ready   bool
-	err     error
-	width   int
-	height  int
-	shownID string // the task the viewport's content belongs to
+	vp        viewport.Model
+	ready     bool
+	err       error
+	width     int
+	height    int
+	shownID   string // what the viewport is showing, so a switch to anything
+	shownPane pane   // else opens at the end rather than at an old offset
 }
 
 func newModel(layout paths.Layout) model {
@@ -131,11 +141,25 @@ func (m model) selected() (state.Task, bool) {
 	return rows[m.cursor], true
 }
 
+// Update handles a message, then lays the screen out again from what it now
+// holds. Doing it after every message, rather than only on a resize, is what
+// keeps the log sized to the table that is actually there: the first resize
+// arrives before any task has been read, and the table, the error line and
+// the detail block all change size later without the window changing at all.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	next.relayout()
+	return next, cmd
+}
+
+func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.layoutPanes()
+		if !m.ready {
+			m.vp = viewport.New(m.contentWidth(), 1)
+			m.ready = true
+		}
 		return m, nil
 
 	case tickMsg:
@@ -146,7 +170,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.tasks = msg.tasks
 		}
-		m.clampCursor()
+		m.syncSelection()
 		return m, nil
 
 	case logMsg:
@@ -155,10 +179,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		atBottom := m.vp.AtBottom()
-		changed := m.shownID != msg.id
-		m.shownID = msg.id
-		m.vp.SetContent(msg.text)
-		if changed || (m.follow && atBottom) {
+		switched := m.shownID != msg.id || m.shownPane != msg.pane
+		m.shownID, m.shownPane = msg.id, msg.pane
+		m.vp.SetContent(wrapTo(msg.text, m.contentWidth()))
+		if switched || (m.follow && atBottom) {
 			m.vp.GotoBottom()
 		}
 		return m, nil
@@ -172,14 +196,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) onKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	if m.filtering {
 		switch msg.String() {
+		case "ctrl+c":
+			// Quit means quit, whatever has focus. Handing it to the text box
+			// instead would make you close the filter first to leave.
+			return m, tea.Quit
 		case "esc":
 			m.filtering = false
 			m.filter.SetValue("")
 			m.filter.Blur()
-			m.clampCursor()
+			m.syncSelection()
 			return m, m.loadLog()
 		case "enter":
 			m.filtering = false
@@ -188,7 +216,7 @@ func (m model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
-		m.clampCursor()
+		m.syncSelection()
 		return m, tea.Batch(cmd, m.loadLog())
 	}
 
@@ -244,51 +272,99 @@ func (m model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // move walks the selection, stopping at both ends rather than wrapping: a list
 // that jumps from the last row to the first is easy to lose your place in.
 func (m *model) move(delta int) {
-	n := len(m.visible())
-	if n == 0 {
-		m.cursor = 0
+	rows := m.visible()
+	if len(rows) == 0 {
 		return
 	}
-	m.cursor = clamp(m.cursor+delta, 0, n-1)
+	m.cursor = clamp(m.cursor+delta, 0, len(rows)-1)
+	m.selectedID = rows[m.cursor].ID
+	m.scrollTable(len(rows))
 }
 
-func (m *model) clampCursor() {
-	n := len(m.visible())
-	if n == 0 {
-		m.cursor = 0
+// syncSelection finds the selected task again after the rows changed under
+// it. It stays on the same task wherever that task has moved to, and only
+// falls back to a neighbouring row when the task is gone or filtered out.
+func (m *model) syncSelection() {
+	rows := m.visible()
+	if len(rows) == 0 {
+		m.cursor, m.selectedID, m.tableTop = 0, "", 0
 		return
 	}
-	m.cursor = clamp(m.cursor, 0, n-1)
+	m.cursor = clamp(m.cursor, 0, len(rows)-1)
+	for i, t := range rows {
+		if t.ID == m.selectedID {
+			m.cursor = i
+			break
+		}
+	}
+	m.selectedID = rows[m.cursor].ID
+	m.scrollTable(len(rows))
 }
 
-// layoutPanes gives the log whatever is left once the table and the chrome
-// around it have taken what they need.
-func (m *model) layoutPanes() {
-	rows := len(m.visible())
-	if rows > maxTableRows {
-		rows = maxTableRows
+// scrollTable moves the table's window just far enough to keep the selected
+// row on screen.
+func (m *model) scrollTable(rows int) {
+	limit := m.tableCapacity()
+	if m.cursor < m.tableTop {
+		m.tableTop = m.cursor
 	}
-	// A terminal that reports no size is not a terminal one column wide: some
-	// pseudo-terminals answer 0x0, and wrapping the log at a couple of columns
-	// makes it unreadable. Fall back to the conventional default instead.
-	width, height := m.width, m.height
-	if width <= 0 {
-		width = defaultWidth
+	if m.cursor >= m.tableTop+limit {
+		m.tableTop = m.cursor - limit + 1
 	}
-	if height <= 0 {
-		height = defaultHeight
-	}
-	h := height - (chromeHeight + rows)
-	if h < 3 {
-		h = 3
-	}
-	w := width
+	m.tableTop = clamp(m.tableTop, 0, max(0, rows-limit))
+}
+
+// tableCapacity is how many rows the table may show before it scrolls. It
+// shrinks on a short terminal, so the table cannot squeeze the log out.
+func (m model) tableCapacity() int {
+	return clamp(m.contentHeight()/3, 3, maxTableRows)
+}
+
+// relayout sizes the log to whatever the rest of the screen leaves, measured
+// from what is actually rendered rather than predicted from a row count.
+func (m *model) relayout() {
 	if !m.ready {
-		m.vp = viewport.New(w, h)
-		m.ready = true
 		return
 	}
-	m.vp.Width, m.vp.Height = w, h
+	m.scrollTable(len(m.visible()))
+	used := lipgloss.Height(m.renderTop()) + 1 // plus the footer's line
+	wasAtBottom := m.vp.AtBottom()
+	m.vp.Width = m.contentWidth()
+	m.vp.Height = max(1, m.contentHeight()-used)
+	if m.follow && wasAtBottom {
+		m.vp.GotoBottom()
+	} else {
+		// A taller log can leave the offset past the new end.
+		m.vp.SetYOffset(m.vp.YOffset)
+	}
+}
+
+// A terminal that reports no size is not a terminal one column wide: some
+// pseudo-terminals answer 0x0, and laying out for that makes the screen
+// unreadable. Fall back to the conventional default instead.
+func (m model) contentWidth() int {
+	if m.width <= 0 {
+		return defaultWidth
+	}
+	return m.width
+}
+
+func (m model) contentHeight() int {
+	if m.height <= 0 {
+		return defaultHeight
+	}
+	return m.height
+}
+
+// wrapTo breaks long lines before they reach the log. The viewport wraps lines
+// itself and then cuts whatever no longer fits from the bottom, which in a log
+// being followed is exactly the newest line. Wrapping first makes every line it
+// counts a line on screen, so the end of the log is the end of the screen.
+func wrapTo(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	return lipgloss.NewStyle().Width(width).Render(s)
 }
 
 func clamp(v, lo, hi int) int {
