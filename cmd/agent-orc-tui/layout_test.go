@@ -326,3 +326,99 @@ func TestSummaryIsInLifecycleOrder(t *testing.T) {
 		last = i
 	}
 }
+
+func numberedLines(from, to int) string {
+	var b strings.Builder
+	for i := from; i <= to; i++ {
+		fmt.Fprintf(&b, "log line %d\n", i)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// TestTickDoesNotStackReads covers a read slower than the refresh. Each tick
+// used to start another read regardless, so on a large log they overlapped and
+// piled up; a tick now leaves the log alone while a read is still out.
+func TestTickDoesNotStackReads(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("A")...)
+	s.send(tickMsg{})
+	if s.m.reading != 1 {
+		t.Fatalf("after one tick %d read(s) are out, want 1", s.m.reading)
+	}
+	s.send(tickMsg{})
+	s.send(tickMsg{})
+	if s.m.reading != 1 {
+		t.Errorf("ticks while a read was out started more: %d out, want 1", s.m.reading)
+	}
+	s.showLog("done reading")
+	if s.m.reading != 0 {
+		t.Errorf("after the read came back %d are still counted as out", s.m.reading)
+	}
+	s.send(tickMsg{})
+	if s.m.reading != 1 {
+		t.Errorf("once the read finished, the next tick did not start another: %d out", s.m.reading)
+	}
+}
+
+// TestScrolledUpTextStaysStill covers reading back through a log that keeps
+// growing. The pane holds a window of the last lines, and a newer window
+// swapped in under the same scroll position slid the text up by however much
+// had arrived.
+func TestScrolledUpTextStaysStill(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("A")...)
+	s.showLog(numberedLines(1, 300))
+	for i := 0; i < 30; i++ {
+		s.press(tea.KeyShiftUp)
+	}
+	before := s.m.renderLog()
+
+	// Forty new lines arrive; the window now starts forty lines later.
+	s.showLog(numberedLines(41, 340))
+	if after := s.m.renderLog(); after != before {
+		t.Errorf("the text moved while scrolled up:\nbefore\n%s\nafter\n%s", before, after)
+	}
+	if !s.m.newer || !strings.Contains(s.m.renderFooter(), "new output") {
+		t.Error("newer output was held back without saying so")
+	}
+
+	// G asks for the latest, and gets it.
+	s.typeRunes("G")
+	s.send(logMsg{id: "A", pane: s.m.pane, text: numberedLines(41, 340), force: true, toEnd: true})
+	if !strings.Contains(s.m.renderLog(), "log line 340") || s.m.newer {
+		t.Errorf("G did not bring the newest output into view:\n%s", s.m.renderLog())
+	}
+}
+
+// TestShortTerminalsKeepTheHeader covers the smallest screens. The table used
+// to keep at least three rows, which with the fixed lines outgrew a short
+// terminal, and the renderer then dropped the top lines, the header first.
+func TestShortTerminalsKeepTheHeader(t *testing.T) {
+	for _, tc := range []struct{ height, tasks int }{
+		{10, 3}, {13, 5}, {13, 15}, {16, 15}, {24, 15},
+		// Short enough that even without spacers the table must drop below
+		// three rows, with the scroll line showing as well.
+		{9, 15}, {10, 15},
+	} {
+		s := newScreen(t, 100, tc.height)
+		s.load(numbered(tc.tasks)...)
+		lines := s.lines()
+		if len(lines) > tc.height {
+			t.Errorf("%d rows, %d tasks: the screen is %d lines", tc.height, tc.tasks, len(lines))
+		}
+		if !strings.Contains(lines[0], "agent-orc") {
+			t.Errorf("%d rows, %d tasks: the header is not on the first line:\n%s", tc.height, tc.tasks, s.m.View())
+		}
+		if !s.contains("▸ ") {
+			t.Errorf("%d rows, %d tasks: the selected row is not on screen", tc.height, tc.tasks)
+		}
+	}
+
+	// Below what can be laid out at all, it says so rather than show a
+	// screen with its top cut off.
+	s := newScreen(t, 100, 5)
+	s.load(numbered(5)...)
+	if out := s.m.View(); !strings.Contains(out, "taller terminal") || len(strings.Split(out, "\n")) > 5 {
+		t.Errorf("a 5 row terminal got:\n%s", out)
+	}
+}

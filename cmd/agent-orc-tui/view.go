@@ -277,6 +277,9 @@ func (m model) View() string {
 	if !m.ready {
 		return "loading…"
 	}
+	if m.tooSmall {
+		return fit("agent-orc-tui needs a taller terminal", m.contentWidth())
+	}
 	return m.renderTop() + "\n" + m.renderLog() + "\n" + m.renderFooter()
 }
 
@@ -304,7 +307,13 @@ func (m model) renderTop() string {
 		head += "   " + strings.Join(summary, "  ")
 	}
 	add(head + "   " + dim.Render(version.String()))
-	add("")
+	// Spacer lines are the first thing a short terminal gives up.
+	spacer := func() {
+		if !m.compact {
+			add("")
+		}
+	}
+	spacer()
 	if m.err != nil {
 		add(errStyle.Render("could not read state: " + m.err.Error()))
 	}
@@ -314,7 +323,7 @@ func (m model) renderTop() string {
 	if len(rows) == 0 {
 		add(dim.Render("  no tasks; dispatch one with 'agent-orc run'"))
 	}
-	last := min(len(rows), m.tableTop+m.tableCapacity())
+	last := min(len(rows), m.tableTop+max(1, m.capacity))
 	for i := m.tableTop; i < last; i++ {
 		cursor, bg := "  ", lipgloss.NewStyle()
 		if i == m.cursor {
@@ -323,10 +332,10 @@ func (m model) renderTop() string {
 		add(cursor + cols.row(rows[i], bg))
 	}
 	// Only when the table is scrolling, so a short list has no dead line.
-	if len(rows) > m.tableCapacity() {
+	if len(rows) > max(1, m.capacity) {
 		add(dim.Render(fmt.Sprintf("  rows %d to %d of %d", m.tableTop+1, last, len(rows))))
 	}
-	add("")
+	spacer()
 
 	t, ok := m.selected()
 	if !ok {
@@ -355,8 +364,14 @@ func (m model) renderFooter() string {
 		return fit(m.filter.View(), m.contentWidth())
 	}
 	var notes []string
-	if m.follow {
+	switch {
+	case m.follow && m.vp.AtBottom():
 		notes = append(notes, tabOn.Render("following"))
+	case m.newer:
+		// Held back while you read, rather than slid in underneath you.
+		notes = append(notes, tabOn.Render("new output, G for the latest"))
+	case !m.follow:
+		notes = append(notes, dim.Render("paused"))
 	}
 	if q := m.filter.Value(); q != "" {
 		notes = append(notes, dim.Render(fmt.Sprintf("filter %q (%d)", shorten(q, 20), len(m.visible()))))

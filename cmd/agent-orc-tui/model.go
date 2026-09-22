@@ -45,6 +45,9 @@ type (
 		id   string
 		pane pane
 		text string
+		// force replaces what is on screen even while it is being read, and
+		// toEnd then jumps to the end of it: what r and G ask for.
+		force, toEnd bool
 	}
 )
 
@@ -62,6 +65,13 @@ type model struct {
 	cursor     int
 	tableTop   int // the first row the table shows
 
+	// How the top of the screen is laid out, chosen by relayout to fit the
+	// terminal: how many table rows, whether to drop the spacer lines, and
+	// whether even that does not fit.
+	capacity int
+	compact  bool
+	tooSmall bool
+
 	pane   pane
 	follow bool
 
@@ -75,6 +85,13 @@ type model struct {
 	height    int
 	shownID   string // what the viewport is showing, so a switch to anything
 	shownPane pane   // else opens at the end rather than at an old offset
+	shownText string // and what it said, to tell when there is newer output
+	newer     bool   // newer output was held back while you read
+
+	// reading counts log reads in flight. The timer does not start another
+	// while one is running: a slow read that overlaps the next tick would
+	// otherwise be joined by another every second, and they pile up.
+	reading int
 }
 
 func newModel(layout paths.Layout) model {
@@ -82,10 +99,11 @@ func newModel(layout paths.Layout) model {
 	filter.Prompt = "/"
 	filter.Placeholder = "id, cli, branch or status"
 	return model{
-		layout: layout,
-		store:  state.NewStore(layout.State),
-		follow: true,
-		filter: filter,
+		layout:   layout,
+		store:    state.NewStore(layout.State),
+		follow:   true,
+		filter:   filter,
+		capacity: maxTableRows,
 	}
 }
 
@@ -105,28 +123,32 @@ func (m model) refresh() tea.Cmd {
 	}
 }
 
-// loadLog reads whichever view the selected task is showing. The pane and id
-// travel with the result, because a slow read must not land in a viewport that
-// has since moved to another task.
-func (m model) loadLog() tea.Cmd {
+// requestLog reads whichever view the selected task is showing. The pane and
+// id travel with the result, because a slow read must not land in a viewport
+// that has since moved to another task.
+func (m *model) requestLog(force, toEnd bool) tea.Cmd {
 	t, ok := m.selected()
 	if !ok {
 		return nil
 	}
-	id, p, layout := t.ID, m.pane, m.layout
+	m.reading++
+	p, layout := m.pane, m.layout
 	return func() tea.Msg {
 		var text string
 		switch p {
 		case paneAgent:
-			text = agentLog(layout, id)
+			text = agentLog(t)
 		case paneInfo:
 			text = taskInfo(t)
 		default:
-			text = supervisorLog(layout, id)
+			text = supervisorLog(layout, t.ID)
 		}
-		return logMsg{id: id, pane: p, text: text}
+		return logMsg{id: t.ID, pane: p, text: text, force: force, toEnd: toEnd}
 	}
 }
+
+// loadLog is the ordinary read a key or a new selection asks for.
+func (m *model) loadLog() tea.Cmd { return m.requestLog(false, false) }
 
 // visible is the tasks matching the current filter.
 func (m model) visible() []state.Task {
@@ -163,7 +185,11 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(m.refresh(), m.loadLog(), tick())
+		cmds := []tea.Cmd{m.refresh(), tick()}
+		if m.reading == 0 {
+			cmds = append(cmds, m.loadLog())
+		}
+		return m, tea.Batch(cmds...)
 
 	case tasksMsg:
 		m.err = msg.err
@@ -174,15 +200,29 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		return m, nil
 
 	case logMsg:
+		if m.reading > 0 {
+			m.reading--
+		}
 		// Stale by the time it arrived: the selection or the pane moved on.
 		if cur, ok := m.selected(); !ok || cur.ID != msg.id || m.pane != msg.pane {
 			return m, nil
 		}
 		atBottom := m.vp.AtBottom()
 		switched := m.shownID != msg.id || m.shownPane != msg.pane
-		m.shownID, m.shownPane = msg.id, msg.pane
+		live := m.follow && atBottom
+		// Hold still while you read. The pane keeps a window of the last lines,
+		// and swapping in a newer window under a fixed scroll position slides
+		// the text up by however much arrived. So when you have scrolled up, or
+		// paused, newer output waits until you ask for it.
+		if !switched && !live && !msg.force {
+			if msg.text != m.shownText {
+				m.newer = true
+			}
+			return m, nil
+		}
+		m.shownID, m.shownPane, m.shownText, m.newer = msg.id, msg.pane, msg.text, false
 		m.vp.SetContent(wrapTo(msg.text, m.contentWidth()))
-		if switched || (m.follow && atBottom) {
+		if switched || live || msg.toEnd {
 			m.vp.GotoBottom()
 		}
 		return m, nil
@@ -254,10 +294,11 @@ func (m model) onKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		m.vp.GotoTop()
 		return m, nil
 	case "G":
+		// The end of the log as it is now, not of what was on screen.
 		m.vp.GotoBottom()
-		return m, nil
+		return m, m.requestLog(true, true)
 	case "r":
-		return m, tea.Batch(m.refresh(), m.loadLog())
+		return m, tea.Batch(m.refresh(), m.requestLog(true, false))
 	case "/":
 		m.filtering = true
 		m.filter.Focus()
@@ -304,7 +345,7 @@ func (m *model) syncSelection() {
 // scrollTable moves the table's window just far enough to keep the selected
 // row on screen.
 func (m *model) scrollTable(rows int) {
-	limit := m.tableCapacity()
+	limit := max(1, m.capacity)
 	if m.cursor < m.tableTop {
 		m.tableTop = m.cursor
 	}
@@ -314,10 +355,27 @@ func (m *model) scrollTable(rows int) {
 	m.tableTop = clamp(m.tableTop, 0, max(0, rows-limit))
 }
 
-// tableCapacity is how many rows the table may show before it scrolls. It
-// shrinks on a short terminal, so the table cannot squeeze the log out.
-func (m model) tableCapacity() int {
-	return clamp(m.contentHeight()/3, 3, maxTableRows)
+// fitTable chooses the most table rows that still leave the header, the footer
+// and a line of log on screen. A screen taller than the terminal loses its top
+// lines, the header first, so the table gives way instead: row by row down to
+// one, then without the spacer lines, and only then does it give up and say the
+// terminal is too small.
+func (m *model) fitTable() {
+	height := m.contentHeight()
+	rows := len(m.visible())
+	preferred := clamp(height/3, 1, maxTableRows)
+	m.tooSmall = false
+	for _, compact := range []bool{false, true} {
+		m.compact = compact
+		for c := preferred; c >= 1; c-- {
+			m.capacity = c
+			m.scrollTable(rows)
+			if lipgloss.Height(m.renderTop())+2 <= height { // a log line and the footer
+				return
+			}
+		}
+	}
+	m.tooSmall = true
 }
 
 // relayout sizes the log to whatever the rest of the screen leaves, measured
@@ -326,7 +384,7 @@ func (m *model) relayout() {
 	if !m.ready {
 		return
 	}
-	m.scrollTable(len(m.visible()))
+	m.fitTable()
 	used := lipgloss.Height(m.renderTop()) + 1 // plus the footer's line
 	wasAtBottom := m.vp.AtBottom()
 	m.vp.Width = m.contentWidth()

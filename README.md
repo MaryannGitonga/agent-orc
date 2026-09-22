@@ -220,9 +220,13 @@ script, so it costs nothing, needs no credentials and is done in half a minute.
 
 A table of tasks on top, the selected task's phase and log below. `↑`/`↓` choose
 a task and `shift+↑`/`shift+↓` scroll its log a line at a time, with `pgup`/`pgdn`
-for a page and `g`/`G` for the start and end. `tab` moves between the supervisor
-log, the agent's own output and the task's details, `f` follows, `/` filters by id,
-CLI, branch or status, and `q` quits.
+for a page. `tab` moves between the supervisor log, the agent's own output and
+the task's details, `/` filters by id, CLI, branch or status, and `q` quits.
+
+The log pane holds the last 500 lines, so `g` goes to the start of those, where
+a note says where the full log is when there was more. At the end it follows new
+output; scroll up and it holds still while you read, saying when newer output
+has arrived, and `G` brings in the latest. `f` turns following off and on.
 
 It only reads. It starts nothing, signals nothing and writes nothing, so it can
 be opened and closed at any point in a task's life. In particular it does not
