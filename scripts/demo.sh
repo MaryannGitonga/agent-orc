@@ -16,11 +16,16 @@
 #                          waits, then prints the outcome instead
 set -euo pipefail
 
+# The binaries to drive, which make passes in so that a BIN_DIR override still
+# finds them. Defaults are for running this script on its own.
 root="$(cd "$(dirname "$0")/.." && pwd)"
-orc="$root/bin/agent-orc"
-tui="$root/bin/agent-orc-tui"
+orc="${1:-$root/bin/agent-orc}"
+tui="${2:-$root/bin/agent-orc-tui}"
 for bin in "$orc" "$tui"; do
-	[ -x "$bin" ] || { echo "missing $bin; run 'make demo', which builds it" >&2; exit 1; }
+	[ -x "$bin" ] || {
+		echo "missing $bin; build it with 'make build build-tui'" >&2
+		exit 1
+	}
 done
 
 demo="$(mktemp -d -t agent-orc-demo.XXXXXX)"

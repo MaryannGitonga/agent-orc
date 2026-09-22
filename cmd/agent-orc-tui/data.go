@@ -107,21 +107,13 @@ func readTail(path string, limit, maxLine int64) ([]byte, tailKind, error) {
 		return nil, tailWhole, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, tailWhole, err
-	}
-	size := info.Size()
-	if size <= limit {
-		// Limited even here: the file can grow between the stat and the read,
-		// and a log being written to would otherwise be read to its new end.
-		data, err := readFrom(f, 0, limit)
-		return data, tailWhole, err
-	}
 
-	data, err := readFrom(f, size-limit, limit)
+	off, data, err := readEnd(f, limit)
 	if err != nil {
 		return nil, tailWhole, err
+	}
+	if off == 0 {
+		return data, tailWhole, nil
 	}
 	// Whole lines in the chunk, and something left once the partial first one
 	// is dropped. A chunk that is only the end of one long line, with the
@@ -131,11 +123,7 @@ func readTail(path string, limit, maxLine int64) ([]byte, tailKind, error) {
 	}
 
 	// The last line is longer than limit.
-	from := int64(0)
-	if size > maxLine {
-		from = size - maxLine
-	}
-	ext, err := readFrom(f, from, maxLine)
+	off, ext, err := readEnd(f, maxLine)
 	if err != nil {
 		return nil, tailWhole, err
 	}
@@ -144,18 +132,30 @@ func readTail(path string, limit, maxLine int64) ([]byte, tailKind, error) {
 	if i := bytes.LastIndexByte(ext, '\n'); i >= 0 {
 		return ext[i+1:], tailCut, nil
 	}
-	if from == 0 {
+	if off == 0 {
 		return ext, tailWhole, nil // the file is one line, and this is all of it
 	}
 	return ext, tailPartial, nil
 }
 
-// readFrom reads at most n bytes from off.
-func readFrom(f *os.File, off, n int64) ([]byte, error) {
-	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return nil, err
+// readEnd reads the last n bytes of f, and reports where they started.
+//
+// Measured from the end at the moment of reading, not from a size taken
+// earlier: a log being written to grows between the two, and reading n bytes
+// from a stale offset returns the oldest output rather than the newest.
+func readEnd(f *os.File, n int64) (off int64, data []byte, err error) {
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, nil, err
 	}
-	return io.ReadAll(io.LimitReader(f, n))
+	if off = end - n; off < 0 {
+		off = 0
+	}
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return 0, nil, err
+	}
+	data, err = io.ReadAll(io.LimitReader(f, n))
+	return off, data, err
 }
 
 // window keeps the last logTail lines, and says at the top when the log held

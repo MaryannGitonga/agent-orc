@@ -519,3 +519,88 @@ func TestTaskWhoseProcessIsGoneIsMarked(t *testing.T) {
 		t.Errorf("the detail line does not say the process is gone:\n%s", out)
 	}
 }
+
+// TestOneReadAtATimeWhateverAsks covers holding a movement key. Only the timer
+// used to check whether a read was already running, so each repeat started
+// another, every one of them reading up to the line limit and all but the last
+// thrown away as stale.
+func TestOneReadAtATimeWhateverAsks(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(numbered(6)...)
+	for i := 0; i < 5; i++ {
+		s.press(tea.KeyDown)
+	}
+	if s.m.reading != 1 {
+		t.Errorf("five key presses left %d reads in flight, want 1", s.m.reading)
+	}
+	if !s.m.pending {
+		t.Error("the presses made while a read was running were forgotten, not queued")
+	}
+
+	// The queued request is made once the running read comes back, and is one
+	// read, not one per press.
+	s.showLog("whatever the first read found")
+	if s.m.reading != 1 || s.m.pending {
+		t.Errorf("after the read returned: %d in flight, pending=%v; want one read and nothing queued",
+			s.m.reading, s.m.pending)
+	}
+	s.showLog("and the queued one")
+	if s.m.reading != 0 || s.m.pending {
+		t.Errorf("after the queued read returned: %d in flight, pending=%v; want nothing outstanding",
+			s.m.reading, s.m.pending)
+	}
+
+	// The timer skips its turn rather than queueing: a log slow enough to
+	// outlast a tick should not be read back to back forever.
+	s.press(tea.KeyDown)
+	s.send(tickMsg{})
+	if s.m.reading != 1 || s.m.pending {
+		t.Errorf("a tick during a read: %d in flight, pending=%v; want it skipped", s.m.reading, s.m.pending)
+	}
+}
+
+// TestLongFilterStaysVisible covers typing into the prompt. Without a width of
+// its own the text input never scrolls, so what you were typing, cursor and
+// all, ran off the right edge and was cut.
+func TestLongFilterStaysVisible(t *testing.T) {
+	s := newScreen(t, 80, 30)
+	s.load(tasks("A")...)
+	s.typeRunes("/")
+	// Longer than the terminal, so the prompt has to scroll to keep up.
+	typed := strings.Repeat("filtering-on-something-long-", 4) + "ending-with-THE-TAIL"
+	s.typeRunes(typed)
+
+	footer := s.m.renderFooter()
+	if w := lipgloss.Width(footer); w > 80 {
+		t.Errorf("the open prompt is %d wide, want at most 80:\n%s", w, footer)
+	}
+	// What you just typed is what you need to see.
+	if !strings.Contains(footer, "THE-TAIL") {
+		t.Errorf("the end of what was typed is not on screen:\n%s", footer)
+	}
+	if s.m.filter.Value() != typed {
+		t.Errorf("the filter holds %q, want %q", s.m.filter.Value(), typed)
+	}
+}
+
+// TestFollowingAgainFetchesWhatItWillFollow covers the f key. Turning it back
+// on jumped to the end of the held window and asked for nothing, so the footer
+// claimed to be following output that was not on screen until the next tick.
+func TestFollowingAgainFetchesWhatItWillFollow(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	s.load(tasks("A")...)
+	s.showLog(numberedLines(1, 300))
+	s.typeRunes("f") // off
+	if s.m.follow {
+		t.Fatal("f did not turn following off")
+	}
+	s.showLog("this read finishes and clears the counter")
+
+	s.typeRunes("f") // on again
+	if !s.m.follow {
+		t.Fatal("f did not turn following back on")
+	}
+	if s.m.reading != 1 {
+		t.Errorf("turning following on asked for %d reads, want it to fetch the latest", s.m.reading)
+	}
+}

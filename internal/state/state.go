@@ -256,6 +256,12 @@ func (s *Store) List() ([]Task, error) {
 			continue
 		}
 		t, err := s.Load(strings.TrimSuffix(name, ".json"))
+		// Removed between reading the directory and reading the record, which
+		// cleanup does all the time. It is one task fewer, not a failed
+		// listing: failing would blank a table that is read every second.
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}

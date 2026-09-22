@@ -357,3 +357,32 @@ func TestDeleteIfOnlyRemovesTheRunItWasAskedFor(t *testing.T) {
 		t.Errorf("Load() = %v, want ErrNotFound", err)
 	}
 }
+
+// TestListSkipsARecordThatVanishedMidListing covers a directory read and the
+// loads that follow it not being one atomic act. Cleanup removes records all
+// the time, and failing the whole listing over one that went would blank a
+// table that is read every second.
+func TestListSkipsARecordThatVanishedMidListing(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(Task{
+		Task:      task.Task{ID: "KEPT-1", CLI: task.CLIClaude},
+		Status:    StatusRunning,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A dangling link stands in for the record that was there when the
+	// directory was read and gone by the time it was opened.
+	if err := os.Symlink(filepath.Join(dir, "no-such-file.json"), filepath.Join(dir, "GONE-1.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("List() = %v, want the missing record skipped", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "KEPT-1" {
+		t.Errorf("List() = %v, want only KEPT-1", tasks)
+	}
+}

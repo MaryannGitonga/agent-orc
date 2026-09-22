@@ -66,7 +66,7 @@ build-tui:
 
 ## demo: run three tasks end to end with a stand-in agent, and watch them
 demo: build build-tui
-	@scripts/demo.sh
+	@scripts/demo.sh "$(CURDIR)/$(BINARY)" "$(CURDIR)/$(BIN_DIR)/agent-orc-tui"
 
 ## test-unit: run unit tests with the race detector
 test-unit:

@@ -91,10 +91,16 @@ type model struct {
 	wrapWidth int    // the width it was wrapped for, so a resize can re-wrap
 	newer     bool   // newer output was held back while you read
 
-	// reading counts log reads in flight. The timer does not start another
-	// while one is running: a slow read that overlaps the next tick would
-	// otherwise be joined by another every second, and they pile up.
-	reading int
+	// reading counts log reads in flight, and pending remembers a request that
+	// arrived while one was running. One read at a time, whoever asked: the
+	// timer skips its turn, and a key press is coalesced into a single read
+	// once the running one returns. Holding a movement key would otherwise
+	// start a read per repeat, each of them megabytes, all but the last thrown
+	// away as stale.
+	reading      int
+	pending      bool
+	pendingForce bool
+	pendingToEnd bool
 }
 
 func newModel(layout paths.Layout) model {
@@ -134,6 +140,12 @@ func (m *model) requestLog(force, toEnd bool) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	if m.reading > 0 {
+		m.pending = true
+		m.pendingForce = m.pendingForce || force
+		m.pendingToEnd = m.pendingToEnd || toEnd
+		return nil
+	}
 	m.reading++
 	p, layout := m.pane, m.layout
 	return func() tea.Msg {
@@ -152,6 +164,26 @@ func (m *model) requestLog(force, toEnd bool) tea.Cmd {
 
 // loadLog is the ordinary read a key or a new selection asks for.
 func (m *model) loadLog() tea.Cmd { return m.requestLog(false, false) }
+
+// pollLog is the timer's read, which is skipped rather than queued: a log slow
+// enough to outlast a tick should be read as often as it can be, not
+// continuously.
+func (m *model) pollLog() tea.Cmd {
+	if m.reading > 0 {
+		return nil
+	}
+	return m.loadLog()
+}
+
+// drainPending makes the read that was asked for while another was running.
+func (m *model) drainPending() tea.Cmd {
+	if !m.pending {
+		return nil
+	}
+	force, toEnd := m.pendingForce, m.pendingToEnd
+	m.pending, m.pendingForce, m.pendingToEnd = false, false, false
+	return m.requestLog(force, toEnd)
+}
 
 // visible is the tasks matching the current filter.
 func (m model) visible() []state.Task {
@@ -188,11 +220,8 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		cmds := []tea.Cmd{m.refresh(), tick()}
-		if m.reading == 0 {
-			cmds = append(cmds, m.loadLog())
-		}
-		return m, tea.Batch(cmds...)
+		refresh, poll := m.refresh(), m.pollLog()
+		return m, tea.Batch(refresh, poll, tick())
 
 	case tasksMsg:
 		m.err = msg.err
@@ -206,9 +235,10 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		if m.reading > 0 {
 			m.reading--
 		}
+		next := m.drainPending()
 		// Stale by the time it arrived: the selection or the pane moved on.
 		if cur, ok := m.selected(); !ok || cur.ID != msg.id || m.pane != msg.pane {
-			return m, nil
+			return m, next
 		}
 		atBottom := m.vp.AtBottom()
 		switched := m.shownID != msg.id || m.shownPane != msg.pane
@@ -221,7 +251,7 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 			if msg.text != m.shownText {
 				m.newer = true
 			}
-			return m, nil
+			return m, next
 		}
 		m.shownID, m.shownPane, m.shownText, m.newer = msg.id, msg.pane, msg.text, false
 		m.wrapWidth = m.contentWidth()
@@ -229,7 +259,7 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		if switched || live || msg.toEnd {
 			m.vp.GotoBottom()
 		}
-		return m, nil
+		return m, next
 
 	case tea.KeyMsg:
 		return m.onKey(msg)
@@ -260,16 +290,19 @@ func (m model) onKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			m.filter.SetValue("")
 			m.filter.Blur()
 			m.syncSelection()
-			return m, m.loadLog()
+			cmd := m.loadLog()
+			return m, cmd
 		case "enter":
 			m.filtering = false
 			m.filter.Blur()
-			return m, m.loadLog()
+			cmd := m.loadLog()
+			return m, cmd
 		}
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
 		m.syncSelection()
-		return m, tea.Batch(cmd, m.loadLog())
+		read := m.loadLog()
+		return m, tea.Batch(cmd, read)
 	}
 
 	switch msg.String() {
@@ -277,22 +310,31 @@ func (m model) onKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m, tea.Quit
 	case "up", "k":
 		m.move(-1)
-		return m, m.loadLog()
+		cmd := m.loadLog()
+		return m, cmd
 	case "down", "j":
 		m.move(1)
-		return m, m.loadLog()
+		cmd := m.loadLog()
+		return m, cmd
 	case "tab":
 		m.pane = (m.pane + 1) % pane(len(paneNames))
-		return m, m.loadLog()
+		cmd := m.loadLog()
+		return m, cmd
 	case "shift+tab":
 		m.pane = (m.pane + pane(len(paneNames)) - 1) % pane(len(paneNames))
-		return m, m.loadLog()
+		cmd := m.loadLog()
+		return m, cmd
 	case "f":
 		m.follow = !m.follow
-		if m.follow {
-			m.vp.GotoBottom()
+		if !m.follow {
+			return m, nil
 		}
-		return m, nil
+		// Following again means showing what there is to follow: the held
+		// window is older than the log, so the label would otherwise be a
+		// claim the screen does not back up until the next tick.
+		m.vp.GotoBottom()
+		cmd := m.requestLog(true, true)
+		return m, cmd
 	// One line at a time. The plain arrows choose a task, and a log is read far
 	// more often than the selection changes, so the shifted arrows scroll it
 	// rather than the other way round.
@@ -308,9 +350,11 @@ func (m model) onKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	case "G":
 		// The end of the log as it is now, not of what was on screen.
 		m.vp.GotoBottom()
-		return m, m.requestLog(true, true)
+		cmd := m.requestLog(true, true)
+		return m, cmd
 	case "r":
-		return m, tea.Batch(m.refresh(), m.requestLog(true, false))
+		refresh, read := m.refresh(), m.requestLog(true, false)
+		return m, tea.Batch(refresh, read)
 	case "/":
 		m.filtering = true
 		// Focus returns the command that starts the cursor blinking. Dropping
@@ -400,6 +444,9 @@ func (m *model) relayout() {
 	m.fitTable()
 	used := lipgloss.Height(m.renderTop()) + 1 // plus the footer's line
 	wasAtBottom := m.vp.AtBottom()
+	// The prompt has to know its own width or it never scrolls, and what you
+	// are typing, cursor included, runs off the right edge and is cut.
+	m.filter.Width = max(10, m.contentWidth()-len(m.filter.Prompt)-2)
 	m.vp.Width = m.contentWidth()
 	m.vp.Height = max(1, m.contentHeight()-used)
 	// Held content was wrapped for the old width. The viewport would re-wrap it

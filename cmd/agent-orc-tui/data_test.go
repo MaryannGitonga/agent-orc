@@ -185,16 +185,24 @@ func TestReadTailIsBounded(t *testing.T) {
 		t.Errorf("readTail() on a small file = %d bytes, kind %v, err %v; want all of it", len(data), kind, err)
 	}
 
-	// The small-file branch reads through the same bounded helper, so a log
-	// being written to between the stat and the read cannot pull in more than
-	// the limit. That race is not reproducible here; the helper is.
+	// Every read is bounded, and taken from the end as it is at that moment. A
+	// log being written to grows between measuring it and reading it, and a
+	// read from a stale offset would return the oldest output, not the newest.
+	whole, err := os.ReadFile(small)
+	if err != nil {
+		t.Fatal(err)
+	}
 	f, err := os.Open(small)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if data, err := readFrom(f, 0, 40); err != nil || len(data) != 40 {
-		t.Errorf("readFrom() with a 40 byte limit read %d bytes, err %v", len(data), err)
+	off, data, err := readEnd(f, 40)
+	if err != nil || len(data) != 40 {
+		t.Fatalf("readEnd() with a 40 byte limit read %d bytes, err %v", len(data), err)
+	}
+	if string(data) != string(whole[len(whole)-40:]) || off != int64(len(whole)-40) {
+		t.Errorf("readEnd() returned bytes from offset %d, want the last 40 of %d", off, len(whole))
 	}
 }
 
