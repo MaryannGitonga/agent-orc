@@ -64,6 +64,10 @@ build-tui:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/agent-orc-tui ./cmd/agent-orc-tui
 
+## demo: run three tasks end to end with a stand-in agent, and watch them
+demo: build build-tui
+	@scripts/demo.sh
+
 ## test-unit: run unit tests with the race detector
 test-unit:
 	$(GO) test -race -coverprofile=coverage.out -covermode=atomic $(PKG)
@@ -115,4 +119,4 @@ commit-check:
 ## ci: the ci and commit-policy checks that run locally; do this before pushing
 ci: fmt-check vet lint build test-unit test-integration commit-check
 
-.PHONY: help fmt fmt-check vet lint lint-install print-lint-version build test-unit test test-integration coverage tidy verify-clean clean commit-check ci
+.PHONY: help fmt fmt-check vet lint lint-install print-lint-version build build-tui demo test-unit test test-integration coverage tidy verify-clean clean commit-check ci

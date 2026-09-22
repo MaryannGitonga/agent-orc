@@ -211,6 +211,13 @@ once, a dashboard over the same records and logs:
 make build-tui && bin/agent-orc-tui
 ```
 
+To see it with something happening, `make demo` dispatches three tasks against a
+scratch repository and opens the dashboard on them. One gets its tests wrong,
+has the failure handed back, fixes it and is reviewed; one finishes cleanly; one
+fails. Everything is agent-orc for real except the agent, which is a stand-in
+script, so it costs nothing, needs no credentials and is done in half a minute.
+`DEMO_HEADLESS=1 make demo` waits and prints the outcome instead.
+
 A table of tasks on top, the selected task's phase and log below. `tab` moves
 between the supervisor log, the agent's own output and the task's details, `f`
 follows, `/` filters by id, CLI, branch or status, and `q` quits.
