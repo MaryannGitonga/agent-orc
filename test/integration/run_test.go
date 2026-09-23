@@ -82,6 +82,34 @@ func waitForStatus(t *testing.T, home, id string, want ...string) record {
 	return last
 }
 
+// waitForChild waits until a task is in one of the given phases and has a
+// child recorded.
+//
+// The phase is written before the command it names is started, so a test that
+// acts the moment it sees the phase can find a pid of 0 and no process to
+// signal. That gap is real but short, and only a slow machine makes it wide
+// enough to see.
+func waitForChild(t *testing.T, home, id string, want ...string) record {
+	t.Helper()
+	path := filepath.Join(home, "state", id+".json")
+	deadline := time.Now().Add(30 * time.Second)
+	var last record
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil && json.Unmarshal(data, &last) == nil && last.PID != 0 {
+			for _, w := range want {
+				if last.Status == w {
+					return last
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("task %q never had a child recorded in %v (last status %q, pid %d)",
+		id, want, last.Status, last.PID)
+	return last
+}
+
 // TestRunDispatchesATaskEndToEnd covers the whole lifecycle: a worktree on a
 // new branch, the agent run inside it, and the task recorded as done.
 func TestRunDispatchesATaskEndToEnd(t *testing.T) {

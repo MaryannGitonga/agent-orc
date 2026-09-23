@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
 // format runs the whole input through a formatter, in one write.
@@ -157,5 +159,33 @@ func TestLogFormatterHoldsAnUnterminatedLine(t *testing.T) {
 	}
 	if got := b.String(); !strings.Contains(got, "Done.") {
 		t.Errorf("the completed line was not rendered, got:\n%s", got)
+	}
+}
+
+// TestFormatLogMatchesLogs covers the two front ends agreeing: a chunk handed
+// to FormatLog renders exactly as Logs renders the same bytes from the file.
+func TestFormatLogMatchesLogs(t *testing.T) {
+	result := `{"type":"result","subtype":"success","result":"Added the retry.","total_cost_usd":0.42,"num_turns":3,"session_id":"s-1"}` + "\n"
+
+	var claude strings.Builder
+	if err := FormatLog(&claude, strings.NewReader("thinking\n"+result), task.CLIClaude); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"thinking", "Added the retry.", "$0.4200", "s-1"} {
+		if !strings.Contains(claude.String(), want) {
+			t.Errorf("FormatLog() for claude = %q, want it to contain %q", claude.String(), want)
+		}
+	}
+	if strings.Contains(claude.String(), `"total_cost_usd"`) {
+		t.Error("FormatLog() for claude printed the raw envelope instead of summarizing it")
+	}
+
+	// A CLI that answers in prose is passed through byte for byte.
+	var copilot strings.Builder
+	if err := FormatLog(&copilot, strings.NewReader(result), task.CLICopilot); err != nil {
+		t.Fatal(err)
+	}
+	if copilot.String() != result {
+		t.Errorf("FormatLog() for copilot = %q, want the bytes unchanged", copilot.String())
 	}
 }

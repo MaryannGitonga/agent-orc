@@ -48,6 +48,23 @@ func (r *Reporter) Logs(id string, follow, raw bool) error {
 	return err
 }
 
+// FormatLog writes an agent's output from r the way Logs presents it, for a
+// caller that has already chosen which part of the log to show. A dashboard
+// re-reads the log on a timer and must not read a long run's whole log every
+// time, so it reads the end itself and hands only that over.
+func FormatLog(out io.Writer, r io.Reader, cli task.CLI) error {
+	if !summarizes(cli) {
+		_, err := io.Copy(out, r)
+		return err
+	}
+	formatted := &logFormatter{out: out}
+	_, err := io.Copy(formatted, r)
+	if ferr := formatted.Flush(); err == nil {
+		err = ferr
+	}
+	return err
+}
+
 // summarizes reports whether a CLI's log is worth reshaping. An unknown CLI is
 // left alone: passing bytes through is always safe, and guessing at a shape is
 // not.

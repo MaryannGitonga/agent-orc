@@ -60,6 +60,21 @@ func (r *Reporter) Status() error {
 	return nil
 }
 
+// TaskAlive reports whether the process a record claims is still there.
+//
+// The read-only half of what reconcile decides, for a front end that must not
+// take the write lock reconcile does. A status that has no process, and a
+// phase between commands with no pid recorded, are both alive as far as this
+// is concerned: neither is a task whose processes have gone. A recycled pid
+// can answer yes, as it can anywhere a pid is checked; this only decides how a
+// row is drawn, never what is written.
+func TaskAlive(t state.Task) bool {
+	if !t.Status.HasProcess() || t.PID == 0 {
+		return true
+	}
+	return groupAlive(t.PID)
+}
+
 // reconcile corrects a record that claims to be running behind a process that
 // is gone after a machine reboot, or a supervisor killed outright. Without it,
 // `status` would report a task as running forever.
@@ -113,6 +128,19 @@ func processAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
+
+// Spend renders what a task has cost against its budget.
+//
+// This and the two below exist for a second front end that has to render these
+// columns identically. Without them the TUI would carry its own copy of the
+// rules and the two would drift apart.
+func Spend(t state.Task) string { return spend(t) }
+
+// Rounds renders how many review round-trips a task has completed.
+func Rounds(t state.Task) string { return rounds(t) }
+
+// Elapsed renders how long a task ran, or has been running.
+func Elapsed(t state.Task) string { return elapsed(t) }
 
 // spend renders "$spent / $budget" in whichever units are known.
 func spend(t state.Task) string {

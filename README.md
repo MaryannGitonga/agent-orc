@@ -127,6 +127,15 @@ tar -xzf agent-orc_${VERSION}_${OS}_${ARCH}.tar.gz
 sudo install agent-orc_${VERSION}_${OS}_${ARCH} /usr/local/bin/agent-orc
 ```
 
+The dashboard, `agent-orc-tui`, ships as its own tarball in the same release:
+
+```sh
+gh release download "$VERSION" --repo MaryannGitonga/agent-orc \
+  --pattern "agent-orc-tui_${VERSION}_${OS}_${ARCH}.tar.gz"
+tar -xzf agent-orc-tui_${VERSION}_${OS}_${ARCH}.tar.gz
+sudo install agent-orc-tui_${VERSION}_${OS}_${ARCH} /usr/local/bin/agent-orc-tui
+```
+
 Each release also ships `checksums.txt`. Or build it yourself:
 
 ```sh
@@ -200,6 +209,38 @@ Only a CLI that reports through a JSON envelope is summarized. One that answers
 in prose is copied through byte for byte, JSON it happened to print included,
 because its output is the record of what it did. `--raw` prints any log exactly
 as it was written, for piping it into something else.
+
+## Watching tasks
+
+`agent-orc status` and `agent-orc logs -f` answer different questions: one shows
+every task shallowly, the other one task deeply. `agent-orc-tui` is both at
+once, a dashboard over the same records and logs:
+
+```sh
+agent-orc-tui              # from a release, or `make build-tui && bin/agent-orc-tui`
+```
+
+To see it with something happening, `make demo` dispatches three tasks against a
+scratch repository and opens the dashboard on them. One gets its tests wrong,
+has the failure handed back, fixes it and is reviewed; one finishes cleanly; one
+fails. Everything is agent-orc for real except the agent, which is a stand-in
+script, so it costs nothing, needs no credentials and is done in half a minute.
+`DEMO_HEADLESS=1 make demo` waits and prints the outcome instead.
+
+A table of tasks on top, the selected task's phase and log below. `↑`/`↓` choose
+a task and `shift+↑`/`shift+↓` scroll its log a line at a time, with `pgup`/`pgdn`
+for a page. `tab` moves between the supervisor log, the agent's own output and
+the task's details, `/` filters by id, CLI, branch or status, and `q` quits.
+
+The log pane holds the last 500 lines, so `g` goes to the start of those, where
+a note says where the full log is when there was more. At the end it follows new
+output; scroll up and it holds still while you read, saying when newer output
+has arrived, and `G` brings in the latest. `f` turns following off and on.
+
+It only reads. It starts nothing, signals nothing and writes nothing, so it can
+be opened and closed at any point in a task's life. In particular it does not
+run the reconciliation pass `status` does, because that takes a write lock and
+this polls once a second.
 
 ## Task sources
 
