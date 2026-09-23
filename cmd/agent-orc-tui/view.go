@@ -16,6 +16,9 @@ import (
 // tall the terminal.
 const maxTableRows = 12
 
+// unknownCell is what the status table prints for something it cannot know.
+const unknownCell = "-"
+
 var (
 	dim       = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	bold      = lipgloss.NewStyle().Bold(true)
@@ -190,13 +193,6 @@ func (c columns) header() string {
 		pad("RDS", 3) + " " + pad("ELAPSED", 8) + " " + pad("BRANCH", c.branch)
 }
 
-// row renders one task in style bg, which is the highlight for the selected row
-// and nothing for the rest.
-//
-// The status cell has a colour of its own, and a styled string ends by
-// resetting everything, background included. Wrapping the finished row in
-// the highlight would therefore lose it from the status onwards, so each cell
-// is styled on its own, and the status inherits the background.
 // statusCell is the status column's text and colour. A task whose process has
 // gone keeps the status it recorded, because that is what the record says, but
 // is marked and coloured as the failure `agent-orc status` will write.
@@ -207,6 +203,13 @@ func statusCell(t state.Task, gone bool) (string, lipgloss.Style) {
 	return pad(mark(t.Status)+" "+string(t.Status), 12), hue(t.Status)
 }
 
+// row renders one task in style bg, which is the highlight for the selected row
+// and nothing for the rest.
+//
+// The status cell has a colour of its own, and a styled string ends by
+// resetting everything, background included. Wrapping the finished row in
+// the highlight would therefore lose it from the status onwards, so each cell
+// is styled on its own, and the status inherits the background.
 func (c columns) row(t state.Task, bg lipgloss.Style, gone bool) string {
 	lead := pad(t.ID, 14) + " " + pad(string(t.CLI), 8) + " "
 	if c.model {
@@ -218,8 +221,16 @@ func (c columns) row(t state.Task, bg lipgloss.Style, gone bool) string {
 		lead += pad(model, 16) + " "
 	}
 	status, style := statusCell(t, gone)
+	// Nothing knows how long it ran: the record has no finish time, and the
+	// process that would have written one is gone. A clock still counting up
+	// would be the one thing on the row that is certainly wrong, and
+	// `agent-orc status` stamps the real end the moment it runs.
+	elapsed := orc.Elapsed(t)
+	if gone {
+		elapsed = unknownCell
+	}
 	rest := " " + pad(orc.Spend(t), 15) + " " + pad(orc.Rounds(t), 3) + " " +
-		pad(orc.Elapsed(t), 8) + " " + pad(t.Branch, c.branch)
+		pad(elapsed, 8) + " " + pad(t.Branch, c.branch)
 	return bg.Render(lead) + style.Inherit(bg).Render(status) + bg.Render(rest)
 }
 
@@ -291,9 +302,6 @@ func detail(t state.Task, gone bool) string {
 }
 
 func (m model) View() string {
-	if !m.ready {
-		return "loading…"
-	}
 	if m.tooSmall {
 		return fit("agent-orc-tui needs a taller terminal", m.contentWidth())
 	}
@@ -323,7 +331,9 @@ func (m model) renderTop() string {
 	if summary := countSummary(m.tasks); len(summary) > 0 {
 		head += "   " + strings.Join(summary, "  ")
 	}
-	add(head + "   " + dim.Render(version.String()))
+	// The bare version: String() prefixes the program name, which the header
+	// has already said.
+	add(head + "   " + dim.Render(version.Version))
 	// Spacer lines are the first thing a short terminal gives up.
 	spacer := func() {
 		if !m.compact {
@@ -337,8 +347,11 @@ func (m model) renderTop() string {
 
 	cols := columnsFor(width)
 	add(dim.Render("  " + cols.header()))
-	if len(rows) == 0 {
+	switch {
+	case len(m.tasks) == 0:
 		add(dim.Render("  no tasks; dispatch one with 'agent-orc run'"))
+	case len(rows) == 0:
+		add(dim.Render(fmt.Sprintf("  no task matches %q; esc clears the filter", m.filter.Value())))
 	}
 	last := min(len(rows), m.tableTop+max(1, m.capacity))
 	for i := m.tableTop; i < last; i++ {

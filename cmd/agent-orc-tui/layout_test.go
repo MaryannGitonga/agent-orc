@@ -6,6 +6,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -258,7 +259,7 @@ func TestNoLogWithoutItsTask(t *testing.T) {
 
 	s.typeRunes("/")
 	s.typeRunes("zzz")
-	if !s.contains("no tasks") {
+	if !s.contains("no task matches") {
 		t.Fatal("a filter matching nothing does not say so")
 	}
 	if s.contains("DEMO-2 SUPERVISOR LINE") {
@@ -602,5 +603,74 @@ func TestFollowingAgainFetchesWhatItWillFollow(t *testing.T) {
 	}
 	if s.m.reading != 1 {
 		t.Errorf("turning following on asked for %d reads, want it to fetch the latest", s.m.reading)
+	}
+}
+
+// TestRendersBeforeAnySizeArrives covers stdout not being a terminal. No window
+// size is reported then, and a screen that waits for one shows its first frame
+// for as long as the program runs: piping the output, or running it in CI,
+// hung on "loading…" with nothing after it.
+func TestRendersBeforeAnySizeArrives(t *testing.T) {
+	m := newModel(paths.New(t.TempDir()))
+	// The very first frame, rendered before any message has been handled.
+	if first := m.View(); strings.Contains(first, "loading") || !strings.Contains(first, "agent-orc") {
+		t.Errorf("the frame before any message is a placeholder:\n%s", first)
+	}
+
+	next, _ := m.Update(tasksMsg{tasks: tasks("PROJ-1234")})
+	out := next.(model).View()
+	if strings.Contains(out, "loading") {
+		t.Errorf("the frame after a refresh is still a placeholder:\n%s", out)
+	}
+	for _, want := range []string{"agent-orc", "PROJ-1234", "q quit"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the first frame is missing %q:\n%s", want, out)
+		}
+	}
+	// Laid out for the default terminal until told otherwise.
+	if n := len(strings.Split(out, "\n")); n > defaultHeight {
+		t.Errorf("the first frame is %d lines, want at most %d", n, defaultHeight)
+	}
+}
+
+// TestEmptyFilterResultIsNotAnEmptyStore covers the two ways a table has no
+// rows. A filter matching nothing told you to dispatch a task, while five were
+// running behind the filter.
+func TestEmptyFilterResultIsNotAnEmptyStore(t *testing.T) {
+	s := newScreen(t, 100, 30)
+	if !s.contains("no tasks; dispatch one") {
+		t.Errorf("an empty store does not say so:\n%s", s.m.View())
+	}
+
+	s.load(numbered(5)...)
+	s.typeRunes("/")
+	s.typeRunes("zzz")
+	out := s.m.View()
+	if strings.Contains(out, "dispatch one") {
+		t.Errorf("a filter matching nothing claims there are no tasks:\n%s", out)
+	}
+	if !strings.Contains(out, "no task matches") || !strings.Contains(out, "zzz") {
+		t.Errorf("a filter matching nothing does not say what it was:\n%s", out)
+	}
+}
+
+// TestElapsedStopsForATaskWhoseProcessIsGone covers the clock on a dead row.
+// The record has no finish time, because the process that would have written
+// one is gone, so counting from the start to now kept a task "running" for
+// longer and longer while agent-orc status showed it finished.
+func TestElapsedStopsForATaskWhoseProcessIsGone(t *testing.T) {
+	dead := mkTask("DEAD-1", task.CLIClaude, state.StatusRunning, "agent-orc/dead-1")
+	dead.StartedAt = time.Now().UTC().Add(-90 * time.Minute)
+
+	cols := columnsFor(120)
+	if live := stripANSI(cols.row(dead, lipgloss.NewStyle(), false)); !strings.Contains(live, "1h30m") {
+		t.Errorf("a live task should still show its elapsed time: %q", live)
+	}
+	gone := stripANSI(cols.row(dead, lipgloss.NewStyle(), true))
+	if strings.Contains(gone, "1h30m") {
+		t.Errorf("a task whose process is gone still counts up: %q", gone)
+	}
+	if !strings.Contains(gone, unknownCell) {
+		t.Errorf("a task whose process is gone has no elapsed cell at all: %q", gone)
 	}
 }

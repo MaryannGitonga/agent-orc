@@ -81,7 +81,6 @@ type model struct {
 	filtering bool
 
 	vp        viewport.Model
-	ready     bool
 	err       error
 	width     int
 	height    int
@@ -107,13 +106,20 @@ func newModel(layout paths.Layout) model {
 	filter := textinput.New()
 	filter.Prompt = "/"
 	filter.Placeholder = "id, cli, branch or status"
-	return model{
+	m := model{
 		layout:   layout,
 		store:    state.NewStore(layout.State),
 		follow:   true,
 		filter:   filter,
 		capacity: maxTableRows,
+		vp:       viewport.New(defaultWidth, 1),
 	}
+	// Laid out for the default size straight away. Waiting for the terminal to
+	// report its size means never starting at all when stdout is not a
+	// terminal: bubbletea sends no size message then, and the screen would sit
+	// on its first frame for as long as the program ran.
+	m.relayout()
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -213,10 +219,6 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		if !m.ready {
-			m.vp = viewport.New(m.contentWidth(), 1)
-			m.ready = true
-		}
 		return m, nil
 
 	case tickMsg:
@@ -438,9 +440,6 @@ func (m *model) fitTable() {
 // relayout sizes the log to whatever the rest of the screen leaves, measured
 // from what is actually rendered rather than predicted from a row count.
 func (m *model) relayout() {
-	if !m.ready {
-		return
-	}
 	m.fitTable()
 	used := lipgloss.Height(m.renderTop()) + 1 // plus the footer's line
 	wasAtBottom := m.vp.AtBottom()
