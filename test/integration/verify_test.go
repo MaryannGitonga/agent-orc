@@ -358,10 +358,7 @@ func TestStopReachesAHangingTestCommand(t *testing.T) {
 		"--id", "HANG-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
 		t.Fatalf("agent-orc run = %v\n%s", err, out)
 	}
-	got := waitForStatus(t, home, "HANG-1", "verifying")
-	if got.PID == 0 {
-		t.Fatal("no pid recorded while the test command runs, so stop has nothing to signal")
-	}
+	waitForChild(t, home, "HANG-1", "verifying")
 	grandchild := strings.TrimSpace(readFile(t, marker))
 	if grandchild == "" {
 		t.Fatal("the test command did not report its child")
