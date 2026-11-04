@@ -118,11 +118,5 @@ The `release` workflow re-runs the checks, cross-compiles for linux and darwin
 on amd64 and arm64, stamps the tag into `internal/version.Version`, writes
 `checksums.txt`, and publishes a GitHub release with generated notes.
 
-Two things to do by hand:
-
-- bump the version badge at the top of `README.md`, which is static because a
-  private repository cannot be read by shields.io;
-- update the `VERSION=` line in the README's install snippet.
-
 Use annotated tags (`-a`). The workflow passes `--verify-tag`, and
 `git describe` needs one for `make build` to stamp a sensible version.
