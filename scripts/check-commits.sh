@@ -10,6 +10,9 @@
 #   * carry a DCO Signed-off-by trailer matching its author,
 #   * be cryptographically signed.
 #
+# Dependabot's commits are the one exception: they may carry a prose body, and
+# their sign-off is Dependabot's own rather than one matching the author.
+#
 # Signature *verification* (that GitHub trusts the key) is checked separately
 # in CI via the API, since the public key is not on the runner.
 
@@ -30,6 +33,11 @@ FORBIDDEN_PATTERNS=(
 	'claude-session:'
 	'assisted-by:[[:space:]]*claude'
 )
+
+# Dependabot authors its commits, GitHub commits and signs them, and the trailer
+# it adds names an address other than the author's.
+DEPENDABOT_IDENTITY='49699333+dependabot[bot]@users.noreply.github.com noreply@github.com'
+DEPENDABOT_SIGNOFF='Signed-off-by: dependabot[bot] <support@github.com>'
 
 CONVENTIONAL='^(feat|fix|ci|docs|test|refactor|chore|perf|build|revert)(\([a-z0-9._/-]+\))?!?: .+'
 MAX_SUBJECT=72
@@ -56,6 +64,14 @@ for sha in $commits; do
 	author="$(git log -1 --format='%an <%ae>' "$sha")"
 	printf '%s %s\n' "${sha:0:8}" "$subject"
 
+	# Anyone can set an author, so the committer has to be GitHub as well. A
+	# spoofed GitHub committer cannot carry GitHub's signature, and the
+	# gpg-signature job requires GitHub to have verified it.
+	dependabot=0
+	if [ "$(git log -1 --format='%ae %ce' "$sha")" = "$DEPENDABOT_IDENTITY" ]; then
+		dependabot=1
+	fi
+
 	# 1. Subject: conventional prefix, single line, length-capped.
 	if ! printf '%s' "$subject" | grep -Eq "$CONVENTIONAL"; then
 		err "subject must start with feat|fix|ci|docs|test|refactor|chore|perf|build|revert followed by ': '"
@@ -65,12 +81,15 @@ for sha in $commits; do
 	fi
 
 	# 2. Body: sign-off trailers only, no prose paragraphs, no attribution.
-	while IFS= read -r line; do
-		[ -z "$line" ] && continue
-		if ! printf '%s' "$line" | grep -Eq '^[A-Za-z-]+:[[:space:]]'; then
-			err "body must contain trailers only, found prose: '$line'"
-		fi
-	done <<<"$body"
+	#    Dependabot's release notes are the one prose body allowed.
+	if [ "$dependabot" -eq 0 ]; then
+		while IFS= read -r line; do
+			[ -z "$line" ] && continue
+			if ! printf '%s' "$line" | grep -Eq '^[A-Za-z-]+:[[:space:]]'; then
+				err "body must contain trailers only, found prose: '$line'"
+			fi
+		done <<<"$body"
+	fi
 
 	for pattern in "${FORBIDDEN_PATTERNS[@]}"; do
 		if printf '%s\n%s' "$subject" "$body" | grep -Eiq "$pattern"; then
@@ -78,9 +97,13 @@ for sha in $commits; do
 		fi
 	done
 
-	# 3. DCO: a Signed-off-by matching the commit author.
-	if ! printf '%s' "$body" | grep -Fqx "Signed-off-by: $author"; then
-		err "missing DCO sign-off 'Signed-off-by: $author' (commit with -s)"
+	# 3. DCO: a Signed-off-by matching the commit author, or Dependabot's own.
+	signoff="Signed-off-by: $author"
+	if [ "$dependabot" -eq 1 ]; then
+		signoff="$DEPENDABOT_SIGNOFF"
+	fi
+	if ! printf '%s' "$body" | grep -Fqx "$signoff"; then
+		err "missing DCO sign-off '$signoff' (commit with -s)"
 	fi
 
 	# 4. Signature present. 'N' means unsigned; anything else is a signature

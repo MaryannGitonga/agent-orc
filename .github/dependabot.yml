@@ -1,0 +1,21 @@
+# Keeps the SHA-pinned actions and the Go modules current. Its commits pass the
+# commit policy through the Dependabot exception in scripts/check-commits.sh.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
