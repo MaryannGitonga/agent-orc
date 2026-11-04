@@ -49,6 +49,11 @@ Every commit must:
   footer. These are stripped from agent output by `internal/sanitize` and
   rejected outright by the `commit-policy` workflow.
 
+Dependabot's update commits are the one exception: they carry release notes as
+a prose body, and Dependabot's own sign-off,
+`Signed-off-by: dependabot[bot] <support@github.com>`. The check accepts them
+only when GitHub is the committer and has verified the signature.
+
 A correct commit looks exactly like this:
 
 ```
