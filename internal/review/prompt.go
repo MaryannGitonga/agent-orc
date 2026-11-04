@@ -7,9 +7,10 @@
 // and the original task, the way a human reviewer sees the PR and not the
 // author's scratch work.
 //
-// The loop is sequential and hard-capped. The worker and the reviewer never
-// run at the same time and never message each other. This is a bounded
-// pre-check, not a replacement for human review.
+// The loop is sequential and runs until the reviewer approves or the worker
+// stops changing anything, bounded by the budget the CLIs enforce. The worker
+// and the reviewer never run at the same time and never message each other.
+// This is a pre-check, not a replacement for human review.
 package review
 
 import (

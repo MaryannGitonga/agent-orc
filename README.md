@@ -136,7 +136,16 @@ tar -xzf agent-orc-tui_${VERSION}_${OS}_${ARCH}.tar.gz
 sudo install agent-orc-tui_${VERSION}_${OS}_${ARCH} /usr/local/bin/agent-orc-tui
 ```
 
-Each release also ships `checksums.txt`. Or build it yourself:
+Each release also ships `checksums.txt`.
+
+With a Go toolchain, `go install` builds both from source:
+
+```sh
+go install github.com/MaryannGitonga/agent-orc/cmd/agent-orc@latest
+go install github.com/MaryannGitonga/agent-orc/cmd/agent-orc-tui@latest
+```
+
+Or build it yourself:
 
 ```sh
 git clone https://github.com/MaryannGitonga/agent-orc
