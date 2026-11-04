@@ -27,9 +27,8 @@ func NewReporter(stateDir string, out io.Writer) *Reporter {
 	return &Reporter{store: state.NewStore(stateDir), out: out}
 }
 
-// Status prints one row per task. A plain table is deliberately the whole of
-// the reporting surface: anything richer is a dashboard, and there is nothing
-// yet to justify one.
+// Status prints one row per task: the plain-table answer to "what is running",
+// for scripts and quick checks. agent-orc-tui is the live view.
 func (r *Reporter) Status() error {
 	tasks, err := r.store.List()
 	if err != nil {
