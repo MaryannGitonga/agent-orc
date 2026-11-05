@@ -1,0 +1,14 @@
+# Overall coverage is shown but never fails a pull request; the lines a pull
+# request changes must be at least 80% covered.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        target: 80%
+
+comment:
+  layout: "condensed_header, diff, files"
+  require_changes: true

@@ -73,66 +73,46 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
-    outputs:
-      pct: ${{ steps.cov.outputs.pct }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-      # Reported rather than gated. The integration tests drive a separately
-      # built binary, so this merges their subprocess coverage with the unit
-      # profile; unit coverage alone understates it by about thirty points.
+      # The integration tests drive a separately built binary, so this merges
+      # their subprocess coverage with the unit profile; unit coverage alone
+      # understates it by about thirty points.
       - name: Coverage
-        id: cov
         run: |
           total=$(make -s coverage)
           echo "$total"
           echo "### ${total}" >> "$GITHUB_STEP_SUMMARY"
-          pct=$(printf '%s' "$total" | grep -oE '[0-9.]+' | head -1)
-          # Rather than publish a badge reading "%" with no number in it.
-          if [ -z "$pct" ]; then
-            echo "no percentage in the coverage output: $total" >&2
-            exit 1
-          fi
-          echo "pct=$pct" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 1
 
   # Separate from the job that measures, and never running any of the
-  # repository's code: only this one holds a token that can write, and it does
-  # so on push alone. Measuring happens on pull requests too, where the code
-  # being run is the pull request's own.
-  coverage-badge:
-    name: coverage badge
-    if: github.event_name == 'push'
+  # repository's code: only this one sees the Codecov token. Measuring runs the
+  # pull request's own code, so it must not hold a secret.
+  codecov:
+    name: codecov upload
     needs: coverage
+    # Dependabot's runs get no repository secrets, so its uploads would fail.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
+      # Codecov maps the profile's paths onto the checked-out files.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # The README badge reads this file through shields.io. It lives on its own
-      # branch so publishing it never touches main's history, which CI checks.
-      - name: Publish the shields endpoint
-        env:
-          PCT: ${{ needs.coverage.outputs.pct }}
-        run: |
-          case "${PCT%%.*}" in
-            9?|100) colour=brightgreen ;;
-            8?)     colour=green ;;
-            [67]?)  colour=yellow ;;
-            *)      colour=red ;;
-          esac
-          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' \
-            "$PCT" "$colour" > /tmp/coverage.json
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # --orphan leaves the index and worktree empty, so there is
-          # nothing to remove before writing the one file this branch holds.
-          git switch --orphan badges
-          mv /tmp/coverage.json coverage.json
-          git add coverage.json
-          git commit -qm "chore: coverage ${PCT}%"
-          git push -qf origin badges
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.out
+          disable_search: true
+          fail_ci_if_error: true
 
   integration-tests:
     name: integration tests
