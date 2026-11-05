@@ -13,7 +13,10 @@ VERSION        ?= $(shell git describe --tags --always --dirty 2>/dev/null || ec
 LDFLAGS        := -X github.com/MaryannGitonga/agent-orc/internal/version.Version=$(VERSION)
 GOLANGCI_LINT  ?= golangci-lint
 GOLANGCI_VERSION ?= v1.64.8
-RANGE          ?= origin/main..HEAD
+GORELEASER     ?= goreleaser
+GORELEASER_VERSION ?= v2.20.0
+SYFT_VERSION   ?= v1.56.0
+RANGE         ?= origin/main..HEAD
 
 .DEFAULT_GOAL := help
 
@@ -49,6 +52,15 @@ lint:
 ## lint-install: install the pinned golangci-lint into GOPATH/bin
 lint-install:
 	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
+
+## release-tools: install the pinned GoReleaser and syft (for SBOMs) into GOPATH/bin
+release-tools:
+	$(GO) install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
+	$(GO) install github.com/anchore/syft/cmd/syft@$(SYFT_VERSION)
+
+## snapshot: build every release tarball into dist/ without publishing anything
+snapshot:
+	$(GORELEASER) release --snapshot --clean
 
 ## build: compile the binary into bin/
 build:
@@ -115,4 +127,4 @@ commit-check:
 ## ci: the ci and commit-policy checks that run locally; do this before pushing
 ci: fmt-check vet lint build test-unit test-integration commit-check
 
-.PHONY: help fmt fmt-check vet lint lint-install build build-tui demo test-unit test test-integration coverage tidy verify-clean clean commit-check ci
+.PHONY: help fmt fmt-check vet lint lint-install release-tools snapshot build build-tui demo test-unit test test-integration coverage tidy verify-clean clean commit-check ci
