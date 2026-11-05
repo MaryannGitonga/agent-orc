@@ -123,8 +123,8 @@ OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # linux or darwin
 ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 gh release download "$VERSION" --repo MaryannGitonga/agent-orc \
   --pattern "agent-orc_${VERSION}_${OS}_${ARCH}.tar.gz"
-tar -xzf agent-orc_${VERSION}_${OS}_${ARCH}.tar.gz
-sudo install agent-orc_${VERSION}_${OS}_${ARCH} /usr/local/bin/agent-orc
+tar -xzf agent-orc_${VERSION}_${OS}_${ARCH}.tar.gz agent-orc
+sudo install agent-orc /usr/local/bin/agent-orc
 ```
 
 The dashboard, `agent-orc-tui`, ships as its own tarball in the same release:
@@ -132,11 +132,18 @@ The dashboard, `agent-orc-tui`, ships as its own tarball in the same release:
 ```sh
 gh release download "$VERSION" --repo MaryannGitonga/agent-orc \
   --pattern "agent-orc-tui_${VERSION}_${OS}_${ARCH}.tar.gz"
-tar -xzf agent-orc-tui_${VERSION}_${OS}_${ARCH}.tar.gz
-sudo install agent-orc-tui_${VERSION}_${OS}_${ARCH} /usr/local/bin/agent-orc-tui
+tar -xzf agent-orc-tui_${VERSION}_${OS}_${ARCH}.tar.gz agent-orc-tui
+sudo install agent-orc-tui /usr/local/bin/agent-orc-tui
 ```
 
-Each release also ships `checksums.txt`.
+Each tarball holds the binary, `LICENSE` and `README.md`. Every release also
+ships `checksums.txt`, a software bill of materials per tarball, and a build
+provenance attestation, which proves the tarball was built by this
+repository's release workflow:
+
+```sh
+gh attestation verify agent-orc_${VERSION}_${OS}_${ARCH}.tar.gz --repo MaryannGitonga/agent-orc
+```
 
 With a Go toolchain, `go install` builds both from source:
 

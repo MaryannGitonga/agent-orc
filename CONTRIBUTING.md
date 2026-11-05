@@ -119,9 +119,18 @@ git tag -a v0.2.0 -m v0.2.0
 git push origin v0.2.0
 ```
 
-The `release` workflow re-runs the checks, cross-compiles for linux and darwin
-on amd64 and arm64, stamps the tag into `internal/version.Version`, writes
-`checksums.txt`, and publishes a GitHub release with generated notes.
+The `release` workflow re-runs the checks, then runs GoReleaser
+(`.goreleaser.yaml`). It cross-compiles for linux and darwin on amd64 and
+arm64, stamps the tag into `internal/version.Version`, and writes the tarballs,
+`checksums.txt`, an SBOM per tarball and a changelog grouped by commit prefix,
+all into a draft release. The workflow then attests the tarballs and publishes
+the draft, so a release is never visible half-built.
 
-Use annotated tags (`-a`). The workflow passes `--verify-tag`, and
-`git describe` needs one for `make build` to stamp a sensible version.
+Start a release by pushing a tag, not from the web UI. The workflow refuses a
+tag that already has a release, rather than uploading into it.
+
+To see what a release would contain without publishing anything, run
+`goreleaser release --snapshot --clean` and look in `dist/`.
+
+Use annotated tags (`-a`). `git describe` needs one for `make build` to stamp a
+sensible version.

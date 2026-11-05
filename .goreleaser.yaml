@@ -1,0 +1,96 @@
+# Release configuration. The release workflow runs this on a pushed v* tag;
+# `goreleaser release --snapshot --clean` builds the same archives into dist/
+# without publishing anything.
+version: 2
+
+project_name: agent-orc
+
+builds:
+  - id: agent-orc
+    main: ./cmd/agent-orc
+    binary: agent-orc
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/MaryannGitonga/agent-orc/internal/version.Version={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: agent-orc-tui
+    main: ./cmd/agent-orc-tui
+    binary: agent-orc-tui
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/MaryannGitonga/agent-orc/internal/version.Version={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# One tarball per binary, since the dashboard is optional. LICENSE is required
+# by Apache 2.0; owner and times come from the commit, for reproducible builds.
+archives:
+  - id: agent-orc
+    ids: [agent-orc]
+    name_template: "agent-orc_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    builds_info: &info
+      owner: root
+      group: root
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        info: *info
+      - src: README.md
+        info: *info
+
+  - id: agent-orc-tui
+    ids: [agent-orc-tui]
+    name_template: "agent-orc-tui_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    builds_info: *info
+    files:
+      - src: LICENSE
+        info: *info
+      - src: README.md
+        info: *info
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+# Commit subjects are conventional, so they group cleanly. Merge commits only
+# repeat the PR title, so they are left out.
+changelog:
+  use: git
+  sort: asc
+  abbrev: 7
+  filters:
+    exclude:
+      - "^Merge "
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?!?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.+\))?!?:'
+      order: 1
+    - title: Performance
+      regexp: '^perf(\(.+\))?!?:'
+      order: 2
+    - title: Documentation
+      regexp: '^docs(\(.+\))?!?:'
+      order: 3
+    - title: CI and build
+      regexp: '^(ci|build)(\(.+\))?!?:'
+      order: 4
+    - title: Other
+      order: 999
+
+# Published by the workflow only once every asset is uploaded and attested, so
+# a release is never visible half-built.
+release:
+  draft: true
