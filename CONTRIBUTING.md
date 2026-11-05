@@ -112,19 +112,24 @@ against the unfixed code is not testing the fix.
 
 ## Releasing
 
-Tag it. Everything else is automatic:
+Tag it, then approve it. Only maintainers can push a `v*` tag:
 
 ```sh
 git tag -a v0.2.0 -m v0.2.0
 git push origin v0.2.0
 ```
 
-The `release` workflow re-runs the checks, then runs GoReleaser
-(`.goreleaser.yaml`). It cross-compiles for linux and darwin on amd64 and
-arm64, stamps the tag into `internal/version.Version`, and writes the tarballs,
-`checksums.txt`, an SBOM per tarball and a changelog grouped by commit prefix,
-all into a draft release. The workflow then attests the tarballs and publishes
-the draft, so a release is never visible half-built.
+The `release` workflow has two jobs. `check` re-runs the checks with a
+read-only token. `publish` then waits for a reviewer to approve the `release`
+environment (Actions tab, the run, "Review deployments"), and only then gets a
+token that can write.
+
+`publish` runs GoReleaser (`.goreleaser.yaml`). It cross-compiles for linux and
+darwin on amd64 and arm64, stamps the tag into `internal/version.Version`, and
+writes the tarballs, `checksums.txt`, an SBOM per tarball and a changelog
+grouped by commit prefix, all into a draft release. The job then attests the
+tarballs and publishes the draft, so a release is never visible half-built.
+Published releases are immutable: to fix one, release a new version.
 
 Start a release by pushing a tag, not from the web UI. The workflow refuses a
 tag that already has a release, rather than uploading into it.
