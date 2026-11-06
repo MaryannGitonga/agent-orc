@@ -136,7 +136,10 @@ Start a release by pushing a tag, not from the web UI. The workflow refuses a
 tag that already has a release, rather than uploading into it.
 
 To see what a release would contain without publishing anything, run
-`goreleaser release --snapshot --clean` and look in `dist/`.
+`make snapshot` and look in `dist/`. To check the release workflow itself
+before tagging, run it from the Actions tab ("release", "Run workflow"): the
+dry run does every step up to the build, with no approval and nothing
+published.
 
 Use annotated tags (`-a`). `git describe` needs one for `make build` to stamp a
 sensible version.
