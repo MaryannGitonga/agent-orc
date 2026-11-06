@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // ErrNoSubagentSupport means the CLI has no subagent directory to seed.
@@ -101,7 +102,9 @@ func Into(worktree, subagentDir, src string) ([]string, error) {
 
 // copyFile copies one file, preserving nothing but its contents.
 func copyFile(src, dst string) error {
-	in, err := os.Open(src)
+	// Non-blocking, so a named pipe opens at once and fails the regular-file
+	// check below instead of waiting for a writer that never comes.
+	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", src, err)
 	}
