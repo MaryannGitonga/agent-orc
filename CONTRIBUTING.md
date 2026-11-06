@@ -119,8 +119,9 @@ git tag -a v0.2.0 -m v0.2.0
 git push origin v0.2.0
 ```
 
-The `release` workflow has two jobs. `check` re-runs the checks with a
-read-only token. `publish` then waits for a reviewer to approve the `release`
+The `release` workflow first runs `ci.yml`, the same checks a pull request
+gets, with a read-only token, and refuses a tag that already has a release.
+`publish` then waits for a reviewer to approve the `release`
 environment (Actions tab, the run, "Review deployments"), and only then gets a
 token that can write.
 
