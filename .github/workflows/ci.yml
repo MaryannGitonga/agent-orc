@@ -99,9 +99,12 @@ jobs:
   codecov:
     name: codecov upload
     needs: coverage
-    # Dependabot's runs get no repository secrets, so its uploads would fail. A
-    # release (a tag) has nothing to report, and is not given the token either.
-    if: github.actor != 'dependabot[bot]' && github.ref_type != 'tag'
+    # Only pull requests and pushes to main report coverage. The release workflow
+    # calls this file without the token, and Dependabot's runs get no secrets.
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name == 'pull_request' ||
+       (github.event_name == 'push' && github.ref_type == 'branch'))
     runs-on: ubuntu-latest
     steps:
       # Codecov maps the profile's paths onto the checked-out files.
