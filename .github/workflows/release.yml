@@ -43,12 +43,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>err.txt; then
+          err="${RUNNER_TEMP}/release-view.err"
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>"$err"; then
             echo "a release for ${GITHUB_REF_NAME} already exists; push a new tag instead" >&2
             exit 1
           fi
-          if ! grep -qx "release not found" err.txt; then
-            cat err.txt >&2
+          if ! grep -qx "release not found" "$err"; then
+            cat "$err" >&2
             exit 1
           fi
 
