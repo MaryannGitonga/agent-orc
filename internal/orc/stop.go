@@ -147,9 +147,20 @@ func waitForGroup(pid int, d time.Duration) bool {
 // missed reconcile would have this wait on, and then SIGKILL, something with no
 // connection to the task.
 func groupAlive(pid int) bool {
+	if !isGroupLeader(pid) {
+		return false
+	}
 	err := syscall.Kill(-pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
+
+// isGroupLeader reports whether pid can name a group this package started.
+//
+// The pid comes from a state file, which can be edited or corrupted, and kill
+// reads the negated number as something else entirely: -1 is every process the
+// user may signal, and a negative pid negates to a bare one. A task's group is
+// led by a child agent-orc started, so it is never init and never below it.
+func isGroupLeader(pid int) bool { return pid > 1 }
 
 // signal sends sig to a process group, and only ever to a group.
 //
@@ -159,5 +170,8 @@ func groupAlive(pid int) bool {
 // that lack one. Signalling a bare pid as a fallback would therefore never help
 // a real record, and would reach an unrelated process holding a reused number.
 func signal(pid int, sig syscall.Signal) error {
+	if !isGroupLeader(pid) {
+		return fmt.Errorf("pid %d cannot be a task's process group; the state file is damaged or was edited", pid)
+	}
 	return syscall.Kill(-pid, sig)
 }
