@@ -120,12 +120,12 @@ git push origin v0.2.0
 ```
 
 The `release` workflow first runs `ci.yml`, the same checks a pull request
-gets, with a read-only token, and refuses a tag that already has a release.
-`publish` then waits for a reviewer to approve the `release`
-environment (Actions tab, the run, "Review deployments"), and only then gets a
-token that can write.
+gets, with a read-only token. `publish` then waits for a reviewer to approve
+the `release` environment (Actions tab, the run, "Review deployments"), and
+only then gets a token that can write.
 
-`publish` runs GoReleaser (`.goreleaser.yaml`). It cross-compiles for linux and
+`publish` refuses a tag that already has a release, draft or published, then
+runs GoReleaser (`.goreleaser.yaml`). It cross-compiles for linux and
 darwin on amd64 and arm64, stamps the tag into `internal/version.Version`, and
 writes the tarballs, `checksums.txt`, an SBOM per tarball and a changelog
 grouped by commit prefix, all into a draft release. The job then attests the
