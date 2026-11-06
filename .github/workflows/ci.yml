@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
@@ -98,8 +99,9 @@ jobs:
   codecov:
     name: codecov upload
     needs: coverage
-    # Dependabot's runs get no repository secrets, so its uploads would fail.
-    if: github.actor != 'dependabot[bot]'
+    # Dependabot's runs get no repository secrets, so its uploads would fail. A
+    # release (a tag) has nothing to report, and is not given the token either.
+    if: github.actor != 'dependabot[bot]' && github.ref_type != 'tag'
     runs-on: ubuntu-latest
     steps:
       # Codecov maps the profile's paths onto the checked-out files.
