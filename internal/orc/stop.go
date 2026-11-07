@@ -3,6 +3,7 @@ package orc
 import (
 	"errors"
 	"fmt"
+	"math"
 	"syscall"
 	"time"
 
@@ -158,9 +159,11 @@ func groupAlive(pid int) bool {
 //
 // The pid comes from a state file, which can be edited or corrupted, and kill
 // reads the negated number as something else entirely: -1 is every process the
-// user may signal, and a negative pid negates to a bare one. A task's group is
-// led by a child agent-orc started, so it is never init and never below it.
-func isGroupLeader(pid int) bool { return pid > 1 }
+// user may signal, and a negative pid negates to a bare one. The kernel also
+// takes only the low 32 bits, so a larger number wraps round to one of those.
+// A task's group is led by a child agent-orc started, so it is never init and
+// never beyond what a pid_t holds.
+func isGroupLeader(pid int) bool { return pid > 1 && pid <= math.MaxInt32 }
 
 // signal sends sig to a process group, and only ever to a group.
 //
