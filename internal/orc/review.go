@@ -302,7 +302,12 @@ func (r *Reviewer) capture(id, dir string, argv []string, logPath string) (strin
 
 // lastLines returns the final n non-empty lines, for error messages.
 func lastLines(s string, n int) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
+	var lines []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
