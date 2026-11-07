@@ -315,8 +315,13 @@ func TestRoundsAndElapsedWithNothingToShow(t *testing.T) {
 			t.Errorf("%s = %q, want %q", name, tc.got, tc.want)
 		}
 	}
-	// Still running: measured against now, not left blank.
-	if got := elapsed(state.Task{StartedAt: start.Add(-90 * time.Second)}); got != "1m30s" {
-		t.Errorf("elapsed of a running task = %q, want 1m30s", got)
+	// Still running: measured against now, not left blank. Bounded rather than
+	// exact, since a busy runner can pause between reading the clock here and
+	// elapsed reading it again.
+	started := time.Now().UTC().Add(-90 * time.Second)
+	got := elapsed(state.Task{StartedAt: started})
+	latest := time.Since(started).Round(time.Second)
+	if d, err := time.ParseDuration(got); err != nil || d < 90*time.Second || d > latest {
+		t.Errorf("elapsed of a running task = %q, want between 1m30s and %s", got, latest)
 	}
 }

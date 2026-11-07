@@ -12,11 +12,12 @@ import (
 
 // The pids a state file can hold that kill reads as something other than one
 // task's group: -1 for 1, our own group for 0, and a bare pid for a negative.
+// The kernel keeps only the low 32 bits, so 1<<32+1 wraps to 1 and 1<<33 to 0.
 //
 // Every check here sends signal 0, which delivers nothing, and nothing here
 // stops a task recorded with pid 1: if the guard were lost, that would send
 // SIGTERM to every process the user running the tests owns.
-var notAGroup = []int{1, 0, -1, -0x7FFFFFF0}
+var notAGroup = []int{1, 0, -1, -0x7FFFFFF0, 1<<32 + 1, 1 << 33}
 
 func TestNoSignalReachesAPidThatIsNotATaskGroup(t *testing.T) {
 	for _, pid := range notAGroup {
