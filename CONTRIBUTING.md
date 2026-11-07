@@ -112,16 +112,34 @@ against the unfixed code is not testing the fix.
 
 ## Releasing
 
-Tag it. Everything else is automatic:
+Tag it, then approve it. Only maintainers can push a `v*` tag:
 
 ```sh
 git tag -a v0.2.0 -m v0.2.0
 git push origin v0.2.0
 ```
 
-The `release` workflow re-runs the checks, cross-compiles for linux and darwin
-on amd64 and arm64, stamps the tag into `internal/version.Version`, writes
-`checksums.txt`, and publishes a GitHub release with generated notes.
+The `release` workflow first runs `ci.yml`, the same checks a pull request
+gets, with a read-only token. `publish` then waits for a reviewer to approve
+the `release` environment (Actions tab, the run, "Review deployments"), and
+only then gets a token that can write.
 
-Use annotated tags (`-a`). The workflow passes `--verify-tag`, and
-`git describe` needs one for `make build` to stamp a sensible version.
+`publish` refuses a tag that already has a release, draft or published, then
+runs GoReleaser (`.goreleaser.yaml`). It cross-compiles for linux and
+darwin on amd64 and arm64, stamps the tag into `internal/version.Version`, and
+writes the tarballs, `checksums.txt`, an SBOM per tarball and a changelog
+grouped by commit prefix, all into a draft release. The job then attests the
+tarballs and publishes the draft, so a release is never visible half-built.
+Published releases are immutable: to fix one, release a new version.
+
+Start a release by pushing a tag, not from the web UI. The workflow refuses a
+tag that already has a release, rather than uploading into it.
+
+To see what a release would contain without publishing anything, run
+`make snapshot` and look in `dist/`. To check the release workflow itself
+before tagging, run it from the Actions tab ("release", "Run workflow"): the
+dry run does every step up to the build, with no approval and nothing
+published.
+
+Use annotated tags (`-a`). `git describe` needs one for `make build` to stamp a
+sensible version.

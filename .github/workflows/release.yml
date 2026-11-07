@@ -1,69 +1,101 @@
 name: release
 
-# Tag-driven. `git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0` is the
-# whole release process; everything below happens on its own.
+# Tag-driven. `git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0` starts it;
+# publishing then waits for approval in the `release` environment.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to check for an existing release (one that does not exist yet)
+        default: v0.0.0-dry-run
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   GO_VERSION: "1.22"
 
 jobs:
-  build:
-    name: build and publish
+  check:
+    name: check
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: publish
+    if: github.event_name == 'push'
+    needs: check
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      # Both for the build provenance attestation: id-token to prove the
+      # workflow's identity to Sigstore, attestations to store the result.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # GoReleaser reads the tag and the commits since the last one
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Install GoReleaser and syft
+        run: make release-tools
+
+      - name: Refuse a tag that already has a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/no-existing-release.sh "${GITHUB_REF_NAME}"
+
+      # Builds, archives, checksums, SBOMs and changelog, into a draft release.
+      - name: Build the draft release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: goreleaser release --clean
+
+      - name: Attest the tarballs
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
+
+  dry-run:
+    name: dry run
+    if: github.event_name == 'workflow_dispatch'
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          fetch-depth: 0 # so `git describe` sees the tag
+          fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-      # go install checks the module against the Go checksum database, so a
-      # tampered release cannot reach CI, and this is how it installs locally.
-      - name: Install golangci-lint
-        run: make lint-install
+      - name: Install GoReleaser and syft
+        run: make release-tools
 
-      # A tag that cannot pass the PR checks is not a release. commit-check is
-      # the one omission: it reads origin/main..HEAD, which says nothing useful
-      # about a tag.
-      - run: make fmt-check vet lint build test-unit test-integration verify-clean
-
-      - name: Build every target
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME}"
-          mkdir -p dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            os="${target%/*}"; arch="${target#*/}"
-            # Both commands, each in its own tarball: the dashboard is optional,
-            # and the agent-orc tarball keeps the name and shape it has always had.
-            for cmd in agent-orc agent-orc-tui; do
-              out="dist/${cmd}_${version}_${os}_${arch}"
-              GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build \
-                -ldflags "-s -w -X github.com/MaryannGitonga/agent-orc/internal/version.Version=${version}" \
-                -o "$out" "./cmd/${cmd}"
-              tar -czf "${out}.tar.gz" -C dist "$(basename "$out")"
-              rm "$out"
-            done
-          done
-          (cd dist && sha256sum *.tar.gz > checksums.txt)
-
-      - name: Publish
+      - name: Refuse a tag that already has a release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: scripts/no-existing-release.sh "$TAG"
+
+      # A real release refuses a dirty tree, which a snapshot does not check.
+      - name: Nothing above left files in the checkout
         run: |
-          # Starting a release from the web UI creates the tag, which is what
-          # triggers this, so by the time it runs the release can already be
-          # there. Upload into it rather than failing: either way the tag is
-          # what decides which commit ships, and a release with no binaries on
-          # it is the one outcome worth ruling out.
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
-          else
-            gh release create "${GITHUB_REF_NAME}" dist/* --generate-notes --verify-tag
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short >&2
+            echo "the checkout is dirty; goreleaser release would refuse it" >&2
+            exit 1
           fi
+
+      - name: Build a snapshot
+        run: goreleaser release --snapshot --clean
