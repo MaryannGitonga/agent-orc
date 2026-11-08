@@ -108,3 +108,30 @@ func TestCleanupSweepsAbandonedTempFiles(t *testing.T) {
 		t.Errorf("output = %q, want the sweep reported", out.String())
 	}
 }
+
+// TestCleanupWarnsWhenTheSweepFails covers the sweep being housekeeping: a
+// file it cannot remove is reported, not turned into a failed cleanup.
+func TestCleanupWarnsWhenTheSweepFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from a read-only directory")
+	}
+	layout := testLayout(t)
+	if err := os.WriteFile(filepath.Join(layout.State, "X-1.lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stuck, err := os.CreateTemp(layout.State, "X-1.*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck.Close()
+	if err := os.Chmod(layout.State, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(layout.State, 0o755) })
+
+	var out bytes.Buffer
+	NewCleaner(layout, &out).sweepTemp()
+	if !strings.Contains(out.String(), "warning: removing "+stuck.Name()) {
+		t.Errorf("output = %q, want a warning naming the file", out.String())
+	}
+}

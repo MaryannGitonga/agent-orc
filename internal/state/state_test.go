@@ -560,3 +560,57 @@ func writeFile(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+func TestSyncDirReportsAMissingDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "gone")
+	if err := syncDir(missing); err == nil || !strings.Contains(err.Error(), missing) {
+		t.Errorf("syncDir() = %v, want an error naming %s", err, missing)
+	}
+}
+
+func TestListAndSweepReportAStateDirTheyCannotRead(t *testing.T) {
+	// A file where the directory should be.
+	dir := filepath.Join(t.TempDir(), "state")
+	writeFile(t, dir, "")
+	store := NewStore(dir)
+	if _, _, err := store.List(); err == nil {
+		t.Error("List() = nil, want an error for a state directory it cannot read")
+	}
+	if _, err := store.SweepTemp(); err == nil {
+		t.Error("SweepTemp() = nil, want an error for a state directory it cannot read")
+	}
+}
+
+// TestSweepTempCarriesOnPastAFileItCannotRemove covers the sweep reporting
+// every failure rather than stopping at the first.
+func TestSweepTempCarriesOnPastAFileItCannotRemove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from a read-only directory")
+	}
+	dir := t.TempDir()
+	var names []string
+	for _, id := range []string{"A-1", "B-1"} {
+		// The locks exist already, so only the removals fail.
+		writeFile(t, filepath.Join(dir, id+".lock"), "")
+		f, err := os.CreateTemp(dir, id+".*.tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		names = append(names, filepath.Base(f.Name()))
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	removed, err := NewStore(dir).SweepTemp()
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want nothing from a read-only directory", removed)
+	}
+	for _, name := range names {
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("SweepTemp() = %v, want it to name %s", err, name)
+		}
+	}
+}
