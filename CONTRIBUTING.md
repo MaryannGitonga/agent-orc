@@ -5,7 +5,7 @@ and the conventions it cannot check.
 
 ## Getting set up
 
-Requires Go 1.22 or newer, and `golangci-lint` for the lint target:
+Requires Go 1.24.2 or newer, and `golangci-lint` for the lint target:
 
 ```sh
 make lint-install   # fetches the pinned version into GOPATH/bin
