@@ -635,3 +635,17 @@ func TestListReportsANegativeSchemaVersion(t *testing.T) {
 		t.Fatal("List() is still migrating a negative schema_version after 5s")
 	}
 }
+
+func TestSaveRefusesToReplaceANewerRecord(t *testing.T) {
+	dir := t.TempDir()
+	const newer = `{"id": "NEW-1", "schema_version": 2, "a_later_field": "kept"}`
+	writeRecord(t, dir, "NEW-1", newer)
+
+	err := NewStore(dir).Save(record("NEW-1", time.Now().UTC()))
+	if !errors.Is(err, ErrNewerSchema) {
+		t.Fatalf("Save() = %v, want it to refuse a newer record", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "NEW-1.json")); string(data) != newer {
+		t.Errorf("record = %s, want it untouched", data)
+	}
+}

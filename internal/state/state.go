@@ -180,9 +180,15 @@ func (s *Store) withLock(id string, fn func() error) error {
 	return fn()
 }
 
-// Save writes t, replacing any existing record.
+// Save writes t, replacing any existing record except one from a newer
+// agent-orc, which it refuses rather than drop that record's unknown fields.
 func (s *Store) Save(t Task) error {
-	return s.withLock(t.ID, func() error { return s.save(t) })
+	return s.withLock(t.ID, func() error {
+		if _, err := s.Load(t.ID); errors.Is(err, ErrNewerSchema) {
+			return err
+		}
+		return s.save(t)
+	})
 }
 
 // save writes t without taking the lock, for callers that already hold it. The
