@@ -245,3 +245,83 @@ func TestTrimZeroTail(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskAliveAsksOnlyAboutTasksThatShouldHaveAProcess(t *testing.T) {
+	// A real group of its own, the way the supervisor starts one.
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+	live := cmd.Process.Pid
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = syscall.Kill(-live, syscall.SIGKILL) })
+
+	tests := map[string]struct {
+		task state.Task
+		want bool
+	}{
+		"a finished task, whatever pid it names": {state.Task{Status: state.StatusDone, PID: 0x7FFFFFF0}, true},
+		"between commands, with no pid":          {state.Task{Status: state.StatusVerifying}, true},
+		"running in a live group":                {state.Task{Status: state.StatusRunning, PID: live}, true},
+		"running in a group that is gone":        {state.Task{Status: state.StatusRunning, PID: 0x7FFFFFF0}, false},
+		"running as pid 1":                       {state.Task{Status: state.StatusRunning, PID: 1}, false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := TaskAlive(tc.task); got != tc.want {
+				t.Errorf("TaskAlive() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheTUIRendersWhatStatusRenders covers the exported renderers being the
+// same rules the status table uses, which is the whole reason they exist.
+func TestTheTUIRendersWhatStatusRenders(t *testing.T) {
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	end := start.Add(2 * time.Hour)
+	tk := state.Task{
+		Task:        task.Task{Budget: task.Budget{USD: f64(2)}, Review: task.Review{Enabled: true}},
+		SpentUSD:    f64(0.5),
+		ReviewRound: 3,
+		StartedAt:   start,
+		FinishedAt:  &end,
+	}
+	if got := Spend(tk); got != "$0.50 / $2.00" {
+		t.Errorf("Spend() = %q", got)
+	}
+	if got := Rounds(tk); got != "3" {
+		t.Errorf("Rounds() = %q", got)
+	}
+	if got := Elapsed(tk); got != "2h" {
+		t.Errorf("Elapsed() = %q", got)
+	}
+}
+
+func TestRoundsAndElapsedWithNothingToShow(t *testing.T) {
+	start := time.Now().UTC()
+	before := start.Add(-time.Minute)
+	tests := map[string]struct {
+		got  string
+		want string
+	}{
+		"rounds without review":       {rounds(state.Task{ReviewRound: 2}), unknown},
+		"elapsed before starting":     {elapsed(state.Task{}), unknown},
+		"elapsed ending before start": {elapsed(state.Task{StartedAt: start, FinishedAt: &before}), unknown},
+	}
+	for name, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", name, tc.got, tc.want)
+		}
+	}
+	// Still running: measured against now, not left blank. Bounded rather than
+	// exact, since a busy runner can pause between reading the clock here and
+	// elapsed reading it again.
+	started := time.Now().UTC().Add(-90 * time.Second)
+	got := elapsed(state.Task{StartedAt: started})
+	latest := time.Since(started).Round(time.Second)
+	if d, err := time.ParseDuration(got); err != nil || d < 90*time.Second || d > latest {
+		t.Errorf("elapsed of a running task = %q, want between 1m30s and %s", got, latest)
+	}
+}

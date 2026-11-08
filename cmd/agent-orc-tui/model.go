@@ -341,10 +341,10 @@ func (m model) onKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	// more often than the selection changes, so the shifted arrows scroll it
 	// rather than the other way round.
 	case "shift+up":
-		m.vp.LineUp(1)
+		m.vp.ScrollUp(1)
 		return m, nil
 	case "shift+down":
-		m.vp.LineDown(1)
+		m.vp.ScrollDown(1)
 		return m, nil
 	case "g":
 		m.vp.GotoTop()

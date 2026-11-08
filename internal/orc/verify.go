@@ -156,7 +156,7 @@ func testFailurePrompt(command, output string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The test command for this project failed on your branch:\n\n    %s\n\n", command)
 	b.WriteString("Its output ended with:\n\n---\n")
-	b.WriteString(strings.TrimSpace(lastLines(output, testOutputLines)))
+	b.WriteString(tailLines(output, testOutputLines))
 	b.WriteString("\n---\n\n")
 	b.WriteString("Fix this in the worktree you are in, on the branch already checked out,\n")
 	b.WriteString("and commit the fix locally with a one-line conventional commit subject.\n")
@@ -164,6 +164,17 @@ func testFailurePrompt(command, output string) string {
 	b.WriteString("wrong. Do not push, do not open a pull request, and do not add any\n")
 	b.WriteString("Co-authored-by trailer.\n")
 	return b.String()
+}
+
+// tailLines returns the final n lines as the command wrote them, blank ones
+// included. The prompt quotes this as the output, so unlike lastLines it drops
+// nothing in between: a blank line can be part of what the test compared.
+func tailLines(s string, n int) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // runTestCommand runs the command through a shell in dir. A shell because a

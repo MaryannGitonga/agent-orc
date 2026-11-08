@@ -4,11 +4,22 @@ import (
 	"bytes"
 	"flag"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/MaryannGitonga/agent-orc/internal/config"
+	"github.com/MaryannGitonga/agent-orc/internal/paths"
+	"github.com/MaryannGitonga/agent-orc/internal/task"
 	"github.com/MaryannGitonga/agent-orc/internal/version"
 )
+
+// isolate points agent-orc's home at an empty directory, so a command that
+// resolves its layout never reads or writes the real ~/.agent-orc.
+func isolate(t *testing.T) {
+	t.Helper()
+	t.Setenv(paths.EnvHome, t.TempDir())
+}
 
 func TestDispatchVersion(t *testing.T) {
 	for _, arg := range []string{"version", "--version", "-v"} {
@@ -45,6 +56,81 @@ func TestDispatchUnknownCommand(t *testing.T) {
 
 // TestRunHelpIsNotAnError covers the flow the usage text recommends: `run -h`
 // prints the flags and exits successfully.
+func TestDispatchHelpPrintsUsage(t *testing.T) {
+	for _, arg := range []string{"help", "-h", "--help"} {
+		var out bytes.Buffer
+		if err := dispatch([]string{arg}, &out); err != nil {
+			t.Errorf("dispatch(%q) = %v, want nil", arg, err)
+		}
+		if !strings.Contains(out.String(), "agent-orc run") {
+			t.Errorf("dispatch(%q) printed %q, want the usage", arg, out.String())
+		}
+	}
+}
+
+// TestSubcommandsRejectTheWrongArguments covers each command's own usage
+// check, which runs before it touches any state.
+func TestSubcommandsRejectTheWrongArguments(t *testing.T) {
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"pr"}, "agent-orc pr <task-id>"},
+		{[]string{"pr", "A", "B"}, "agent-orc pr <task-id>"},
+		{[]string{"review"}, "agent-orc review <task-id>"},
+		{[]string{"stop"}, "agent-orc stop <task-id>"},
+		{[]string{"status", "A"}, "agent-orc status"},
+		{[]string{"sanitize-commit", "A"}, "agent-orc sanitize-commit"},
+		{[]string{"supervise"}, "agent-orc supervise <task-id>"},
+		{[]string{"supervise", "A", "B", "C"}, "agent-orc supervise <task-id>"},
+		{[]string{"logs"}, "agent-orc logs <task-id>"},
+		{[]string{"logs", "--bogus", "A"}, "agent-orc logs <task-id>"},
+		{[]string{"cleanup", "--bogus", "A"}, "agent-orc cleanup <task-id|--all>"},
+		// The flag package names an unknown flag with a single dash.
+		{[]string{"run", "--bogus"}, "-bogus"},
+	} {
+		err := dispatch(tc.argv, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("dispatch(%v) = %v, want an error containing %q", tc.argv, err, tc.want)
+		}
+	}
+}
+
+func TestSubcommandHelpIsNotAnError(t *testing.T) {
+	for _, argv := range [][]string{{"logs", "-h"}, {"cleanup", "-h"}} {
+		if err := dispatch(argv, io.Discard); err != nil {
+			t.Errorf("dispatch(%v) = %v, want nil", argv, err)
+		}
+	}
+}
+
+func TestCleanupNeedsExactlyOneTarget(t *testing.T) {
+	isolate(t)
+	if err := dispatch([]string{"cleanup", "--all", "A"}, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "not both") {
+		t.Errorf("cleanup with an id and --all = %v, want a refusal", err)
+	}
+	if err := dispatch([]string{"cleanup"}, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "agent-orc cleanup <task-id|--all>") {
+		t.Errorf("cleanup with neither = %v, want the usage", err)
+	}
+}
+
+func TestSuperviseRejectsAMalformedStartTime(t *testing.T) {
+	err := dispatch([]string{"supervise", "A", "yesterday"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), `"yesterday"`) {
+		t.Errorf("supervise with a bad started-at = %v, want an error naming it", err)
+	}
+}
+
+func TestRunReportsAMissingBatchFile(t *testing.T) {
+	isolate(t)
+	path := filepath.Join(t.TempDir(), "tasks.yaml")
+	if err := dispatch([]string{"run", path}, io.Discard); err == nil || !strings.Contains(err.Error(), path) {
+		t.Errorf("run with a missing batch file = %v, want an error naming %q", err, path)
+	}
+}
+
 func TestRunHelpIsNotAnError(t *testing.T) {
 	for _, arg := range []string{"-h", "--help"} {
 		var out bytes.Buffer
@@ -104,6 +190,82 @@ func TestBuildTaskTreatsAZeroBudgetAsUnset(t *testing.T) {
 	}
 	if got.Budget.USD == nil || *got.Budget.USD != 2.5 {
 		t.Errorf("Budget.USD = %v, want 2.5", got.Budget.USD)
+	}
+}
+
+func TestBuildTaskSetsACreditBudget(t *testing.T) {
+	got, err := buildTask(flags{id: "X", prompt: "p", repo: ".", base: "main", cli: "copilot", budgetCredits: 40})
+	if err != nil {
+		t.Fatalf("buildTask() = %v", err)
+	}
+	if got.Budget.Credits == nil || *got.Budget.Credits != 40 {
+		t.Errorf("Budget.Credits = %v, want 40", got.Budget.Credits)
+	}
+}
+
+// settingsWithEverything returns a settings file that sets every field a flag
+// can also set, each to something no flag below would pick by default.
+func settingsWithEverything() config.Settings {
+	yes, no := true, false
+	usd, credits := 5.0, 50.0
+	return config.Settings{
+		CLI:           task.CLIClaude,
+		Model:         "file-model",
+		BaseBranch:    "file-base",
+		Subagents:     &yes,
+		BudgetUSD:     &usd,
+		BudgetCredits: &credits,
+		AutoPR:        &no,
+		DCOSignoff:    &yes,
+	}
+}
+
+func TestApplyDefaultsFillsInWhatWasNotTyped(t *testing.T) {
+	// As runCmd builds it with no flags typed: autoPR is true because
+	// --no-auto-pr was not given.
+	f := flags{autoPR: true}
+	f.applyDefaults(settingsWithEverything(), map[string]bool{})
+
+	want := flags{
+		cli: "claude", model: "file-model", base: "file-base",
+		subagents: true, budgetUSD: 5, budgetCredits: 50,
+		// auto_pr: false in the file turns the PR off, though the flag that
+		// would do the same is spelled the other way round.
+		autoPR: false, dcoSignoff: true,
+	}
+	if f != want {
+		t.Errorf("applyDefaults() = %+v, want %+v", f, want)
+	}
+}
+
+// TestApplyDefaultsNeverOverrulesATypedFlag pins the rule the comment in
+// runCmd states: a bool typed as false and one left at false look the same,
+// and only the first may stand against a file.
+func TestApplyDefaultsNeverOverrulesATypedFlag(t *testing.T) {
+	typed := flags{
+		cli: "codex", model: "flag-model", base: "flag-base",
+		subagents: false, budgetUSD: 1, budgetCredits: 2,
+		autoPR: true, dcoSignoff: false,
+	}
+	f := typed
+	given := map[string]bool{
+		"cli": true, "model": true, "base-branch": true, "subagents": true,
+		"budget-usd": true, "budget-credits": true, "no-auto-pr": true, "dco-signoff": true,
+	}
+	f.applyDefaults(settingsWithEverything(), given)
+	if f != typed {
+		t.Errorf("applyDefaults() = %+v, want the typed flags untouched: %+v", f, typed)
+	}
+}
+
+func TestRepoRootLeavesANonRepositoryAlone(t *testing.T) {
+	dir := t.TempDir()
+	if got := repoRoot(dir); got != dir {
+		t.Errorf("repoRoot(%q) = %q, want it unchanged", dir, got)
+	}
+	// A batch with no repo of its own must not pick up the working directory's.
+	if got := repoRoot("  "); got != "" {
+		t.Errorf("repoRoot(blank) = %q, want empty", got)
 	}
 }
 
