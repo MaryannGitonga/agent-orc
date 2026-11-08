@@ -614,3 +614,24 @@ func TestSweepTempCarriesOnPastAFileItCannotRemove(t *testing.T) {
 		}
 	}
 }
+
+// TestListReportsANegativeSchemaVersion covers a version migrate would count up
+// from forever, which would freeze every listing instead of being reported.
+func TestListReportsANegativeSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeRecord(t, dir, "NEG-1", `{"id": "NEG-1", "schema_version": -9223372036854775808}`)
+
+	done := make(chan []Unreadable, 1)
+	go func() {
+		_, bad, _ := NewStore(dir).List()
+		done <- bad
+	}()
+	select {
+	case bad := <-done:
+		if len(bad) != 1 || !strings.Contains(bad[0].Err.Error(), "invalid schema_version") {
+			t.Errorf("unreadable = %v, want NEG-1 reported as invalid", bad)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("List() is still migrating a negative schema_version after 5s")
+	}
+}

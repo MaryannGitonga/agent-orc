@@ -218,9 +218,9 @@ func (s *Store) save(t Task) error {
 	if err := os.Rename(tmp.Name(), s.path(t.ID)); err != nil {
 		return fmt.Errorf("saving state for %q: %w", t.ID, err)
 	}
-	if err := syncDir(s.Dir); err != nil {
-		return fmt.Errorf("saving state for %q: %w", t.ID, err)
-	}
+	// The error is ignored: the rename already saved the record, and returning
+	// an error would tell the caller the save failed.
+	_ = syncDir(s.Dir)
 	return nil
 }
 
@@ -253,6 +253,9 @@ func (s *Store) Load(id string) (Task, error) {
 	if t.SchemaVersion > SchemaVersion {
 		return Task{}, fmt.Errorf("state for %q is schema %d, %w that reads up to %d; upgrade agent-orc",
 			id, t.SchemaVersion, ErrNewerSchema, SchemaVersion)
+	}
+	if t.SchemaVersion < 0 {
+		return Task{}, fmt.Errorf("state for %q has an invalid schema_version %d", id, t.SchemaVersion)
 	}
 	migrate(&t)
 	return t, nil
