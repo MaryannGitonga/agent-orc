@@ -1,7 +1,7 @@
 # agent-orc
 
 [![coverage](https://codecov.io/gh/MaryannGitonga/agent-orc/graph/badge.svg)](https://codecov.io/gh/MaryannGitonga/agent-orc)
-![go](https://img.shields.io/badge/go-1.22%2B-00ADD8)
+![go](https://img.shields.io/badge/go-1.24%2B-00ADD8)
 ![release](https://img.shields.io/github/v/release/MaryannGitonga/agent-orc)
 ![license](https://img.shields.io/badge/license-Apache_2.0-blue)
 
@@ -619,7 +619,7 @@ make test-integration # the tests that shell out to real git and gh
 make coverage         # total coverage, unit and integration merged
 ```
 
-Requires Go 1.22+ and `golangci-lint` (`make lint-install` fetches the pinned
+Requires Go 1.24.2+ and `golangci-lint` (`make lint-install` fetches the pinned
 version).
 
 Conventions for commits, pull requests, code and tests are in
