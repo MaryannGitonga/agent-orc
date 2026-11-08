@@ -49,7 +49,7 @@ func TestLoadTasksPutsTheNewestFirst(t *testing.T) {
 		}
 	}
 
-	tasks, _, err := loadTasks(store)
+	tasks, _, _, err := loadTasks(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestLoadTasksDoesNotWrite(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		if _, _, err := loadTasks(store); err != nil {
+		if _, _, _, err := loadTasks(store); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -272,5 +272,19 @@ func TestLogWindowSaysWhenItLeftOutputOut(t *testing.T) {
 	writeLines(t, layout.SupervisorLogFile("SHORT-1"), 5)
 	if got := supervisorLog(layout, "SHORT-1"); strings.Contains(got, "earlier output") {
 		t.Errorf("a log shown in full claims output was left out:\n%s", got)
+	}
+}
+
+// TestRefreshCarriesAStateDirItCannotRead covers the dashboard's own reload
+// reporting a broken state directory instead of drawing an empty table.
+func TestRefreshCarriesAStateDirItCannotRead(t *testing.T) {
+	layout := paths.New(t.TempDir())
+	// A file where the state directory should be.
+	if err := os.WriteFile(layout.State, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	msg, ok := newModel(layout).refresh()().(tasksMsg)
+	if !ok || msg.err == nil {
+		t.Errorf("refresh() = %+v, want a tasksMsg carrying the error", msg)
 	}
 }

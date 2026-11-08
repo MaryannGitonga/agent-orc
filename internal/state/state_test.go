@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -98,7 +100,7 @@ func TestListIsOrderedOldestFirst(t *testing.T) {
 		}
 	}
 
-	got, err := s.List()
+	got, _, err := s.List()
 	if err != nil {
 		t.Fatalf("List() = %v", err)
 	}
@@ -115,7 +117,7 @@ func TestListIsOrderedOldestFirst(t *testing.T) {
 
 func TestListOnAMissingDirectoryIsEmpty(t *testing.T) {
 	s := NewStore(filepath.Join(t.TempDir(), "not-created-yet"))
-	got, err := s.List()
+	got, _, err := s.List()
 	if err != nil {
 		t.Fatalf("List() = %v, want nil", err)
 	}
@@ -299,7 +301,7 @@ func TestDeleteLeavesTheLockInPlace(t *testing.T) {
 	}
 
 	// The record is gone even so, and the leftover lock is not mistaken for one.
-	tasks, err := store.List()
+	tasks, _, err := store.List()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,11 +380,272 @@ func TestListSkipsARecordThatVanishedMidListing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tasks, err := store.List()
+	tasks, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() = %v, want the missing record skipped", err)
 	}
 	if len(tasks) != 1 || tasks[0].ID != "KEPT-1" {
 		t.Errorf("List() = %v, want only KEPT-1", tasks)
+	}
+}
+
+// TestListReportsUnreadableRecordsAndKeepsTheRest covers one damaged file no
+// longer hiding every other task.
+func TestListReportsUnreadableRecordsAndKeepsTheRest(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(record("GOOD-1", time.Now().UTC())); err != nil {
+		t.Fatal(err)
+	}
+	writeRecord(t, dir, "TORN-1", `{"id": "TORN-1", "stat`)
+	writeRecord(t, dir, "NEWER-1", `{"id": "NEWER-1", "schema_version": 99}`)
+
+	tasks, bad, err := store.List()
+	if err != nil {
+		t.Fatalf("List() = %v, want the bad records reported, not a failure", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "GOOD-1" {
+		t.Errorf("tasks = %v, want only GOOD-1", tasks)
+	}
+	got := map[string]Unreadable{}
+	for _, u := range bad {
+		got[u.ID] = u
+	}
+	if len(bad) != 2 || got["TORN-1"].Err == nil || !errors.Is(got["NEWER-1"].Err, ErrNewerSchema) {
+		t.Fatalf("unreadable = %v, want TORN-1 and NEWER-1 with their reasons", bad)
+	}
+	if want := filepath.Join(dir, "TORN-1.json"); got["TORN-1"].Path != want {
+		t.Errorf("path = %q, want %q, so the user knows which file to fix", got["TORN-1"].Path, want)
+	}
+}
+
+func TestSaveStampsTheSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	r := record("V-1", time.Now().UTC())
+	r.SchemaVersion = 0
+	if err := store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "V-1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"schema_version": 1`)) {
+		t.Errorf("record = %s, want it to carry schema_version 1", data)
+	}
+}
+
+func TestLoadReadsARecordWithoutAVersionAsTheFirst(t *testing.T) {
+	dir := t.TempDir()
+	writeRecord(t, dir, "OLD-1", `{"id": "OLD-1", "status": "done"}`)
+	got, err := NewStore(dir).Load("OLD-1")
+	if err != nil {
+		t.Fatalf("Load() = %v, want a record from before versions to load", err)
+	}
+	if got.SchemaVersion != 1 || got.Status != StatusDone {
+		t.Errorf("record = schema %d, %s, want schema 1, done", got.SchemaVersion, got.Status)
+	}
+}
+
+// TestUpdateLeavesANewerRecordAlone covers why a newer record is refused:
+// rewriting it would drop the fields this build does not know.
+func TestUpdateLeavesANewerRecordAlone(t *testing.T) {
+	dir := t.TempDir()
+	const newer = `{"id": "NEW-1", "schema_version": 2, "status": "running", "a_later_field": "kept"}`
+	writeRecord(t, dir, "NEW-1", newer)
+
+	err := NewStore(dir).Update("NEW-1", func(k *Task) { k.Status = StatusStopped })
+	if !errors.Is(err, ErrNewerSchema) || !strings.Contains(err.Error(), "upgrade agent-orc") {
+		t.Fatalf("Update() = %v, want a refusal saying to upgrade", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "NEW-1.json")); string(data) != newer {
+		t.Errorf("record = %s, want it untouched", data)
+	}
+}
+
+func TestSweepTempRemovesOnlyAbandonedSaves(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(record("KEEP.1", time.Now().UTC())); err != nil {
+		t.Fatal(err)
+	}
+	// Named the way save names them, for an id that holds a dot itself.
+	abandoned, err := os.CreateTemp(dir, "KEEP.1.*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	abandoned.Close()
+	writeFile(t, filepath.Join(dir, "notes.tmp"), "not a save")
+
+	removed, err := store.SweepTemp()
+	if err != nil {
+		t.Fatalf("SweepTemp() = %v", err)
+	}
+	if len(removed) != 1 || removed[0] != filepath.Base(abandoned.Name()) {
+		t.Errorf("removed = %v, want only %s", removed, filepath.Base(abandoned.Name()))
+	}
+	for _, kept := range []string{"KEEP.1.json", "notes.tmp"} {
+		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
+			t.Errorf("%s was swept: %v", kept, err)
+		}
+	}
+}
+
+// TestSweepTempWaitsForASaveInProgress covers the sweep taking the task's lock
+// before removing a temporary file, so it never races a save.
+func TestSweepTempWaitsForASaveInProgress(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	lock, err := os.OpenFile(filepath.Join(dir, "BUSY-1.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	inProgress, err := os.CreateTemp(dir, "BUSY-1.*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inProgress.Close()
+
+	done := make(chan []string, 1)
+	go func() {
+		removed, _ := store.SweepTemp()
+		done <- removed
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(inProgress.Name()); err != nil {
+		t.Fatalf("the sweep removed a file while its save held the lock: %v", err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case removed := <-done:
+		if len(removed) != 1 {
+			t.Errorf("removed = %v, want the file once its save was gone", removed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sweep never finished after the lock was released")
+	}
+}
+
+func TestTempOwner(t *testing.T) {
+	for name, want := range map[string]string{
+		"PROJ-1.123456.tmp": "PROJ-1",
+		"a.b.c.42.tmp":      "a.b.c",
+		"PROJ-1.json":       "",
+		"notes.tmp":         "",
+		".42.tmp":           "",
+		"PROJ-1..tmp":       "",
+		"PROJ-1.12a.tmp":    "",
+	} {
+		if got := tempOwner(name); got != want {
+			t.Errorf("tempOwner(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func writeRecord(t *testing.T, dir, id, body string) {
+	t.Helper()
+	writeFile(t, filepath.Join(dir, id+".json"), body)
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncDirReportsAMissingDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "gone")
+	if err := syncDir(missing); err == nil || !strings.Contains(err.Error(), missing) {
+		t.Errorf("syncDir() = %v, want an error naming %s", err, missing)
+	}
+}
+
+func TestListAndSweepReportAStateDirTheyCannotRead(t *testing.T) {
+	// A file where the directory should be.
+	dir := filepath.Join(t.TempDir(), "state")
+	writeFile(t, dir, "")
+	store := NewStore(dir)
+	if _, _, err := store.List(); err == nil {
+		t.Error("List() = nil, want an error for a state directory it cannot read")
+	}
+	if _, err := store.SweepTemp(); err == nil {
+		t.Error("SweepTemp() = nil, want an error for a state directory it cannot read")
+	}
+}
+
+// TestSweepTempCarriesOnPastAFileItCannotRemove covers the sweep reporting
+// every failure rather than stopping at the first.
+func TestSweepTempCarriesOnPastAFileItCannotRemove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from a read-only directory")
+	}
+	dir := t.TempDir()
+	var names []string
+	for _, id := range []string{"A-1", "B-1"} {
+		// The locks exist already, so only the removals fail.
+		writeFile(t, filepath.Join(dir, id+".lock"), "")
+		f, err := os.CreateTemp(dir, id+".*.tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		names = append(names, filepath.Base(f.Name()))
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	removed, err := NewStore(dir).SweepTemp()
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want nothing from a read-only directory", removed)
+	}
+	for _, name := range names {
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("SweepTemp() = %v, want it to name %s", err, name)
+		}
+	}
+}
+
+// TestListReportsANegativeSchemaVersion covers a version migrate would count up
+// from forever, which would freeze every listing instead of being reported.
+func TestListReportsANegativeSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeRecord(t, dir, "NEG-1", `{"id": "NEG-1", "schema_version": -9223372036854775808}`)
+
+	done := make(chan []Unreadable, 1)
+	go func() {
+		_, bad, _ := NewStore(dir).List()
+		done <- bad
+	}()
+	select {
+	case bad := <-done:
+		if len(bad) != 1 || !strings.Contains(bad[0].Err.Error(), "invalid schema_version") {
+			t.Errorf("unreadable = %v, want NEG-1 reported as invalid", bad)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("List() is still migrating a negative schema_version after 5s")
+	}
+}
+
+func TestSaveRefusesToReplaceANewerRecord(t *testing.T) {
+	dir := t.TempDir()
+	const newer = `{"id": "NEW-1", "schema_version": 2, "a_later_field": "kept"}`
+	writeRecord(t, dir, "NEW-1", newer)
+
+	err := NewStore(dir).Save(record("NEW-1", time.Now().UTC()))
+	if !errors.Is(err, ErrNewerSchema) {
+		t.Fatalf("Save() = %v, want it to refuse a newer record", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "NEW-1.json")); string(data) != newer {
+		t.Errorf("record = %s, want it untouched", data)
 	}
 }

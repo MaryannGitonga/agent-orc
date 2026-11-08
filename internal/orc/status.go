@@ -30,10 +30,11 @@ func NewReporter(stateDir string, out io.Writer) *Reporter {
 // Status prints one row per task: the plain-table answer to "what is running",
 // for scripts and quick checks. agent-orc-tui is the live view.
 func (r *Reporter) Status() error {
-	tasks, err := r.store.List()
+	tasks, unreadable, err := r.store.List()
 	if err != nil {
 		return err
 	}
+	defer reportUnreadable(r.out, unreadable)
 	if len(tasks) == 0 {
 		fmt.Fprintln(r.out, "no tasks; dispatch one with 'agent-orc run'")
 		return nil
@@ -114,6 +115,14 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 		return t
 	}
 	return fresh
+}
+
+// reportUnreadable names each record that could not be read, and its file,
+// since agent-orc cannot load it to clean it up.
+func reportUnreadable(out io.Writer, unreadable []state.Unreadable) {
+	for _, u := range unreadable {
+		fmt.Fprintf(out, "\nunreadable  %s: %v\n  fix or remove %s\n", u.ID, u.Err, u.Path)
+	}
 }
 
 // processGoneNote explains a task reconciled from running to failed.

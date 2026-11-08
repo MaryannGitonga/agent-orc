@@ -496,7 +496,7 @@ func TestTaskWhoseProcessIsGoneIsMarked(t *testing.T) {
 		}
 	}
 
-	_, gone, err := loadTasks(store)
+	_, gone, _, err := loadTasks(store)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,7 +40,9 @@ type (
 	tasksMsg struct {
 		tasks []state.Task
 		gone  map[string]bool // ids whose recorded process is no longer there
-		err   error
+		// unreadable are records that could not be read, shown above the table.
+		unreadable []state.Unreadable
+		err        error
 	}
 	logMsg struct {
 		id   string
@@ -80,15 +82,16 @@ type model struct {
 	filter    textinput.Model
 	filtering bool
 
-	vp        viewport.Model
-	err       error
-	width     int
-	height    int
-	shownID   string // what the viewport is showing, so a switch to anything
-	shownPane pane   // else opens at the end rather than at an old offset
-	shownText string // and what it said, to tell when there is newer output
-	wrapWidth int    // the width it was wrapped for, so a resize can re-wrap
-	newer     bool   // newer output was held back while you read
+	vp         viewport.Model
+	err        error
+	unreadable []state.Unreadable
+	width      int
+	height     int
+	shownID    string // what the viewport is showing, so a switch to anything
+	shownPane  pane   // else opens at the end rather than at an old offset
+	shownText  string // and what it said, to tell when there is newer output
+	wrapWidth  int    // the width it was wrapped for, so a resize can re-wrap
+	newer      bool   // newer output was held back while you read
 
 	// reading counts log reads in flight, and pending remembers a request that
 	// arrived while one was running. One read at a time, whoever asked: the
@@ -133,8 +136,8 @@ func tick() tea.Cmd {
 // refresh re-reads every record.
 func (m model) refresh() tea.Cmd {
 	return func() tea.Msg {
-		tasks, gone, err := loadTasks(m.store)
-		return tasksMsg{tasks: tasks, gone: gone, err: err}
+		tasks, gone, unreadable, err := loadTasks(m.store)
+		return tasksMsg{tasks: tasks, gone: gone, unreadable: unreadable, err: err}
 	}
 }
 
@@ -228,7 +231,7 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 	case tasksMsg:
 		m.err = msg.err
 		if msg.err == nil {
-			m.tasks, m.gone = msg.tasks, msg.gone
+			m.tasks, m.gone, m.unreadable = msg.tasks, msg.gone, msg.unreadable
 		}
 		m.syncSelection()
 		return m, nil

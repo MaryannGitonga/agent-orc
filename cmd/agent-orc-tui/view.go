@@ -344,6 +344,14 @@ func (m model) renderTop() string {
 	if m.err != nil {
 		add(errStyle.Render("could not read state: " + m.err.Error()))
 	}
+	if len(m.unreadable) > 0 {
+		ids := make([]string, len(m.unreadable))
+		for i, u := range m.unreadable {
+			ids[i] = u.ID
+		}
+		add(errStyle.Render(fmt.Sprintf("%d task record(s) could not be read: %s; 'agent-orc status' says why",
+			len(ids), strings.Join(ids, ", "))))
+	}
 
 	cols := columnsFor(width)
 	add(dim.Render("  " + cols.header()))

@@ -36,15 +36,15 @@ const (
 	tailPartial                 // one line longer than logMaxLine, shown from part way
 )
 
-// loadTasks reads every task record.
+// loadTasks reads every task record, and notes the ones it could not.
 //
 // Deliberately not the status command's reconciliation pass: that writes, under
 // the task's lock, whenever it finds a record whose process group is gone. This
 // runs on a timer, and a dashboard must not take a write lock once a second.
-func loadTasks(store *state.Store) ([]state.Task, map[string]bool, error) {
-	tasks, err := store.List()
+func loadTasks(store *state.Store) ([]state.Task, map[string]bool, []state.Unreadable, error) {
+	tasks, unreadable, err := store.List()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Which records claim a process that is no longer there. `agent-orc status`
 	// corrects those by writing; this only notes them, so a task whose
@@ -60,7 +60,7 @@ func loadTasks(store *state.Store) ([]state.Task, map[string]bool, error) {
 	for i, j := 0, len(tasks)-1; i < j; i, j = i+1, j-1 {
 		tasks[i], tasks[j] = tasks[j], tasks[i]
 	}
-	return tasks, gone, nil
+	return tasks, gone, unreadable, nil
 }
 
 // agentLog renders the end of a task's own output the way `agent-orc logs`
