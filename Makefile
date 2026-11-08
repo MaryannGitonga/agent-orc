@@ -49,14 +49,18 @@ vet:
 lint:
 	$(GOLANGCI_LINT) run --timeout=5m
 
+# A tool states the Go it needs to build, which can be newer than ours, so its
+# install may fetch that toolchain even where the job pins GOTOOLCHAIN=local.
+TOOL_GO = GOTOOLCHAIN=auto $(GO)
+
 ## lint-install: install the pinned golangci-lint into GOPATH/bin
 lint-install:
-	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	$(TOOL_GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 ## release-tools: install the pinned GoReleaser and syft (for SBOMs) into GOPATH/bin
 release-tools:
-	$(GO) install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
-	$(GO) install github.com/anchore/syft/cmd/syft@$(SYFT_VERSION)
+	$(TOOL_GO) install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
+	$(TOOL_GO) install github.com/anchore/syft/cmd/syft@$(SYFT_VERSION)
 
 ## snapshot: build every release tarball into dist/ without publishing anything
 snapshot:
