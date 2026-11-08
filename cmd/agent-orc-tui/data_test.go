@@ -49,7 +49,7 @@ func TestLoadTasksPutsTheNewestFirst(t *testing.T) {
 		}
 	}
 
-	tasks, _, err := loadTasks(store)
+	tasks, _, _, err := loadTasks(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestLoadTasksDoesNotWrite(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		if _, _, err := loadTasks(store); err != nil {
+		if _, _, _, err := loadTasks(store); err != nil {
 			t.Fatal(err)
 		}
 	}

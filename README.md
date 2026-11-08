@@ -608,6 +608,13 @@ which is what `git branch -d` would ask and the wrong question for a task
 branch. It is also the one-step way to free an id you want to reuse; the new
 task starts with empty logs.
 
+A state file that cannot be read, because a crash or an edit damaged it or a
+newer agent-orc wrote it, does not hide the others: `status` and the dashboard
+show every other task and name the file, and `cleanup --all` cleans the rest
+and fails naming it. agent-orc cannot load it to clean it up, so fixing or
+removing it is up to you. Cleanup also removes any temporary `*.tmp` files a
+killed write left in `state/`.
+
 ## Development
 
 ```sh

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -340,6 +342,33 @@ func TestFooterCutsNotesThatCannotFit(t *testing.T) {
 	for _, width := range []int{30, 50, 80} {
 		if w := lipgloss.Width(footer(width, notes)); w > width {
 			t.Errorf("at width %d the footer is %d wide", width, w)
+		}
+	}
+}
+
+// TestViewNamesUnreadableRecordsAboveTheTable covers a damaged record no
+// longer blanking the dashboard.
+func TestViewNamesUnreadableRecordsAboveTheTable(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewStore(dir)
+	if err := store.Save(mkTask("PROJ-1", task.CLIClaude, state.StatusDone, "agent-orc/proj-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "TORN-1.json"), []byte(`{"id": "TO`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tasks, gone, unreadable, err := loadTasks(store)
+	if err != nil {
+		t.Fatalf("loadTasks() = %v, want the readable tasks despite TORN-1", err)
+	}
+
+	m := newModel(paths.New(t.TempDir()))
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	loaded, _ := sized.(model).Update(tasksMsg{tasks: tasks, gone: gone, unreadable: unreadable})
+	out := loaded.(model).View()
+	for _, want := range []string{"PROJ-1", "1 task record(s) could not be read: TORN-1", "'agent-orc status' says why"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("View() is missing %q:\n%s", want, out)
 		}
 	}
 }

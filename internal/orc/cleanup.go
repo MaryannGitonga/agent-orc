@@ -30,6 +30,27 @@ func NewCleaner(layout paths.Layout, out io.Writer) *Cleaner {
 // by this point it is normally pushed with a draft PR open against it. Cleanup
 // reclaims the checkout, not the results.
 func (c *Cleaner) Clean(id string, force, deleteBranch bool) error {
+	if err := c.clean(id, force, deleteBranch); err != nil {
+		return err
+	}
+	c.sweepTemp()
+	return nil
+}
+
+// sweepTemp removes leftover temporary state files. It is housekeeping, so a
+// failure is only reported.
+func (c *Cleaner) sweepTemp() {
+	removed, err := c.store.SweepTemp()
+	if len(removed) > 0 {
+		fmt.Fprintf(c.out, "removed %d leftover temporary state file(s)\n", len(removed))
+	}
+	if err != nil {
+		fmt.Fprintf(c.out, "warning: %v\n", err)
+	}
+}
+
+// clean is Clean without the sweep, so CleanAll sweeps once rather than per task.
+func (c *Cleaner) clean(id string, force, deleteBranch bool) error {
 	record, err := c.store.Load(id)
 	if err != nil {
 		return err
@@ -163,11 +184,12 @@ func unsafeToDelete(repo *gitx.Repo, record state.Task) string {
 
 // CleanAll removes every task that is no longer running.
 func (c *Cleaner) CleanAll(force, deleteBranch bool) error {
-	tasks, err := c.store.List()
+	tasks, unreadable, err := c.store.List()
 	if err != nil {
 		return err
 	}
-	if len(tasks) == 0 {
+	defer c.sweepTemp()
+	if len(tasks) == 0 && len(unreadable) == 0 {
 		fmt.Fprintln(c.out, "no tasks to clean up")
 		return nil
 	}
@@ -178,10 +200,15 @@ func (c *Cleaner) CleanAll(force, deleteBranch bool) error {
 			fmt.Fprintf(c.out, "%s  skipped; still %s\n", t.ID, t.Status)
 			continue
 		}
-		if err := c.Clean(t.ID, force, deleteBranch); err != nil {
+		if err := c.clean(t.ID, force, deleteBranch); err != nil {
 			fmt.Fprintf(c.out, "%s  not cleaned: %v\n", t.ID, err)
 			errs = append(errs, err)
 		}
+	}
+	// Not cleaned either: the unreadable record is what names its worktree.
+	for _, u := range unreadable {
+		fmt.Fprintf(c.out, "%s  not cleaned: %v; fix or remove %s\n", u.ID, u.Err, u.Path)
+		errs = append(errs, u.Err)
 	}
 	return errors.Join(errs...)
 }

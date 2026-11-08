@@ -66,9 +66,18 @@ func (s Status) HasProcess() bool {
 		s == StatusVerifying || s == StatusReviewing
 }
 
+// SchemaVersion is the record format this build writes. Raise it for any
+// change to the stored fields: an older build rewrites whole records, so it
+// would drop even a field it ignores.
+const SchemaVersion = 1
+
 // Task is the persisted record of one dispatched task.
 type Task struct {
 	task.Task `yaml:",inline"`
+
+	// SchemaVersion is the format the record was written in; 0 means before
+	// versions existed.
+	SchemaVersion int `json:"schema_version"`
 
 	Status     Status     `json:"status"`
 	PID        int        `json:"pid,omitempty"`
@@ -109,6 +118,17 @@ type Task struct {
 
 // ErrNotFound is returned when no state file exists for a task ID.
 var ErrNotFound = errors.New("no such task")
+
+// ErrNewerSchema means a newer agent-orc wrote the record. It is refused, not
+// read, so this build cannot drop fields it does not know when saving it.
+var ErrNewerSchema = errors.New("written by a newer agent-orc")
+
+// Unreadable is a record List found but could not read.
+type Unreadable struct {
+	ID   string
+	Path string
+	Err  error
+}
 
 // Store reads and writes task state under a directory.
 type Store struct {
@@ -167,11 +187,12 @@ func (s *Store) Save(t Task) error {
 
 // save writes t without taking the lock, for callers that already hold it. The
 // write goes to a temporary file first so a reader never sees a half-written
-// record.
+// record, and the file and directory are synced so it also survives a crash.
 func (s *Store) save(t Task) error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
+	t.SchemaVersion = SchemaVersion
 	data, err := json.MarshalIndent(t, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding state for %q: %w", t.ID, err)
@@ -187,11 +208,31 @@ func (s *Store) save(t Task) error {
 		tmp.Close()
 		return fmt.Errorf("writing state for %q: %w", t.ID, err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("syncing state for %q: %w", t.ID, err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing state file for %q: %w", t.ID, err)
 	}
 	if err := os.Rename(tmp.Name(), s.path(t.ID)); err != nil {
 		return fmt.Errorf("saving state for %q: %w", t.ID, err)
+	}
+	if err := syncDir(s.Dir); err != nil {
+		return fmt.Errorf("saving state for %q: %w", t.ID, err)
+	}
+	return nil
+}
+
+// syncDir flushes a directory's entries, so a rename into it survives a crash.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("opening %s to sync it: %w", dir, err)
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("syncing %s: %w", dir, err)
 	}
 	return nil
 }
@@ -209,7 +250,24 @@ func (s *Store) Load(id string) (Task, error) {
 	if err := json.Unmarshal(data, &t); err != nil {
 		return Task{}, fmt.Errorf("parsing state for %q: %w", id, err)
 	}
+	if t.SchemaVersion > SchemaVersion {
+		return Task{}, fmt.Errorf("state for %q is schema %d, %w that reads up to %d; upgrade agent-orc",
+			id, t.SchemaVersion, ErrNewerSchema, SchemaVersion)
+	}
+	migrate(&t)
 	return t, nil
+}
+
+// migrate brings an older record up to SchemaVersion, one version at a time.
+// Each new version adds a case filling in what it added.
+func migrate(t *Task) {
+	for t.SchemaVersion < SchemaVersion {
+		switch t.SchemaVersion {
+		case 0:
+			// Unversioned records are the first format.
+		}
+		t.SchemaVersion++
+	}
 }
 
 // Update loads a record, applies mutate to it and saves the result, all while
@@ -240,22 +298,25 @@ func (s *Store) UpdateIf(id string, mutate func(*Task) bool) error {
 	})
 }
 
-// List returns every record in the store, ordered by start time, newest last.
-func (s *Store) List() ([]Task, error) {
+// List returns every record, oldest first, and separately each one it could
+// not read, so one damaged file cannot hide every other task.
+func (s *Store) List() ([]Task, []Unreadable, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("listing state directory: %w", err)
+		return nil, nil, fmt.Errorf("listing state directory: %w", err)
 	}
 	var tasks []Task
+	var bad []Unreadable
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		t, err := s.Load(strings.TrimSuffix(name, ".json"))
+		id := strings.TrimSuffix(name, ".json")
+		t, err := s.Load(id)
 		// Removed between reading the directory and reading the record, which
 		// cleanup does all the time. It is one task fewer, not a failed
 		// listing: failing would blank a table that is read every second.
@@ -263,12 +324,70 @@ func (s *Store) List() ([]Task, error) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			bad = append(bad, Unreadable{ID: id, Path: s.path(id), Err: err})
+			continue
 		}
 		tasks = append(tasks, t)
 	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].StartedAt.Before(tasks[j].StartedAt) })
-	return tasks, nil
+	return tasks, bad, nil
+}
+
+// SweepTemp removes temporary files left by interrupted saves and returns their
+// names. It carries on past a failure, so names and an error can both come back.
+//
+// Each file is removed under its task's lock, which a save holds until its
+// rename, so a save in progress is never touched.
+func (s *Store) SweepTemp() ([]string, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("listing state directory: %w", err)
+	}
+	var removed []string
+	var errs []error
+	for _, e := range entries {
+		id := tempOwner(e.Name())
+		if e.IsDir() || id == "" {
+			continue
+		}
+		path := filepath.Join(s.Dir, e.Name())
+		err := s.withLock(id, func() error {
+			if err := os.Remove(path); err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return fmt.Errorf("removing %s: %w", path, err)
+			}
+			removed = append(removed, e.Name())
+			return nil
+		})
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return removed, errors.Join(errs...)
+}
+
+// tempOwner returns the task id in a save's id.<digits>.tmp name, or "" for any
+// other file. Ids may hold dots, so it cuts at the last one.
+func tempOwner(name string) string {
+	base, ok := strings.CutSuffix(name, ".tmp")
+	if !ok {
+		return ""
+	}
+	dot := strings.LastIndexByte(base, '.')
+	if dot <= 0 || dot == len(base)-1 {
+		return ""
+	}
+	for _, r := range base[dot+1:] {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return base[:dot]
 }
 
 // Delete removes the record for id. Deleting a missing record is not an error.
