@@ -69,7 +69,7 @@ func (s Status) HasProcess() bool {
 // SchemaVersion is the record format this build writes. Raise it for any
 // change to the stored fields: an older build rewrites whole records, so it
 // would drop even a field it ignores.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // Task is the persisted record of one dispatched task.
 type Task struct {
@@ -78,6 +78,8 @@ type Task struct {
 	// SchemaVersion is the format the record was written in; 0 means before
 	// versions existed.
 	SchemaVersion int `json:"schema_version"`
+	// RunID tells this dispatch apart from any other run under the same id.
+	RunID string `json:"run_id,omitempty"`
 
 	Status     Status     `json:"status"`
 	PID        int        `json:"pid,omitempty"`
@@ -114,6 +116,31 @@ type Task struct {
 	// TestsPassed is whether the last of those runs passed. Nil means the
 	// suite was never run, which is what a task with no test command gets.
 	TestsPassed *bool `json:"tests_passed,omitempty"`
+}
+
+// Run identifies one dispatch of a task id. The zero Run matches any record.
+type Run struct {
+	ID        string
+	StartedAt time.Time
+}
+
+// Run returns the dispatch this record belongs to.
+func (t Task) Run() Run { return Run{ID: t.RunID, StartedAt: t.StartedAt} }
+
+// IsZero reports whether r names no run.
+func (r Run) IsZero() bool { return r.ID == "" && r.StartedAt.IsZero() }
+
+// Matches reports whether t is still run r. The run id decides when both have
+// one; a run from before run ids existed falls back to its start time.
+func (r Run) Matches(t Task) bool {
+	switch {
+	case r.IsZero():
+		return true
+	case r.ID != "" && t.RunID != "":
+		return r.ID == t.RunID
+	default:
+		return t.StartedAt.Equal(r.StartedAt)
+	}
 }
 
 // ErrNotFound is returned when no state file exists for a task ID.
@@ -274,6 +301,9 @@ func migrate(t *Task) {
 		switch t.SchemaVersion {
 		case 0:
 			// Unversioned records are the first format.
+		case 1:
+			// Version 2 added run_id. Older runs have none and are told apart
+			// by started_at instead; see Run.Matches.
 		}
 		t.SchemaVersion++
 	}

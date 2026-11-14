@@ -18,6 +18,7 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/orc"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
 	"github.com/MaryannGitonga/agent-orc/internal/sanitize"
+	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 	"github.com/MaryannGitonga/agent-orc/internal/version"
 )
@@ -506,21 +507,27 @@ func cliNames() []string {
 // left out of the usage text.
 func superviseCmd(argv []string, out io.Writer) error {
 	if len(argv) < 1 || len(argv) > 2 {
-		return errors.New("usage: agent-orc supervise <task-id> [started-at]")
+		return errors.New("usage: agent-orc supervise <task-id> [run-id]")
 	}
 	// 'run' passes the run it means, so a task cleaned up and dispatched again
 	// in the meantime is left to its own supervisor. By hand there is nothing
 	// to disambiguate, and the task as it stands now is what is wanted.
-	var since time.Time
+	var run state.Run
 	if len(argv) == 2 {
-		var err error
-		if since, err = time.Parse(time.RFC3339Nano, argv[1]); err != nil {
-			return fmt.Errorf("parsing the started-at %q: %w", argv[1], err)
-		}
+		run = parseRun(argv[1])
 	}
 	layout, err := paths.Resolve()
 	if err != nil {
 		return err
 	}
-	return orc.NewSupervisor(layout, out).Supervise(argv[0], since)
+	return orc.NewSupervisor(layout, out).Supervise(argv[0], run)
+}
+
+// parseRun reads the run 'run' passed. Before run ids it passed the start time
+// instead, which a supervisor started across an upgrade may still receive.
+func parseRun(arg string) state.Run {
+	if started, err := time.Parse(time.RFC3339Nano, arg); err == nil {
+		return state.Run{StartedAt: started}
+	}
+	return state.Run{ID: arg}
 }

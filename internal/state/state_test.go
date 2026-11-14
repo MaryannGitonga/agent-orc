@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -431,20 +432,20 @@ func TestSaveStampsTheSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(data, []byte(`"schema_version": 1`)) {
-		t.Errorf("record = %s, want it to carry schema_version 1", data)
+	if want := fmt.Sprintf(`"schema_version": %d`, SchemaVersion); !bytes.Contains(data, []byte(want)) {
+		t.Errorf("record = %s, want it to carry %s", data, want)
 	}
 }
 
-func TestLoadReadsARecordWithoutAVersionAsTheFirst(t *testing.T) {
+func TestLoadMigratesARecordWithoutAVersion(t *testing.T) {
 	dir := t.TempDir()
 	writeRecord(t, dir, "OLD-1", `{"id": "OLD-1", "status": "done"}`)
 	got, err := NewStore(dir).Load("OLD-1")
 	if err != nil {
 		t.Fatalf("Load() = %v, want a record from before versions to load", err)
 	}
-	if got.SchemaVersion != 1 || got.Status != StatusDone {
-		t.Errorf("record = schema %d, %s, want schema 1, done", got.SchemaVersion, got.Status)
+	if got.SchemaVersion != SchemaVersion || got.Status != StatusDone {
+		t.Errorf("record = schema %d, %s, want schema %d, done", got.SchemaVersion, got.Status, SchemaVersion)
 	}
 }
 
@@ -452,7 +453,7 @@ func TestLoadReadsARecordWithoutAVersionAsTheFirst(t *testing.T) {
 // rewriting it would drop the fields this build does not know.
 func TestUpdateLeavesANewerRecordAlone(t *testing.T) {
 	dir := t.TempDir()
-	const newer = `{"id": "NEW-1", "schema_version": 2, "status": "running", "a_later_field": "kept"}`
+	const newer = `{"id": "NEW-1", "schema_version": 99, "status": "running", "a_later_field": "kept"}`
 	writeRecord(t, dir, "NEW-1", newer)
 
 	err := NewStore(dir).Update("NEW-1", func(k *Task) { k.Status = StatusStopped })
@@ -638,7 +639,7 @@ func TestListReportsANegativeSchemaVersion(t *testing.T) {
 
 func TestSaveRefusesToReplaceANewerRecord(t *testing.T) {
 	dir := t.TempDir()
-	const newer = `{"id": "NEW-1", "schema_version": 2, "a_later_field": "kept"}`
+	const newer = `{"id": "NEW-1", "schema_version": 99, "a_later_field": "kept"}`
 	writeRecord(t, dir, "NEW-1", newer)
 
 	err := NewStore(dir).Save(record("NEW-1", time.Now().UTC()))
@@ -647,5 +648,46 @@ func TestSaveRefusesToReplaceANewerRecord(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(dir, "NEW-1.json")); string(data) != newer {
 		t.Errorf("record = %s, want it untouched", data)
+	}
+}
+
+func TestRunMatches(t *testing.T) {
+	start := time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)
+	withID := Task{RunID: "run-a", StartedAt: start}
+	withoutID := Task{StartedAt: start}
+	tests := map[string]struct {
+		run  Run
+		rec  Task
+		want bool
+	}{
+		"the zero run matches anything":       {Run{}, withID, true},
+		"the same run id":                     {Run{ID: "run-a"}, withID, true},
+		"another run id at the same instant":  {Run{ID: "run-b", StartedAt: start}, withID, false},
+		"an older record, by its start time":  {Run{StartedAt: start}, withoutID, true},
+		"an older record, another start time": {Run{StartedAt: start.Add(time.Nanosecond)}, withoutID, false},
+		"a run id against an older record":    {Run{ID: "run-a", StartedAt: start}, withoutID, true},
+		"a start time against a newer record": {Run{StartedAt: start}, withID, true},
+	}
+	for name, tc := range tests {
+		if got := tc.run.Matches(tc.rec); got != tc.want {
+			t.Errorf("%s: Matches() = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// TestLoadMigratesAVersionOneRecord covers the first real migration: a record
+// from before run ids loads as the current version, matched by its start time.
+func TestLoadMigratesAVersionOneRecord(t *testing.T) {
+	dir := t.TempDir()
+	writeRecord(t, dir, "OLD-1", `{"id": "OLD-1", "schema_version": 1, "started_at": "2026-11-08T09:00:00Z"}`)
+	got, err := NewStore(dir).Load("OLD-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != SchemaVersion || got.RunID != "" {
+		t.Errorf("record = schema %d, run %q, want schema %d with no run id", got.SchemaVersion, got.RunID, SchemaVersion)
+	}
+	if !got.Run().Matches(got) {
+		t.Error("a migrated record does not match its own run")
 	}
 }
