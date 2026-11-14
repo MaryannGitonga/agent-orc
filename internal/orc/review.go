@@ -40,7 +40,7 @@ func NewReviewer(layout paths.Layout, out io.Writer) *Reviewer {
 // which is what `agent-orc review` builds: that one acts on whatever the id
 // names now, and there is no earlier run for it to have lost.
 func (r *Reviewer) mayContinue(id string) error {
-	if r.scope.since.IsZero() {
+	if r.scope.run.IsZero() {
 		return nil
 	}
 	if reason := r.scope.halted(id); reason != nil {

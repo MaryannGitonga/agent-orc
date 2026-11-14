@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/config"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
@@ -116,10 +117,15 @@ func TestCleanupNeedsExactlyOneTarget(t *testing.T) {
 	}
 }
 
-func TestSuperviseRejectsAMalformedStartTime(t *testing.T) {
-	err := dispatch([]string{"supervise", "A", "yesterday"}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), `"yesterday"`) {
-		t.Errorf("supervise with a bad started-at = %v, want an error naming it", err)
+// TestParseRunReadsBothForms covers a supervisor started across an upgrade: an
+// older 'run' passed the start time where a newer one passes the run id.
+func TestParseRunReadsBothForms(t *testing.T) {
+	started := "2026-11-08T09:00:00.123456789Z"
+	if got := parseRun(started); got.ID != "" || got.StartedAt.Format(time.RFC3339Nano) != started {
+		t.Errorf("parseRun(%q) = %+v, want it read as a start time", started, got)
+	}
+	if got := parseRun("6f1c2b0e-3a4d-4c5e-9f60-718293a4b5c6"); got.ID != "6f1c2b0e-3a4d-4c5e-9f60-718293a4b5c6" || !got.StartedAt.IsZero() {
+		t.Errorf("parseRun(run id) = %+v, want it read as a run id", got)
 	}
 }
 

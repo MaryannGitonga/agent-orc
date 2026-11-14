@@ -30,7 +30,7 @@ func TestStaleWriteCannotClobberARedispatchedTask(t *testing.T) {
 	dir := t.TempDir()
 	store := state.NewStore(dir)
 	firstRun := time.Now().UTC().Add(-time.Hour)
-	stale := scopeTo(store, firstRun)
+	stale := scopeTo(store, state.Run{StartedAt: firstRun})
 
 	for i := 0; i < 300; i++ {
 		if err := store.Save(state.Task{
@@ -198,7 +198,7 @@ func TestHaltedNamesTheReasonThisRunIsOver(t *testing.T) {
 	dir := t.TempDir()
 	store := state.NewStore(dir)
 	firstRun := time.Now().UTC().Add(-time.Hour)
-	mine := scopeTo(store, firstRun)
+	mine := scopeTo(store, state.Run{StartedAt: firstRun})
 
 	save := func(status state.Status, startedAt time.Time) {
 		t.Helper()
@@ -233,7 +233,7 @@ func TestHaltedNamesTheReasonThisRunIsOver(t *testing.T) {
 	save(state.StatusRunning, time.Now().UTC())
 	wantReason("a replaced run", mine.halted("S"), "belongs to a later run")
 	// An unscoped caller is asking about whatever the id names now.
-	if reason := scopeTo(store, time.Time{}).halted("S"); reason != nil {
+	if reason := scopeTo(store, state.Run{}).halted("S"); reason != nil {
 		t.Errorf("halted() = %v unscoped, for a running task", reason)
 	}
 
@@ -272,7 +272,7 @@ func TestSuperviseRefusesARunItWasNotStartedFor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := NewSupervisor(layout, io.Discard).Supervise("Z", dispatchedFor)
+	err := NewSupervisor(layout, io.Discard).Supervise("Z", state.Run{StartedAt: dispatchedFor})
 	if err == nil {
 		t.Fatal("Supervise() = nil, want it to refuse a record from another run")
 	}
@@ -338,7 +338,7 @@ func TestSuperviseStopsAnAgentItNoLongerOwns(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- NewSupervisor(layout, io.Discard).Supervise("K", dispatchedFor) }()
+	go func() { done <- NewSupervisor(layout, io.Discard).Supervise("K", state.Run{StartedAt: dispatchedFor}) }()
 
 	// Long enough for the agent to have started and written its pid.
 	var agentPID int
@@ -394,7 +394,7 @@ func TestHaltedRidesOutAMomentaryReadFailure(t *testing.T) {
 	dir := t.TempDir()
 	store := state.NewStore(dir)
 	firstRun := time.Now().UTC().Add(-time.Hour)
-	mine := scopeTo(store, firstRun)
+	mine := scopeTo(store, state.Run{StartedAt: firstRun})
 
 	if err := store.Save(state.Task{
 		Task:      task.Task{ID: "R", CLI: task.CLIClaude},

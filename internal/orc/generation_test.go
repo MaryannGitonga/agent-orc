@@ -37,7 +37,7 @@ func TestSupervisorWritesOnlyToItsOwnRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stale := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, firstRun)}
+	stale := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, state.Run{StartedAt: firstRun})}
 	if err := stale.scope.update("PROJ-1", func(k *state.Task) {
 		k.Status = state.StatusDone
 		k.PID = 0
@@ -54,7 +54,7 @@ func TestSupervisorWritesOnlyToItsOwnRun(t *testing.T) {
 	}
 
 	// The supervisor that does own the run still writes.
-	own := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, current.StartedAt)}
+	own := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, state.Run{StartedAt: current.StartedAt})}
 	if err := own.scope.update("PROJ-1", func(k *state.Task) { k.Status = state.StatusDone }); err != nil {
 		t.Fatalf("update() = %v", err)
 	}
@@ -78,7 +78,7 @@ func TestPublisherWritesOnlyToItsOwnRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stale := &Publisher{store: store, out: io.Discard, scope: scopeTo(store, current.StartedAt.Add(-time.Hour))}
+	stale := &Publisher{store: store, out: io.Discard, scope: scopeTo(store, state.Run{StartedAt: current.StartedAt.Add(-time.Hour)})}
 	if err := stale.scope.update("PROJ-2", func(k *state.Task) { k.PRURL = "https://example.invalid/1" }); err != nil {
 		t.Fatalf("update() = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestSupervisorDoesNotPublishALaterRun(t *testing.T) {
 		layout: paths.New(dir),
 		store:  store,
 		out:    &log,
-		scope:  scopeTo(store, current.StartedAt.Add(-time.Hour)),
+		scope:  scopeTo(store, state.Run{StartedAt: current.StartedAt.Add(-time.Hour)}),
 	}
 	stale.publish("PROJ-3", state.Task{
 		Task:     task.Task{ID: "PROJ-3", Repo: filepath.Join(dir, "no-such-repo")},
@@ -173,7 +173,7 @@ func TestPublishRefusesARecordFromAnotherRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := &Publisher{store: store, out: io.Discard, scope: scopeTo(store, current.StartedAt.Add(-time.Hour))}
+	p := &Publisher{store: store, out: io.Discard, scope: scopeTo(store, state.Run{StartedAt: current.StartedAt.Add(-time.Hour)})}
 	err := p.Publish("PROJ-4")
 	if !errors.Is(err, ErrRunReplaced) {
 		t.Fatalf("Publish() = %v, want %v before any git ran", err, ErrRunReplaced)
@@ -182,7 +182,7 @@ func TestPublishRefusesARecordFromAnotherRun(t *testing.T) {
 	// And a publisher scoped to this run, or to none at all, gets past the
 	// check and fails on the repository instead, which is how we know the
 	// guard is the reason for the refusal above and not the missing repo.
-	p = &Publisher{store: store, out: io.Discard, scope: scopeTo(store, current.StartedAt)}
+	p = &Publisher{store: store, out: io.Discard, scope: scopeTo(store, state.Run{StartedAt: current.StartedAt})}
 	if err := p.Publish("PROJ-4"); errors.Is(err, ErrRunReplaced) {
 		t.Errorf("Publish() = %v, want the owning run to get past the check", err)
 	}
@@ -205,7 +205,7 @@ func TestMarkKeepsFinishedAtHonest(t *testing.T) {
 	if err := store.Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, rec.StartedAt)}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, state.Run{StartedAt: rec.StartedAt})}
 
 	// A phase that is still working has not finished, whatever was stamped
 	// when its agent exited.
@@ -251,7 +251,7 @@ func TestSuccessClearsAnEarlierFailure(t *testing.T) {
 	if err := store.Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, rec.StartedAt)}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, state.Run{StartedAt: rec.StartedAt})}
 
 	s.mark("PROJ-6", state.StatusDone, "")
 	got, err := store.Load("PROJ-6")
@@ -287,7 +287,7 @@ func TestMarkDoesNotUndoAStop(t *testing.T) {
 	if err := store.Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, rec.StartedAt)}
+	s := &Supervisor{layout: paths.New(dir), store: store, out: io.Discard, scope: scopeTo(store, state.Run{StartedAt: rec.StartedAt})}
 
 	// Everything the supervisor would go on to record after the gates.
 	for _, next := range []state.Status{
@@ -332,7 +332,7 @@ func TestReviewRoundsStopForALaterRun(t *testing.T) {
 	}
 
 	r := NewReviewer(layout, io.Discard)
-	r.scope = scopeTo(store, current.StartedAt.Add(-time.Hour))
+	r.scope = scopeTo(store, state.Run{StartedAt: current.StartedAt.Add(-time.Hour)})
 	held := current
 	approved, err := r.Rounds(&held)
 	if approved {
@@ -347,7 +347,7 @@ func TestReviewRoundsStopForALaterRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = NewReviewer(layout, io.Discard)
-	r.scope = scopeTo(state.NewStore(layout.State), current.StartedAt)
+	r.scope = scopeTo(state.NewStore(layout.State), state.Run{StartedAt: current.StartedAt})
 	held = current
 	if _, err := r.Rounds(&held); err == nil || !strings.Contains(err.Error(), "was stopped") {
 		t.Errorf("Rounds() = %v, want it to decline a stopped task", err)

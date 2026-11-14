@@ -16,22 +16,21 @@ import (
 // working on a task's behalf holds one of these, so a write only lands while
 // the id still names the run it started on.
 //
-// A zero since is unscoped, which is what a command a human typed gets: it acts
+// A zero run is unscoped, which is what a command a human typed gets: it acts
 // on whatever the id names now.
 type runScope struct {
 	store *state.Store
-	since time.Time
+	run   state.Run
 }
 
-// scopeTo returns a scope over store, tied to the dispatch that began at since.
-// A zero since is unscoped.
-func scopeTo(store *state.Store, since time.Time) runScope {
-	return runScope{store: store, since: since}
+// scopeTo returns a scope over store, tied to run. A zero run is unscoped.
+func scopeTo(store *state.Store, run state.Run) runScope {
+	return runScope{store: store, run: run}
 }
 
 // owns reports whether a record is still the run this scope belongs to.
 func (s runScope) owns(rec state.Task) bool {
-	return s.since.IsZero() || rec.StartedAt.Equal(s.since)
+	return s.run.Matches(rec)
 }
 
 // update applies mutate unless the id has moved on to a later run.
