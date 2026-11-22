@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -27,6 +28,7 @@ type Cmd struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	limit  time.Duration
+	group  bool
 }
 
 // Command is exec.Command with Limit applied.
@@ -43,6 +45,16 @@ func Within(limit time.Duration, name string, args ...string) *Cmd {
 	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- callers pass fixed tool names
 	cmd.WaitDelay = waitDelay
 	return &Cmd{Cmd: cmd, ctx: ctx, cancel: cancel, limit: limit}
+}
+
+// InGroup runs the command in a process group of its own and kills the whole
+// group at the limit, for one whose children must not outlive it. Not for a
+// command that may prompt on the terminal, which a separate group cannot read.
+func (c *Cmd) InGroup() *Cmd {
+	c.group = true
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
+	return c
 }
 
 // Run is exec.Cmd.Run, saying so when the limit ended it.
@@ -66,8 +78,24 @@ func (c *Cmd) CombinedOutput() ([]byte, error) {
 }
 
 func (c *Cmd) explain(err error) error {
-	if err != nil && errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
+	timedOut := errors.Is(c.ctx.Err(), context.DeadlineExceeded)
+	if timedOut && c.group && c.Process != nil {
+		c.awaitGroup()
+	}
+	if err != nil && timedOut {
 		return fmt.Errorf("%s timed out after %s: %w", filepath.Base(c.Path), c.limit, err)
 	}
 	return err
+}
+
+// awaitGroup waits briefly for a killed group's members to go, so whatever the
+// caller does next, such as rolling back, does not race them.
+func (c *Cmd) awaitGroup() {
+	deadline := time.Now().Add(waitDelay)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(-c.Process.Pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

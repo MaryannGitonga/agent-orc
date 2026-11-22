@@ -62,8 +62,10 @@ func (r Rewriter) Run() (int, error) {
 	// --rebase-merges because this pass rewrites commit messages, not history
 	// shape: a plain rebase would flatten any merge the branch contains and
 	// silently change the topology it was asked only to clean up.
+	// In a group of its own, so a timeout also ends the sanitize-commit and the
+	// amend it runs, before the rollback below.
 	cmd := bounded.Command("git", "rebase", "--force-rebase", "--rebase-merges",
-		"--exec", quoteForExec(r.Self)+" sanitize-commit", r.Base)
+		"--exec", quoteForExec(r.Self)+" sanitize-commit", r.Base).InGroup()
 	cmd.Dir = r.Worktree
 	cmd.Env = append(os.Environ(),
 		EnvPatterns+"="+strings.Join(r.Patterns, "\n"),
@@ -79,7 +81,10 @@ func (r Rewriter) Run() (int, error) {
 	if err := cmd.Run(); err != nil {
 		abort := bounded.Command("git", "rebase", "--abort")
 		abort.Dir = r.Worktree
-		_ = abort.Run()
+		if aerr := abort.Run(); aerr != nil {
+			return 0, fmt.Errorf("rewriting commit messages on the task branch: %w: %s; rolling it back also failed, so %s is mid-rebase: %w",
+				err, strings.TrimSpace(stderr.String()), r.Worktree, aerr)
+		}
 		return 0, fmt.Errorf("rewriting commit messages on the task branch: %w: %s",
 			err, strings.TrimSpace(stderr.String()))
 	}

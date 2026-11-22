@@ -1,7 +1,9 @@
 package bounded
 
 import (
+	"errors"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -41,5 +43,22 @@ func TestAFailureWithinTheLimitIsNotCalledATimeout(t *testing.T) {
 	err := Within(time.Minute, "false").Run()
 	if err == nil || strings.Contains(err.Error(), "timed out") {
 		t.Errorf("Run() = %v, want the plain exit error", err)
+	}
+}
+
+// TestInGroupEndsTheCommandsChildrenToo covers the rebase: a timeout must also
+// end the sanitize-commit and amend it runs, before anything rolls back.
+func TestInGroupEndsTheCommandsChildrenToo(t *testing.T) {
+	start := time.Now()
+	cmd := Within(100*time.Millisecond, "sh", "-c", "sleep 30 & sleep 30").InGroup()
+	err := cmd.Run()
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Run() = %v, want a timeout", err)
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Errorf("the group is still there after Run() returned: %v", err)
+	}
+	if took := time.Since(start); took > waitDelay {
+		t.Errorf("Run() took %s, want the group killed rather than waited out", took)
 	}
 }
