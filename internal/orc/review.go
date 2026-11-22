@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
+	"github.com/MaryannGitonga/agent-orc/internal/bounded"
 	"github.com/MaryannGitonga/agent-orc/internal/gitx"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
 	"github.com/MaryannGitonga/agent-orc/internal/review"
@@ -316,7 +317,7 @@ func lastLines(s string, n int) string {
 
 // runGit runs a git command in dir and returns its combined output.
 func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := bounded.Command("git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err

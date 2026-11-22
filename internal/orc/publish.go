@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 
+	"github.com/MaryannGitonga/agent-orc/internal/bounded"
 	"github.com/MaryannGitonga/agent-orc/internal/forge"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
 	"github.com/MaryannGitonga/agent-orc/internal/sanitize"
@@ -309,7 +309,7 @@ func (p *Publisher) identity(worktree string) (sanitize.Signature, error) {
 
 // gitConfig reads one config value, returning "" when it is not set.
 func gitConfig(worktree, key string) string {
-	cmd := exec.Command("git", "config", "--get", key)
+	cmd := bounded.Command("git", "config", "--get", key)
 	cmd.Dir = worktree
 	out, err := cmd.Output()
 	if err != nil {
