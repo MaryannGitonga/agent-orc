@@ -460,3 +460,35 @@ func TestDoneIsRecordedOnceTheSupervisorIsFinished(t *testing.T) {
 		t.Errorf("the supervisor did not leave the task for its last step to finish:\n%s", log)
 	}
 }
+
+// TestStatusFindsATaskWhoseSupervisorWasKilled covers orphan detection with real
+// processes: the agent kills its own supervisor and exits, and nothing is left
+// to record the outcome.
+func TestStatusFindsATaskWhoseSupervisorWasKilled(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), "kill -9 $PPID")
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "ORPHAN-1", "--repo", repo, "--cli", "claude", "--prompt", "do it", "--no-auto-pr"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		out, err := orcRun(t, home, stub, "status")
+		if err != nil {
+			t.Fatalf("agent-orc status = %v\n%s", err, out)
+		}
+		if strings.Contains(out, "interrupted") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("status never reported the task interrupted:\n%s", out)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	got := loadRecord(t, home, "ORPHAN-1")
+	if !strings.Contains(got.Error, "agent-orc/orphan-1") {
+		t.Errorf("error = %q, want it to name the branch the work is on", got.Error)
+	}
+}

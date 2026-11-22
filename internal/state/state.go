@@ -42,6 +42,9 @@ const (
 	// reviewer errored or its verdict was unreadable. The work is committed on
 	// its branch either way, and `agent-orc review` retries.
 	StatusReviewFailed Status = "review_failed"
+	// StatusInterrupted means the supervisor died before finishing, so nothing
+	// will move the task on; the work so far is on its branch.
+	StatusInterrupted Status = "interrupted"
 	// StatusPolicyViolation means the agent did something it was told not to
 	// by pushing its branch or opening its own PR, so the change did not go
 	// through agent-orc's sanitize-then-draft path.
@@ -453,7 +456,8 @@ func (s *Store) Delete(id string) error {
 // which run it meant. Deleting a record that is already gone is not an error.
 func (s *Store) DeleteIf(id string, want func(Task) bool) (deleted bool, err error) {
 	err = s.withLock(id, func() error {
-		switch cur, err := s.Load(id); {
+		cur, err := s.Load(id)
+		switch {
 		case errors.Is(err, ErrNotFound):
 			return nil
 		case err != nil:
@@ -464,8 +468,61 @@ func (s *Store) DeleteIf(id string, want func(Task) bool) (deleted bool, err err
 		if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("deleting state for %q: %w", id, err)
 		}
+		if cur.RunID != "" {
+			_ = os.Remove(s.liveFile(id, cur.RunID))
+		}
 		deleted = true
 		return nil
 	})
 	return deleted, err
+}
+
+// liveFile is where a run's supervisor holds its liveness lock.
+func (s *Store) liveFile(id, runID string) string {
+	return filepath.Join(s.Dir, id+"."+runID+".live")
+}
+
+// HoldRun takes the liveness lock for t's run, for the supervisor to keep until
+// it exits. The kernel drops the lock when the process dies, however it dies.
+func (s *Store) HoldRun(t Task) (release func(), err error) {
+	if t.RunID == "" {
+		return func() {}, nil
+	}
+	var f *os.File
+	// Created and locked under the task's lock, so a check made under it never
+	// sees the file before it is held.
+	err = s.withLock(t.ID, func() error {
+		var err error
+		if f, err = os.OpenFile(s.liveFile(t.ID, t.RunID), os.O_CREATE|os.O_RDWR, 0o644); err != nil {
+			return fmt.Errorf("creating the liveness lock for %q: %w", t.ID, err)
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+			f.Close()
+			return fmt.Errorf("taking the liveness lock for %q: %w", t.ID, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return func() { f.Close() }, nil
+}
+
+// SupervisorAlive reports whether t's supervisor still holds its liveness lock,
+// and whether that can be known: not for a run from before run ids, nor for one
+// whose supervisor has not started yet.
+func (s *Store) SupervisorAlive(t Task) (alive, known bool) {
+	if t.RunID == "" {
+		return false, false
+	}
+	f, err := os.Open(s.liveFile(t.ID, t.RunID))
+	if err != nil {
+		return false, false
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		return errors.Is(err, syscall.EWOULDBLOCK), errors.Is(err, syscall.EWOULDBLOCK)
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false, true
 }

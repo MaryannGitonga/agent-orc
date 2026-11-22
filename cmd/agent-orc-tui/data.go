@@ -51,7 +51,7 @@ func loadTasks(store *state.Store) ([]state.Task, map[string]bool, []state.Unrea
 	// supervisor was killed is not drawn as though it were still working.
 	gone := map[string]bool{}
 	for _, t := range tasks {
-		if !orc.TaskAlive(t) {
+		if !orc.TaskAlive(store, t) {
 			gone[t.ID] = true
 		}
 	}

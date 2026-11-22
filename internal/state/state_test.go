@@ -711,3 +711,55 @@ func TestUpdateKeepsAnOlderRunReadableToItsSupervisor(t *testing.T) {
 		t.Errorf("record = %s, want the update written as schema 1", data)
 	}
 }
+
+func TestSupervisorAliveFollowsTheLock(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	r := record("LIVE-1", time.Now().UTC())
+	r.RunID = "run-a"
+	if err := store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	// Not started yet: nothing to judge by.
+	if alive, known := store.SupervisorAlive(r); alive || known {
+		t.Errorf("before HoldRun = %v, %v, want unknown", alive, known)
+	}
+	release, err := store.HoldRun(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alive, known := store.SupervisorAlive(r); !alive || !known {
+		t.Errorf("while held = %v, %v, want alive", alive, known)
+	}
+	release()
+	if alive, known := store.SupervisorAlive(r); alive || !known {
+		t.Errorf("after release = %v, %v, want known dead", alive, known)
+	}
+
+	// A run from before run ids cannot be judged this way at all.
+	r.RunID = ""
+	if alive, known := store.SupervisorAlive(r); alive || known {
+		t.Errorf("without a run id = %v, %v, want unknown", alive, known)
+	}
+}
+
+func TestDeleteRemovesTheLivenessFile(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	r := record("LIVE-2", time.Now().UTC())
+	r.RunID = "run-b"
+	if err := store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.HoldRun(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := store.Delete("LIVE-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "LIVE-2.run-b.live")); !os.IsNotExist(err) {
+		t.Errorf("the liveness file survived the record: %v", err)
+	}
+}

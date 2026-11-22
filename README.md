@@ -349,6 +349,7 @@ waiting for will never appear.
 | `publish_failed` | no draft PR was opened: the chain stopped part way, or the agent committed nothing |
 | `failed` | the agent exited non-zero or never launched, or the test command never passed |
 | `stopped` | you killed it with `agent-orc stop` |
+| `interrupted` | its supervisor died before finishing, after a reboot or a kill; the work is on its branch, and if it was publishing, `agent-orc pr <id>` finishes the job |
 | `reviewed` | an agentic review round approved the branch |
 | `review_failed` | an automatic review could not finish; the work is on its branch, retry with `agent-orc review` |
 | `policy_violation` | the agent pushed its own branch, bypassing sanitization |
