@@ -16,6 +16,7 @@ type fullRecord struct {
 	record
 	PRURL            string `json:"pr_url"`
 	RewrittenCommits int    `json:"rewritten_commits"`
+	PushedSHA        string `json:"pushed_sha"`
 }
 
 func loadRecord(t *testing.T, home, id string) fullRecord {
@@ -830,5 +831,100 @@ func TestPRFinishesAPublishInterruptedMidPush(t *testing.T) {
 				t.Errorf("status = %q, want policy_violation with nothing to recognise the push by", got.Status)
 			}
 		})
+	}
+}
+
+// prePushHook installs a pre-push hook in repo running body, so a test can act
+// at the moment agent-orc pushes.
+func prePushHook(t *testing.T, repo, body string) {
+	t.Helper()
+	hook := filepath.Join(repo, ".git", "hooks", "pre-push")
+	write(t, hook, "#!/bin/sh\n"+body+"\n")
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// interruptMidPush rewrites id's record into what a supervisor killed between
+// its push landing and recording it leaves: the checkpoint and nothing else.
+func interruptMidPush(t *testing.T, home, id string) {
+	t.Helper()
+	path := filepath.Join(home, "state", id+".json")
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(readFile(t, path)), &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["pushing_sha"], raw["schema_version"], raw["status"] = raw["pushed_sha"], 3, "interrupted"
+	delete(raw, "pushed_sha")
+	data, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, string(data))
+}
+
+// TestTheCheckpointIsWrittenBeforeThePush covers the order the recovery relies
+// on: the record names the commit before any of it can reach the remote.
+func TestTheCheckpointIsWrittenBeforeThePush(t *testing.T) {
+	repo, _ := initRepoWithRemote(t)
+	home := t.TempDir()
+	atPush := filepath.Join(t.TempDir(), "at-push.json")
+	prePushHook(t, repo, "cp \"$AGENT_ORC_HOME/state/HOOK-1.json\" '"+atPush+"'")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), dirtyCommit)
+	stubInto(t, stub, "gh", filepath.Join(t.TempDir(), "gh"), `printf 'https://example.com/pr/1\n'`)
+
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "HOOK-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "HOOK-1", "done", "publish_failed", "failed")
+
+	var seen struct {
+		Schema  int    `json:"schema_version"`
+		Pushing string `json:"pushing_sha"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, atPush)), &seen); err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(git(t, repo, "rev-parse", "agent-orc/hook-1"))
+	if seen.Pushing != head || seen.Schema != 3 {
+		t.Errorf("at the push the record had pushing_sha %q, schema %d; want %q, schema 3", seen.Pushing, seen.Schema, head)
+	}
+}
+
+// TestAConfirmedPushSurvivesAFailedRetry covers a retry that recognises its
+// earlier push by the checkpoint and then fails pushing something newer: the
+// earlier push must stay on record, or the next retry calls it the agent's.
+func TestAConfirmedPushSurvivesAFailedRetry(t *testing.T) {
+	repo, _ := initRepoWithRemote(t)
+	home := t.TempDir()
+	ghReceipt := filepath.Join(t.TempDir(), "gh")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), dirtyCommit)
+	stubInto(t, stub, "gh", ghReceipt, "echo 'gh: not authenticated' >&2\nexit 1")
+	if out, err := orcRun(t, home, stub, "run",
+		"--id", "AGAIN-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	rec := waitForStatus(t, home, "AGAIN-1", "publish_failed")
+	first := strings.TrimSpace(git(t, repo, "rev-parse", "agent-orc/again-1"))
+	interruptMidPush(t, home, "AGAIN-1")
+
+	// A newer local commit, whose push fails.
+	write(t, filepath.Join(rec.Worktree, "more.txt"), "more\n")
+	git(t, rec.Worktree, "add", ".")
+	git(t, rec.Worktree, "commit", "--no-gpg-sign", "-m", "fix: more")
+	prePushHook(t, repo, "exit 1")
+	if out, err := orcRun(t, home, stub, "pr", "AGAIN-1"); err == nil {
+		t.Fatalf("agent-orc pr with a failing push = nil\n%s", out)
+	}
+	if got := loadRecord(t, home, "AGAIN-1"); got.PushedSHA != first {
+		t.Fatalf("pushed_sha = %q after the failed push, want the confirmed %q", got.PushedSHA, first)
+	}
+
+	prePushHook(t, repo, "exit 0")
+	stubInto(t, stub, "gh", ghReceipt, `printf 'https://example.com/pr/9\n'`)
+	out, err := orcRun(t, home, stub, "pr", "AGAIN-1")
+	if got := loadRecord(t, home, "AGAIN-1"); err != nil || got.Status != "done" {
+		t.Errorf("agent-orc pr = %v, status %q, want done\n%s", err, got.Status, out)
 	}
 }

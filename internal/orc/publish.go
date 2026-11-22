@@ -237,6 +237,13 @@ func (p *Publisher) checkAgentDidNotPublish(record *state.Task) error {
 	// Or the commit it was pushing when interrupted: that push began only after
 	// this check passed, with the agent already gone, so the branch is its own.
 	if record.PushingSHA != "" && remoteSHA == record.PushingSHA {
+		// Recorded as pushed now, before a new checkpoint can replace it.
+		if err := p.scope.update(record.ID, func(k *state.Task) {
+			k.PushedSHA, k.PushingSHA = remoteSHA, ""
+		}); err != nil {
+			return err
+		}
+		record.PushedSHA, record.PushingSHA = remoteSHA, ""
 		return nil
 	}
 	if uerr := p.scope.update(record.ID, func(k *state.Task) {
