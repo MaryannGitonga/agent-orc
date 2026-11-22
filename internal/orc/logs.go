@@ -96,7 +96,7 @@ func (r *Reporter) copyLog(f *os.File, out io.Writer, id string, record state.Ta
 		// open here refers to the old one, which was unlinked and will never
 		// grow again. The record would look active forever, so following it
 		// would hang on a file nothing writes to.
-		reused := err == nil && !current.StartedAt.Equal(record.StartedAt)
+		reused := err == nil && !record.Run().Matches(current)
 		if err != nil || reused || !current.Status.Active() {
 			// One last read, so nothing written between the final check and
 			// the process exiting is lost.

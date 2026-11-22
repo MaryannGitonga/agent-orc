@@ -15,6 +15,7 @@ import (
 // record mirrors the fields of the on-disk state file this test asserts on.
 type record struct {
 	ID          string `json:"id"`
+	RunID       string `json:"run_id"`
 	Branch      string `json:"branch"`
 	Status      string `json:"status"`
 	Worktree    string `json:"worktree"`
@@ -143,6 +144,10 @@ func TestRunDispatchesATaskEndToEnd(t *testing.T) {
 	}
 	if want := "agent-orc/proj-1"; got.Branch != want {
 		t.Errorf("branch = %q, want the default %q", got.Branch, want)
+	}
+	// Reaching done means the supervisor accepted the run id it was started with.
+	if got.RunID == "" {
+		t.Error("the record has no run_id")
 	}
 
 	// The agent ran in the task's worktree, on the task's branch.

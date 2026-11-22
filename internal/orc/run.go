@@ -216,6 +216,11 @@ func (d *Dispatcher) launch(plan launchPlan) error {
 			return undo(err)
 		}
 	}
+	// Any random UUID will do, and the session generator already makes one.
+	runID, err := adapter.NewSessionID()
+	if err != nil {
+		return undo(err)
+	}
 
 	_, budgetNote := a.BudgetArgs(t.Budget)
 	record := state.Task{
@@ -224,6 +229,7 @@ func (d *Dispatcher) launch(plan launchPlan) error {
 		Worktree:     worktree,
 		LogPath:      d.layout.LogFile(t.ID),
 		StartedAt:    time.Now().UTC(),
+		RunID:        runID,
 		BudgetNote:   budgetNote,
 		SeededAgents: seeded,
 		SessionID:    sessionID,
@@ -236,7 +242,7 @@ func (d *Dispatcher) launch(plan launchPlan) error {
 	// rather than rolled back: the task is real, it simply never started. The
 	// write is scoped, because a forced cleanup can free the id while this is
 	// still getting going and the next run must not inherit the failure.
-	scope := scopeTo(d.store, record.StartedAt)
+	scope := scopeTo(d.store, record.Run())
 	markFailed := func(err error) error {
 		_ = scope.update(t.ID, func(k *state.Task) {
 			k.Status = state.StatusFailed
@@ -247,7 +253,7 @@ func (d *Dispatcher) launch(plan launchPlan) error {
 	if err := d.truncateLogs(t.ID); err != nil {
 		return markFailed(err)
 	}
-	if err := d.startSupervisor(t.ID, record.StartedAt); err != nil {
+	if err := d.startSupervisor(t.ID, record.RunID); err != nil {
 		return markFailed(err)
 	}
 
@@ -310,7 +316,7 @@ func (d *Dispatcher) warnIfTracked(t task.Task, worktree, dir string) {
 // startSupervisor re-execs agent-orc as a detached supervisor. Its own session
 // is what lets the agent survive the dispatching terminal going away, so a
 // batch can run unattended without a daemon.
-func (d *Dispatcher) startSupervisor(id string, since time.Time) error {
+func (d *Dispatcher) startSupervisor(id, runID string) error {
 	logFile, err := os.OpenFile(d.layout.SupervisorLogFile(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("opening supervisor log: %w", err)
@@ -320,7 +326,7 @@ func (d *Dispatcher) startSupervisor(id string, since time.Time) error {
 	// The generation goes with the id: between the record being written and
 	// this starting, a forced cleanup can free the id and another run take it,
 	// and the supervisor must not adopt a task it was not started for.
-	cmd := exec.Command(d.self, "supervise", id, since.Format(time.RFC3339Nano))
+	cmd := exec.Command(d.self, "supervise", id, runID)
 	cmd.Dir = filepath.Dir(d.layout.Root)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile

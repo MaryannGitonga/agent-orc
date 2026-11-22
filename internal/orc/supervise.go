@@ -32,18 +32,18 @@ func NewSupervisor(layout paths.Layout, out io.Writer) *Supervisor {
 }
 
 // Supervise runs the agent for the given task and blocks until it exits.
-// Supervise runs one task to completion. since names the run it was started
-// for, and a record that has moved on is left alone; a zero since adopts
+// Supervise runs one task to completion. run names the dispatch it was started
+// for, and a record that has moved on is left alone; a zero run adopts
 // whatever the id names now, which is what running this by hand gets.
-func (s *Supervisor) Supervise(id string, since time.Time) error {
+func (s *Supervisor) Supervise(id string, run state.Run) error {
 	record, err := s.store.Load(id)
 	if err != nil {
 		return err
 	}
-	if !since.IsZero() && !record.StartedAt.Equal(since) {
+	if !run.IsZero() && !run.Matches(record) {
 		return fmt.Errorf("task %q now belongs to a later run; not supervising it", id)
 	}
-	s.scope.since = record.StartedAt
+	s.scope.run = record.Run()
 
 	logFile, err := os.OpenFile(record.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {

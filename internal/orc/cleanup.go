@@ -124,7 +124,7 @@ func (c *Cleaner) clean(id string, force, deleteBranch bool) error {
 	// id be dispatched again, and dropping the record then would leave the new
 	// run with no state at all.
 	deleted, err := c.store.DeleteIf(id, func(cur state.Task) bool {
-		return cur.StartedAt.Equal(record.StartedAt)
+		return record.Run().Matches(cur)
 	})
 	if err != nil {
 		return err
