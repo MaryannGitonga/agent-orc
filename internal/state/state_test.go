@@ -711,3 +711,121 @@ func TestUpdateKeepsAnOlderRunReadableToItsSupervisor(t *testing.T) {
 		t.Errorf("record = %s, want the update written as schema 1", data)
 	}
 }
+
+func TestSupervisorAliveFollowsTheLock(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	r := record("LIVE-1", time.Now().UTC())
+	r.RunID = "run-a"
+	if err := store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	// Not started yet: nothing to judge by.
+	if alive, known := store.SupervisorAlive(r); alive || known {
+		t.Errorf("before HoldRun = %v, %v, want unknown", alive, known)
+	}
+	release, err := store.HoldRun(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alive, known := store.SupervisorAlive(r); !alive || !known {
+		t.Errorf("while held = %v, %v, want alive", alive, known)
+	}
+	release()
+	if alive, known := store.SupervisorAlive(r); alive || !known {
+		t.Errorf("after release = %v, %v, want known dead", alive, known)
+	}
+
+	// A run from before run ids cannot be judged this way at all.
+	r.RunID = ""
+	if alive, known := store.SupervisorAlive(r); alive || known {
+		t.Errorf("without a run id = %v, %v, want unknown", alive, known)
+	}
+}
+
+func TestDeleteRemovesTheLivenessFile(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	r := record("LIVE-2", time.Now().UTC())
+	r.RunID = "run-b"
+	if err := store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.HoldRun(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := store.Delete("LIVE-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "LIVE-2.run-b.live")); !os.IsNotExist(err) {
+		t.Errorf("the liveness file survived the record: %v", err)
+	}
+}
+
+func TestHoldRunWithoutARunIDLocksNothing(t *testing.T) {
+	dir := t.TempDir()
+	release, err := NewStore(dir).HoldRun(record("OLD-2", time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("HoldRun() = %v, want a run from before run ids to need nothing", err)
+	}
+	release()
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*.live")); len(matches) != 0 {
+		t.Errorf("liveness files = %v, want none", matches)
+	}
+}
+
+// TestHoldRunReportsALockItCannotCreate covers the supervisor failing loudly
+// rather than running with nothing to show it is alive.
+func TestHoldRunReportsALockItCannotCreate(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can create files in a read-only directory")
+	}
+	dir := t.TempDir()
+	r := record("RO-1", time.Now().UTC())
+	r.RunID = "run-ro"
+	writeFile(t, filepath.Join(dir, "RO-1.lock"), "")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	if _, err := NewStore(dir).HoldRun(r); err == nil || !strings.Contains(err.Error(), "liveness lock") {
+		t.Errorf("HoldRun() = %v, want an error about the liveness lock", err)
+	}
+}
+
+// TestASecondHoldRunIsRefusedWithoutBlocking covers a duplicate supervisor: it
+// must be turned away, not wait holding the task's lock against the first.
+func TestASecondHoldRunIsRefusedWithoutBlocking(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := record("DUP-1", time.Now().UTC())
+	r.RunID = "run-d"
+	if err := store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.HoldRun(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.HoldRun(r)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrAlreadySupervised) {
+			t.Errorf("second HoldRun() = %v, want ErrAlreadySupervised", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second HoldRun() is still waiting after 5s")
+	}
+	// The first supervisor can still write.
+	if err := store.Update("DUP-1", func(k *Task) { k.Status = StatusVerifying }); err != nil {
+		t.Errorf("Update() after the refused HoldRun = %v", err)
+	}
+}

@@ -34,6 +34,7 @@ var (
 		state.StatusDone:            lipgloss.NewStyle().Foreground(lipgloss.Color("78")),
 		state.StatusReviewed:        lipgloss.NewStyle().Foreground(lipgloss.Color("78")),
 		state.StatusStopped:         lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		state.StatusInterrupted:     lipgloss.NewStyle().Foreground(lipgloss.Color("214")),
 		state.StatusFailed:          errStyle,
 		state.StatusPublishFailed:   errStyle,
 		state.StatusReviewFailed:    errStyle,
@@ -57,6 +58,8 @@ func mark(s state.Status) string {
 		return "✓"
 	case state.StatusStopped:
 		return "■"
+	case state.StatusInterrupted:
+		return "!"
 	default:
 		return "✗"
 	}
@@ -93,7 +96,7 @@ func filterTasks(tasks []state.Task, q string) []state.Task {
 var lifecycle = []state.Status{
 	state.StatusPending, state.StatusRunning, state.StatusVerifying,
 	state.StatusReviewing, state.StatusPublishing, state.StatusDone,
-	state.StatusReviewed, state.StatusStopped, state.StatusFailed,
+	state.StatusReviewed, state.StatusStopped, state.StatusInterrupted, state.StatusFailed,
 	state.StatusPublishFailed, state.StatusReviewFailed, state.StatusPolicyViolation,
 }
 

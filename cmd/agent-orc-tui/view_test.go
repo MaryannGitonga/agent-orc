@@ -84,13 +84,17 @@ func TestEveryStatusHasAMark(t *testing.T) {
 	all := []state.Status{
 		state.StatusPending, state.StatusRunning, state.StatusVerifying,
 		state.StatusReviewing, state.StatusPublishing, state.StatusDone,
-		state.StatusReviewed, state.StatusStopped, state.StatusFailed,
+		state.StatusReviewed, state.StatusStopped, state.StatusInterrupted, state.StatusFailed,
 		state.StatusPublishFailed, state.StatusReviewFailed, state.StatusPolicyViolation,
 	}
 	for _, s := range all {
 		if mark(s) == "" {
 			t.Errorf("status %q has no mark", s)
 		}
+	}
+	// Recoverable, so not drawn as a failure.
+	if got := mark(state.StatusInterrupted); got == mark(state.StatusFailed) {
+		t.Errorf("mark(interrupted) = %q, the same as a failure", got)
 	}
 	// An unrecognised status is a failure rather than a blank column: a record
 	// written by a newer version must still render as something.

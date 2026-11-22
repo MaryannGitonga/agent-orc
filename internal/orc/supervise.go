@@ -45,6 +45,16 @@ func (s *Supervisor) Supervise(id string, run state.Run) error {
 	}
 	s.scope.run = record.Run()
 
+	// Held until this returns, so status can tell a dead supervisor from a busy one.
+	release, err := s.store.HoldRun(record)
+	if errors.Is(err, state.ErrAlreadySupervised) {
+		return err // the run is the other supervisor's, not failed
+	}
+	if err != nil {
+		return s.fail(id, err)
+	}
+	defer release()
+
 	logFile, err := os.OpenFile(record.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return s.fail(id, fmt.Errorf("opening agent log: %w", err))

@@ -50,6 +50,9 @@ func (r *Reporter) Status() error {
 		if t.BudgetNote != "" {
 			notes = append(notes, fmt.Sprintf("%s: %s", t.ID, t.BudgetNote))
 		}
+		if t.Status == state.StatusInterrupted && t.Error != "" {
+			notes = append(notes, fmt.Sprintf("%s: %s", t.ID, t.Error))
+		}
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("writing the status table: %w", err)
@@ -68,17 +71,40 @@ func (r *Reporter) Status() error {
 // is concerned: neither is a task whose processes have gone. A recycled pid
 // can answer yes, as it can anywhere a pid is checked; this only decides how a
 // row is drawn, never what is written.
-func TaskAlive(t state.Task) bool {
+func TaskAlive(store *state.Store, t state.Task) bool {
+	if orphaned(store, t) {
+		return false
+	}
+	if alive, known := store.SupervisorAlive(t); known && alive {
+		return true
+	}
 	if !t.Status.HasProcess() || t.PID == 0 {
 		return true
 	}
 	return groupAlive(t.PID)
 }
 
-// reconcile corrects a record that claims to be running behind a process that
-// is gone after a machine reboot, or a supervisor killed outright. Without it,
+// reconcile corrects a record that claims to be in flight behind processes that
+// are gone after a machine reboot, or a supervisor killed outright. Without it,
 // `status` would report a task as running forever.
 func reconcile(store *state.Store, t state.Task) state.Task {
+	// A live supervisor records its own task's outcome.
+	if alive, known := store.SupervisorAlive(t); known && alive {
+		return t
+	}
+	now := time.Now().UTC()
+	if orphaned(store, t) {
+		return correct(store, t, func(k *state.Task) bool {
+			if !t.Run().Matches(*k) || !orphaned(store, *k) {
+				return false
+			}
+			k.Error = interruptedNote(*k)
+			k.Status = state.StatusInterrupted
+			k.PID = 0
+			k.FinishedAt = &now
+			return true
+		})
+	}
 	// The group, not the leader. A recorded pid is always a group leader, and
 	// stop signals the whole group, so a leader that exited while its test
 	// runner or compiler carried on is a task that is still working. Judging it
@@ -88,33 +114,54 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 	if !t.Status.HasProcess() || t.PID == 0 || groupAlive(t.PID) {
 		return t
 	}
-	now := time.Now().UTC()
-	// Decide again inside the update, against the record as it is on disk
-	// rather than the copy this listing read. The supervisor may have written
-	// its own outcome in between, and saving the stale copy would discard that
-	// along with the spend and session it recorded. The store reads, mutates
-	// and writes under the task's lock, so that second look and the write it
-	// leads to are one step.
-	_ = store.Update(t.ID, func(k *state.Task) {
-		if !k.Status.Active() || k.PID == 0 || groupAlive(k.PID) {
-			return
+	return correct(store, t, func(k *state.Task) bool {
+		if !t.Run().Matches(*k) || !k.Status.Active() || k.PID == 0 || groupAlive(k.PID) {
+			return false
+		}
+		if alive, _ := store.SupervisorAlive(*k); alive {
+			return false
 		}
 		k.Status = state.StatusFailed
 		k.PID = 0
 		k.FinishedAt = &now
 		k.Error = processGoneNote
+		return true
 	})
+}
+
+// correct applies fix to the record and returns it as stored. fix decides again
+// under the lock, since the supervisor may have recorded its outcome meanwhile.
+func correct(store *state.Store, t state.Task, fix func(*state.Task) bool) state.Task {
+	_ = store.UpdateIf(t.ID, fix)
 	// Reporting is best-effort: fall back to a locally corrected row if the
 	// record cannot be read back.
 	fresh, err := store.Load(t.ID)
 	if err != nil {
-		t.Status = state.StatusFailed
-		t.PID = 0
-		t.FinishedAt = &now
-		t.Error = processGoneNote
+		fix(&t)
 		return t
 	}
 	return fresh
+}
+
+// orphaned reports whether t is in flight with nothing left to move it on: its
+// supervisor's lock is free, and its agent, if it had one, is gone too. An agent
+// still running is left alone, so stop can still reach it.
+func orphaned(store *state.Store, t state.Task) bool {
+	if !t.Status.Active() {
+		return false
+	}
+	if alive, known := store.SupervisorAlive(t); !known || alive {
+		return false
+	}
+	return t.PID == 0 || !groupAlive(t.PID)
+}
+
+// interruptedNote says where an orphaned task stopped and how to go on.
+func interruptedNote(t state.Task) string {
+	if t.Status == state.StatusPublishing {
+		return fmt.Sprintf("the supervisor stopped while publishing; run 'agent-orc pr %s' to finish", t.ID)
+	}
+	return fmt.Sprintf("the supervisor stopped while the task was %s; the work so far is on branch %s", t.Status, t.Branch)
 }
 
 // reportUnreadable names each record that could not be read, and its file,

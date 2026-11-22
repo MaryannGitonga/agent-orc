@@ -269,7 +269,7 @@ func TestTaskAliveAsksOnlyAboutTasksThatShouldHaveAProcess(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			if got := TaskAlive(tc.task); got != tc.want {
+			if got := TaskAlive(state.NewStore(t.TempDir()), tc.task); got != tc.want {
 				t.Errorf("TaskAlive() = %v, want %v", got, tc.want)
 			}
 		})
