@@ -423,11 +423,17 @@ func TestListReportsUnreadableRecordsAndKeepsTheRest(t *testing.T) {
 func TestSaveStampsTheSchemaVersion(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
-	// The oldest format that holds the record: one with a run id needs the
-	// newest, one without is still the first.
-	for runID, want := range map[string]int{"run-a": SchemaVersion, "": 1} {
+	// The oldest format that holds the record.
+	for _, tc := range []struct {
+		runID, pushing string
+		want           int
+	}{
+		{"", "", 1},
+		{"run-a", "", 2},
+		{"run-a", "abc123", 3},
+	} {
 		r := record("V-1", time.Now().UTC())
-		r.RunID, r.SchemaVersion = runID, 0
+		r.RunID, r.PushingSHA, r.SchemaVersion = tc.runID, tc.pushing, 0
 		if err := store.Save(r); err != nil {
 			t.Fatal(err)
 		}
@@ -435,8 +441,8 @@ func TestSaveStampsTheSchemaVersion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if field := fmt.Sprintf(`"schema_version": %d`, want); !bytes.Contains(data, []byte(field)) {
-			t.Errorf("run id %q: record = %s, want %s", runID, data, field)
+		if field := fmt.Sprintf(`"schema_version": %d`, tc.want); !bytes.Contains(data, []byte(field)) {
+			t.Errorf("%+v: record = %s, want %s", tc, data, field)
 		}
 	}
 }

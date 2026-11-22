@@ -174,12 +174,20 @@ func (p *Publisher) Publish(id string) error {
 	if err != nil {
 		return err
 	}
+	// The checkpoint: a supervisor that dies mid-push leaves this behind, so a
+	// retry knows the remote branch is its own.
+	if err := p.scope.update(id, func(k *state.Task) { k.PushingSHA = pushed }); err != nil {
+		return err
+	}
 	if err := p.opener.Push(req); err != nil {
 		return err
 	}
 	// Recorded before the draft is opened, because that is the step that can
 	// fail and leave the branch on the remote for a later retry to recognise.
-	if err := p.scope.update(id, func(k *state.Task) { k.PushedSHA = pushed }); err != nil {
+	if err := p.scope.update(id, func(k *state.Task) {
+		k.PushedSHA = pushed
+		k.PushingSHA = ""
+	}); err != nil {
 		return err
 	}
 	fmt.Fprintf(p.out, "%s  pushed %s\n", id, record.Branch)
@@ -224,6 +232,18 @@ func (p *Publisher) checkAgentDidNotPublish(record *state.Task) error {
 	// recover a publish_failed whose push had already succeeded and whose
 	// draft-open had not.
 	if record.PushedSHA != "" && remoteSHA == record.PushedSHA {
+		return nil
+	}
+	// Or the commit it was pushing when interrupted: that push began only after
+	// this check passed, with the agent already gone, so the branch is its own.
+	if record.PushingSHA != "" && remoteSHA == record.PushingSHA {
+		// Recorded as pushed now, before a new checkpoint can replace it.
+		if err := p.scope.update(record.ID, func(k *state.Task) {
+			k.PushedSHA, k.PushingSHA = remoteSHA, ""
+		}); err != nil {
+			return err
+		}
+		record.PushedSHA, record.PushingSHA = remoteSHA, ""
 		return nil
 	}
 	if uerr := p.scope.update(record.ID, func(k *state.Task) {
