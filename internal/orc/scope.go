@@ -30,7 +30,7 @@ func scopeTo(store *state.Store, run state.Run) runScope {
 
 // owns reports whether a record is still the run this scope belongs to.
 func (s runScope) owns(rec state.Task) bool {
-	return s.run.Matches(rec)
+	return s.run.IsZero() || s.run.Matches(rec)
 }
 
 // update applies mutate unless the id has moved on to a later run.

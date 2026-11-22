@@ -423,17 +423,21 @@ func TestListReportsUnreadableRecordsAndKeepsTheRest(t *testing.T) {
 func TestSaveStampsTheSchemaVersion(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
-	r := record("V-1", time.Now().UTC())
-	r.SchemaVersion = 0
-	if err := store.Save(r); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "V-1.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := fmt.Sprintf(`"schema_version": %d`, SchemaVersion); !bytes.Contains(data, []byte(want)) {
-		t.Errorf("record = %s, want it to carry %s", data, want)
+	// The oldest format that holds the record: one with a run id needs the
+	// newest, one without is still the first.
+	for runID, want := range map[string]int{"run-a": SchemaVersion, "": 1} {
+		r := record("V-1", time.Now().UTC())
+		r.RunID, r.SchemaVersion = runID, 0
+		if err := store.Save(r); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "V-1.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if field := fmt.Sprintf(`"schema_version": %d`, want); !bytes.Contains(data, []byte(field)) {
+			t.Errorf("run id %q: record = %s, want %s", runID, data, field)
+		}
 	}
 }
 
@@ -660,7 +664,8 @@ func TestRunMatches(t *testing.T) {
 		rec  Task
 		want bool
 	}{
-		"the zero run matches anything":       {Run{}, withID, true},
+		"a record with neither matches only a zero run": {Run{}, Task{}, true},
+		"a zero run against a record that has a start":  {Run{}, withoutID, false},
 		"the same run id":                     {Run{ID: "run-a"}, withID, true},
 		"another run id at the same instant":  {Run{ID: "run-b", StartedAt: start}, withID, false},
 		"an older record, by its start time":  {Run{StartedAt: start}, withoutID, true},
@@ -689,5 +694,20 @@ func TestLoadMigratesAVersionOneRecord(t *testing.T) {
 	}
 	if !got.Run().Matches(got) {
 		t.Error("a migrated record does not match its own run")
+	}
+}
+
+// TestUpdateKeepsAnOlderRunReadableToItsSupervisor covers upgrading while a
+// task runs: a newer command updating the record must not write it in a format
+// the older supervisor that owns it would refuse.
+func TestUpdateKeepsAnOlderRunReadableToItsSupervisor(t *testing.T) {
+	dir := t.TempDir()
+	writeRecord(t, dir, "OLD-1", `{"id": "OLD-1", "schema_version": 1, "status": "running", "started_at": "2026-11-08T09:00:00Z"}`)
+	if err := NewStore(dir).Update("OLD-1", func(k *Task) { k.Status = StatusStopped }); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "OLD-1.json"))
+	if !bytes.Contains(data, []byte(`"schema_version": 1`)) || !bytes.Contains(data, []byte(`"status": "stopped"`)) {
+		t.Errorf("record = %s, want the update written as schema 1", data)
 	}
 }

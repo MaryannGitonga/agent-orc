@@ -40,7 +40,7 @@ func (s *Supervisor) Supervise(id string, run state.Run) error {
 	if err != nil {
 		return err
 	}
-	if !run.Matches(record) {
+	if !run.IsZero() && !run.Matches(record) {
 		return fmt.Errorf("task %q now belongs to a later run; not supervising it", id)
 	}
 	s.scope.run = record.Run()

@@ -66,10 +66,20 @@ func (s Status) HasProcess() bool {
 		s == StatusVerifying || s == StatusReviewing
 }
 
-// SchemaVersion is the record format this build writes. Raise it for any
-// change to the stored fields: an older build rewrites whole records, so it
-// would drop even a field it ignores.
+// SchemaVersion is the newest record format this build writes. Raise it for
+// any change to the stored fields: an older build rewrites whole records, so it
+// would drop even a field it ignores. Extend versionFor with what the new
+// version adds.
 const SchemaVersion = 2
+
+// versionFor is the oldest format that can hold t. A record is written in it,
+// so an older supervisor that still owns the run can keep reading it.
+func versionFor(t Task) int {
+	if t.RunID != "" {
+		return 2
+	}
+	return 1
+}
 
 // Task is the persisted record of one dispatched task.
 type Task struct {
@@ -118,7 +128,7 @@ type Task struct {
 	TestsPassed *bool `json:"tests_passed,omitempty"`
 }
 
-// Run identifies one dispatch of a task id. The zero Run matches any record.
+// Run identifies one dispatch of a task id.
 type Run struct {
 	ID        string
 	StartedAt time.Time
@@ -134,8 +144,6 @@ func (r Run) IsZero() bool { return r.ID == "" && r.StartedAt.IsZero() }
 // one; a run from before run ids existed falls back to its start time.
 func (r Run) Matches(t Task) bool {
 	switch {
-	case r.IsZero():
-		return true
 	case r.ID != "" && t.RunID != "":
 		return r.ID == t.RunID
 	default:
@@ -225,7 +233,7 @@ func (s *Store) save(t Task) error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
-	t.SchemaVersion = SchemaVersion
+	t.SchemaVersion = versionFor(t)
 	data, err := json.MarshalIndent(t, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding state for %q: %w", t.ID, err)
