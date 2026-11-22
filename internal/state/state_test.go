@@ -763,3 +763,35 @@ func TestDeleteRemovesTheLivenessFile(t *testing.T) {
 		t.Errorf("the liveness file survived the record: %v", err)
 	}
 }
+
+func TestHoldRunWithoutARunIDLocksNothing(t *testing.T) {
+	dir := t.TempDir()
+	release, err := NewStore(dir).HoldRun(record("OLD-2", time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("HoldRun() = %v, want a run from before run ids to need nothing", err)
+	}
+	release()
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*.live")); len(matches) != 0 {
+		t.Errorf("liveness files = %v, want none", matches)
+	}
+}
+
+// TestHoldRunReportsALockItCannotCreate covers the supervisor failing loudly
+// rather than running with nothing to show it is alive.
+func TestHoldRunReportsALockItCannotCreate(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can create files in a read-only directory")
+	}
+	dir := t.TempDir()
+	r := record("RO-1", time.Now().UTC())
+	r.RunID = "run-ro"
+	writeFile(t, filepath.Join(dir, "RO-1.lock"), "")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	if _, err := NewStore(dir).HoldRun(r); err == nil || !strings.Contains(err.Error(), "liveness lock") {
+		t.Errorf("HoldRun() = %v, want an error about the liveness lock", err)
+	}
+}

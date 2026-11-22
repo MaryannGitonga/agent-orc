@@ -128,3 +128,15 @@ func TestTaskAliveIsFalseForAnOrphan(t *testing.T) {
 		t.Error("TaskAlive() = true for a task whose supervisor is gone")
 	}
 }
+
+func TestTaskAliveTrustsALiveSupervisor(t *testing.T) {
+	store := state.NewStore(t.TempDir())
+	supervisedRecord(t, store, state.StatusRunning, 0x7FFFFFF0)
+	rec, err := store.Load("O-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !TaskAlive(store, rec) {
+		t.Error("TaskAlive() = false while the supervisor holds its lock")
+	}
+}
