@@ -782,3 +782,53 @@ func TestEmptyBranchWithARemoteIsNotAPublishFailure(t *testing.T) {
 		t.Errorf("the log claims committed work on an empty branch:\n%s", log)
 	}
 }
+
+// TestPRFinishesAPublishInterruptedMidPush covers a supervisor killed after its
+// push landed but before it was recorded: the checkpoint lets the retry tell
+// that branch from one the agent pushed.
+func TestPRFinishesAPublishInterruptedMidPush(t *testing.T) {
+	for name, checkpointed := range map[string]bool{"with the checkpoint": true, "without it": false} {
+		t.Run(name, func(t *testing.T) {
+			repo, _ := initRepoWithRemote(t)
+			home := t.TempDir()
+			ghReceipt := filepath.Join(t.TempDir(), "gh")
+			stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "receipt"), dirtyCommit)
+			stubInto(t, stub, "gh", ghReceipt, "echo 'gh: not authenticated' >&2\nexit 1")
+			if out, err := orcRun(t, home, stub, "run",
+				"--id", "MID-1", "--repo", repo, "--cli", "claude", "--prompt", "do it"); err != nil {
+				t.Fatalf("agent-orc run = %v\n%s", err, out)
+			}
+			waitForStatus(t, home, "MID-1", "publish_failed")
+
+			// What a supervisor killed between the push and recording it leaves.
+			path := filepath.Join(home, "state", "MID-1.json")
+			var raw map[string]any
+			if err := json.Unmarshal([]byte(readFile(t, path)), &raw); err != nil {
+				t.Fatal(err)
+			}
+			if checkpointed {
+				raw["pushing_sha"] = raw["pushed_sha"]
+				raw["schema_version"] = 3
+			}
+			delete(raw, "pushed_sha")
+			raw["status"] = "interrupted"
+			data, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(t, path, string(data))
+
+			stubInto(t, stub, "gh", ghReceipt, `printf 'https://example.com/pr/9\n'`)
+			out, err := orcRun(t, home, stub, "pr", "MID-1")
+			got := loadRecord(t, home, "MID-1")
+			switch {
+			case checkpointed && (err != nil || got.Status != "done"):
+				t.Errorf("agent-orc pr = %v, status %q, want done\n%s", err, got.Status, out)
+			case checkpointed && strings.Contains(readFile(t, path), "pushing_sha"):
+				t.Error("the checkpoint survived a finished publish")
+			case !checkpointed && got.Status != "policy_violation":
+				t.Errorf("status = %q, want policy_violation with nothing to recognise the push by", got.Status)
+			}
+		})
+	}
+}

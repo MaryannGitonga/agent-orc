@@ -73,12 +73,15 @@ func (s Status) HasProcess() bool {
 // any change to the stored fields: an older build rewrites whole records, so it
 // would drop even a field it ignores. Extend versionFor with what the new
 // version adds.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // versionFor is the oldest format that can hold t. A record is written in it,
 // so an older supervisor that still owns the run can keep reading it.
 func versionFor(t Task) int {
-	if t.RunID != "" {
+	switch {
+	case t.PushingSHA != "":
+		return 3
+	case t.RunID != "":
 		return 2
 	}
 	return 1
@@ -117,6 +120,9 @@ type Task struct {
 	// PushedSHA is the commit agent-orc last pushed for this task. It is what
 	// distinguishes its own pushed branch from one the agent pushed itself.
 	PushedSHA string `json:"pushed_sha,omitempty"`
+	// PushingSHA is the commit agent-orc is pushing, set before the push and
+	// cleared after it, so a push that landed unrecorded is still known.
+	PushingSHA string `json:"pushing_sha,omitempty"`
 	// RewrittenCommits counts the commits the sanitization pass changed.
 	RewrittenCommits int `json:"rewritten_commits,omitempty"`
 	// SessionID identifies the worker's session, so review feedback can be
@@ -315,6 +321,8 @@ func migrate(t *Task) {
 		case 1:
 			// Version 2 added run_id. Older runs have none and are told apart
 			// by started_at instead; see Run.Matches.
+		case 2:
+			// Version 3 added pushing_sha, which older runs never set.
 		}
 		t.SchemaVersion++
 	}
