@@ -50,6 +50,9 @@ func (r *Reporter) Status() error {
 		if t.BudgetNote != "" {
 			notes = append(notes, fmt.Sprintf("%s: %s", t.ID, t.BudgetNote))
 		}
+		if t.Status == state.StatusInterrupted && t.Error != "" {
+			notes = append(notes, fmt.Sprintf("%s: %s", t.ID, t.Error))
+		}
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("writing the status table: %w", err)
@@ -92,7 +95,7 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 	now := time.Now().UTC()
 	if orphaned(store, t) {
 		return correct(store, t, func(k *state.Task) bool {
-			if !orphaned(store, *k) {
+			if !t.Run().Matches(*k) || !orphaned(store, *k) {
 				return false
 			}
 			k.Error = interruptedNote(*k)
@@ -112,7 +115,10 @@ func reconcile(store *state.Store, t state.Task) state.Task {
 		return t
 	}
 	return correct(store, t, func(k *state.Task) bool {
-		if !k.Status.Active() || k.PID == 0 || groupAlive(k.PID) {
+		if !t.Run().Matches(*k) || !k.Status.Active() || k.PID == 0 || groupAlive(k.PID) {
+			return false
+		}
+		if alive, _ := store.SupervisorAlive(*k); alive {
 			return false
 		}
 		k.Status = state.StatusFailed

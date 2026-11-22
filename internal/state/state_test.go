@@ -795,3 +795,37 @@ func TestHoldRunReportsALockItCannotCreate(t *testing.T) {
 		t.Errorf("HoldRun() = %v, want an error about the liveness lock", err)
 	}
 }
+
+// TestASecondHoldRunIsRefusedWithoutBlocking covers a duplicate supervisor: it
+// must be turned away, not wait holding the task's lock against the first.
+func TestASecondHoldRunIsRefusedWithoutBlocking(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := record("DUP-1", time.Now().UTC())
+	r.RunID = "run-d"
+	if err := store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.HoldRun(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.HoldRun(r)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrAlreadySupervised) {
+			t.Errorf("second HoldRun() = %v, want ErrAlreadySupervised", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second HoldRun() is still waiting after 5s")
+	}
+	// The first supervisor can still write.
+	if err := store.Update("DUP-1", func(k *Task) { k.Status = StatusVerifying }); err != nil {
+		t.Errorf("Update() after the refused HoldRun = %v", err)
+	}
+}

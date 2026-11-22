@@ -482,6 +482,9 @@ func (s *Store) liveFile(id, runID string) string {
 	return filepath.Join(s.Dir, id+"."+runID+".live")
 }
 
+// ErrAlreadySupervised means another supervisor holds the run's liveness lock.
+var ErrAlreadySupervised = errors.New("already has a supervisor")
+
 // HoldRun takes the liveness lock for t's run, for the supervisor to keep until
 // it exits. The kernel drops the lock when the process dies, however it dies.
 func (s *Store) HoldRun(t Task) (release func(), err error) {
@@ -496,11 +499,23 @@ func (s *Store) HoldRun(t Task) (release func(), err error) {
 		if f, err = os.OpenFile(s.liveFile(t.ID, t.RunID), os.O_CREATE|os.O_RDWR, 0o644); err != nil {
 			return fmt.Errorf("creating the liveness lock for %q: %w", t.ID, err)
 		}
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-			f.Close()
-			return fmt.Errorf("taking the liveness lock for %q: %w", t.ID, err)
+		// Never waits: blocking here would hold the task's lock against the
+		// supervisor already running. Retried briefly, since a check holds a
+		// shared lock for an instant.
+		for attempt := 0; ; attempt++ {
+			err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+			switch {
+			case err == nil:
+				return nil
+			case !errors.Is(err, syscall.EWOULDBLOCK):
+				f.Close()
+				return fmt.Errorf("taking the liveness lock for %q: %w", t.ID, err)
+			case attempt == 9:
+				f.Close()
+				return fmt.Errorf("task %q %w", t.ID, ErrAlreadySupervised)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		return nil
 	})
 	if err != nil {
 		return nil, err

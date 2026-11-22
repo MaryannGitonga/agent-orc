@@ -2,6 +2,8 @@ package orc
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -51,9 +53,12 @@ func TestStatusMarksAnOrphanedPublishInterrupted(t *testing.T) {
 	dir := t.TempDir()
 	supervisedRecord(t, state.NewStore(dir), state.StatusPublishing, 0)()
 
-	_, got := statusOf(t, dir)
+	out, got := statusOf(t, dir)
 	if got.Status != state.StatusInterrupted || !strings.Contains(got.Error, "agent-orc pr O-1") {
 		t.Errorf("record = %s %q, want interrupted, pointing at agent-orc pr", got.Status, got.Error)
+	}
+	if !strings.Contains(out, "agent-orc pr O-1") {
+		t.Errorf("status output = %q, want the way to continue shown", out)
 	}
 }
 
@@ -138,5 +143,21 @@ func TestTaskAliveTrustsALiveSupervisor(t *testing.T) {
 	}
 	if !TaskAlive(store, rec) {
 		t.Error("TaskAlive() = false while the supervisor holds its lock")
+	}
+}
+
+// TestADuplicateSupervisorLeavesTheRunAlone covers a second supervise for a run
+// that already has one: it is refused, and the run is not marked failed.
+func TestADuplicateSupervisorLeavesTheRunAlone(t *testing.T) {
+	layout := testLayout(t)
+	store := state.NewStore(layout.State)
+	supervisedRecord(t, store, state.StatusRunning, 0x7FFFFFF0)
+
+	err := NewSupervisor(layout, io.Discard).Supervise("O-1", state.Run{ID: "run-o"})
+	if !errors.Is(err, state.ErrAlreadySupervised) {
+		t.Fatalf("Supervise() = %v, want ErrAlreadySupervised", err)
+	}
+	if got, _ := store.Load("O-1"); got.Status != state.StatusRunning {
+		t.Errorf("status = %s, want the first supervisor's run untouched", got.Status)
 	}
 }
