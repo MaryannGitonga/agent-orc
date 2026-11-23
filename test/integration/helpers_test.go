@@ -124,7 +124,13 @@ func (b *buildFailure) Unwrap() error { return b.err }
 // entry can hold every tool a test needs.
 func stubInto(t *testing.T, dir, name, receipt, body string) {
 	t.Helper()
+	// Login probes are answered as a logged-in CLI would, before anything is
+	// recorded, so preflight's checks never run a test's script.
 	script := "#!/usr/bin/env bash\nset -euo pipefail\n" +
+		"case \"${1:-} ${2:-}\" in\n" +
+		"  'auth status') echo '{\"loggedIn\": true}'; exit 0 ;;\n" +
+		"  'login status') echo 'Logged in'; exit 0 ;;\n" +
+		"esac\n" +
 		"{ printf 'cwd=%s\\n' \"$PWD\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; } >> '" + receipt + "'\n" +
 		body + "\n"
 	write(t, filepath.Join(dir, name), script)

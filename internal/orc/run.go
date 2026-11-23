@@ -38,6 +38,8 @@ type Dispatcher struct {
 	out  io.Writer
 	// Resolver fetches a task's source. Replaceable for tests.
 	Resolver *source.Resolver
+	// checks probes the environment, once per CLI and repository per run.
+	checks checker
 }
 
 // NewDispatcher returns a dispatcher writing progress to out.
@@ -185,6 +187,18 @@ func (d *Dispatcher) preflight(t task.Task) (launchPlan, error) {
 	// repository's own markers and the record names the repository.
 	t.Repo = repo.Dir
 	t, testNote := resolveTestCommand(t)
+
+	// Before anything is made: an environment that cannot run the task should
+	// stop it here, not after it has spent money.
+	checks := d.checks.environment(t)
+	if err := failures(t.ID, checks); err != nil {
+		return fail(err)
+	}
+	for _, c := range checks {
+		if c.Level == LevelWarn {
+			fmt.Fprintf(d.out, "%s  warning: %s: %s\n", t.ID, c.Name, c.Detail)
+		}
+	}
 	return launchPlan{task: t, repo: repo, adapter: a, testNote: testNote}, nil
 }
 
