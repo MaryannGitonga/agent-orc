@@ -30,7 +30,11 @@ func (r *Reporter) Stop(id string) error {
 	// since both loops check for one before starting anything else.
 	betweenCommands := t.PID == 0 &&
 		(t.Status == state.StatusVerifying || t.Status == state.StatusReviewing)
-	if t.PID == 0 && !betweenCommands {
+	// Pending behind a live supervisor: waiting for a slot. It checks for a
+	// stop between tries, so recording one ends the wait.
+	alive, known := r.store.SupervisorAlive(t)
+	queued := t.PID == 0 && t.Status == state.StatusPending && known && alive
+	if t.PID == 0 && !betweenCommands && !queued {
 		return fmt.Errorf("task %q has no recorded process; it may not have started yet", id)
 	}
 	// Record the stop before signalling, not after. The supervisor sits in
@@ -39,18 +43,33 @@ func (r *Reporter) Stop(id string) error {
 	// "stopped" and leaves it alone. Signalling first races its write against
 	// this one, and when it loses the task is reported as a failure.
 	now := time.Now().UTC()
-	if err := r.store.Update(id, func(k *state.Task) {
+	// What to signal is read from the record as it is when the stop lands, not
+	// as it was above: a queued task may have started its agent since.
+	var cur state.Task
+	if err := r.store.UpdateIf(id, func(k *state.Task) bool {
+		cur = *k
+		if !k.Status.HasProcess() {
+			return false
+		}
 		k.Status = state.StatusStopped
 		k.FinishedAt = &now
 		k.Error = "stopped by agent-orc stop"
+		return true
 	}); err != nil {
 		return err
 	}
-	if betweenCommands {
+	switch {
+	case !cur.Status.HasProcess():
+		fmt.Fprintf(r.out, "%s  finished as %s before the stop landed; left as it is\n", id, cur.Status)
+		return nil
+	case cur.PID == 0 && cur.Status == state.StatusPending:
+		fmt.Fprintf(r.out, "%s  stopped before it started; it was waiting for a slot\n", id)
+		return nil
+	case cur.PID == 0:
 		fmt.Fprintf(r.out, "%s  stopped between commands; nothing was running to signal\n", id)
 		return nil
 	}
-	if err := signalGroup(t.PID); err != nil {
+	if err := signalGroup(cur.PID); err != nil {
 		// ESRCH is the process already being gone, which is the end state the
 		// caller asked for. Rolling back here would re-assert a running record
 		// for a process that does not exist, which is what `status` then has to
@@ -66,18 +85,18 @@ func (r *Reporter) Stop(id string) error {
 		// Any other failure is a live process this could not signal, so the
 		// task is still running and the record must say so again.
 		_ = r.store.Update(id, func(k *state.Task) {
-			k.Status = t.Status
-			k.FinishedAt = t.FinishedAt
-			k.Error = t.Error
+			k.Status = cur.Status
+			k.FinishedAt = cur.FinishedAt
+			k.Error = cur.Error
 		})
-		return fmt.Errorf("stopping task %q (pid %d): %w", id, t.PID, err)
+		return fmt.Errorf("stopping task %q (pid %d): %w", id, cur.PID, err)
 	}
 	// The pid named a process that is now confirmed gone, so the record should
 	// stop naming it. A stopped task has no child to signal, and a number left
 	// behind is one somebody else holds by the time anyone reads it.
 	_ = r.store.Update(id, func(k *state.Task) { k.PID = 0 })
 
-	fmt.Fprintf(r.out, "%s  stopped (pid %d); worktree %s left in place\n", id, t.PID, t.Worktree)
+	fmt.Fprintf(r.out, "%s  stopped (pid %d); worktree %s left in place\n", id, cur.PID, cur.Worktree)
 	return nil
 }
 

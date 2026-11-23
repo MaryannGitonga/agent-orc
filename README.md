@@ -345,7 +345,7 @@ waiting for will never appear.
 
 | Status | Meaning |
 | --- | --- |
-| `pending` | dispatched; the agent has not started yet |
+| `pending` | dispatched; the agent has not started yet, or is waiting for a slot |
 | `running` | the agent is working |
 | `verifying` | the task's own test command is running |
 | `reviewing` | an automatic review round is under way |
@@ -536,6 +536,12 @@ vocabulary rather than three: `cli`, `model`, `base_branch`, `subagents`,
 the same naming but have no flag of their own: how a project is tested is a
 fact about the project, so it is set in a file or discovered, never per run.
 
+`max_parallel` is the one machine-only key: how many tasks may run at once,
+one per CPU core by default, `0` for no cap. A repository or batch file cannot
+set it. Extra tasks wait as `pending` and the oldest take slots first, so a task
+that is waiting is never overtaken by one dispatched after it; `agent-orc stop`
+ends one that is still waiting.
+
 What is inherently per-task cannot be defaulted: the id, the prompt or source,
 the branch, and the repository. A repository's file is read from the top of its
 working tree, so it applies whether you run from the root or deep inside it.
@@ -595,6 +601,7 @@ Everything lives under `~/.agent-orc`, overridable with `AGENT_ORC_HOME`:
   logs/PROJ-1234.supervisor.log what agent-orc did around it
   worktrees/PROJ-1234/          the isolated checkout
   reviews/PROJ-1234/            a review round's disposable checkout
+  slots/                        the running-task slots and the queue for them
   agents/claude/*.md            your subagent definitions, seeded on request
   instructions.md               standing instructions added to every prompt
   defaults.yaml                 machine-wide task defaults

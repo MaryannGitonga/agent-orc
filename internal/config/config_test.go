@@ -79,6 +79,7 @@ func TestParseRejectsBadBatchFiles(t *testing.T) {
 		"no cli anywhere":  {"tasks:\n  - id: A\n    prompt: x\n", "no cli set"},
 		"unknown field":    {"tasks:\n  - id: A\n    prompt: x\n    base-branch: main\n", "base-branch"},
 		"not yaml":         {"tasks: [", "parsing yaml"},
+		"machine-wide cap": {"defaults:\n  max_parallel: 2\ntasks:\n  - id: A\n    prompt: x\n    cli: claude\n", "max_parallel"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

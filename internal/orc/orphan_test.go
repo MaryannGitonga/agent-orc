@@ -161,3 +161,29 @@ func TestADuplicateSupervisorLeavesTheRunAlone(t *testing.T) {
 		t.Errorf("status = %s, want the first supervisor's run untouched", got.Status)
 	}
 }
+
+// TestARunningWriteDoesNotUndoAStop covers a stop landing between the
+// supervisor's last check and its agent starting: the stop must survive.
+func TestARunningWriteDoesNotUndoAStop(t *testing.T) {
+	layout := testLayout(t)
+	store := state.NewStore(layout.State)
+	rec := state.Task{
+		Task:      task.Task{ID: "R-9", CLI: task.CLIClaude},
+		RunID:     "run-9",
+		Status:    state.StatusStopped,
+		StartedAt: time.Now().UTC(),
+	}
+	if err := store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSupervisor(layout, io.Discard)
+	s.scope = scopeTo(store, rec.Run())
+
+	stopped, _, err := s.markRunning("R-9", 4242)
+	if err != nil || !stopped {
+		t.Fatalf("markRunning() = stopped %v, %v; want it to see the stop", stopped, err)
+	}
+	if got, _ := store.Load("R-9"); got.Status != state.StatusStopped || got.PID != 0 {
+		t.Errorf("record = %s pid %d, want it left stopped", got.Status, got.PID)
+	}
+}

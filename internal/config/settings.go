@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -46,6 +47,17 @@ type Settings struct {
 	// "10m". Empty means the default; "none" lets it run for as long as it
 	// takes, for a suite that genuinely runs longer than the default.
 	TestTimeout string `yaml:"test_timeout"`
+	// MaxParallel caps how many tasks run at once on this machine: unset is
+	// one per CPU, 0 is no cap. Only the machine-wide file may set it.
+	MaxParallel *int `yaml:"max_parallel"`
+}
+
+// Parallel is the machine's cap on running tasks, 0 meaning none.
+func (s Settings) Parallel() int {
+	if s.MaxParallel == nil {
+		return runtime.NumCPU()
+	}
+	return *s.MaxParallel
 }
 
 // NoTimeout is the configured value that lets the test command run uncapped.
@@ -98,7 +110,12 @@ func LoadRepoSettings(repo string) (Settings, error) {
 	if strings.TrimSpace(repo) == "" {
 		return Settings{}, nil
 	}
-	return LoadSettings(filepath.Join(repo, RepoFile))
+	path := filepath.Join(repo, RepoFile)
+	s, err := LoadSettings(path)
+	if err == nil && s.MaxParallel != nil {
+		return Settings{}, fmt.Errorf("%s: max_parallel is machine-wide; set it in ~/.agent-orc/defaults.yaml", path)
+	}
+	return s, err
 }
 
 // ParseSettings decodes a settings file. Unknown fields are rejected for the
@@ -128,6 +145,9 @@ func (s Settings) validate() error {
 	}
 	if _, err := ParseTestTimeout(s.TestTimeout); err != nil {
 		errs = append(errs, err)
+	}
+	if s.MaxParallel != nil && *s.MaxParallel < 0 {
+		errs = append(errs, fmt.Errorf("max_parallel %d must be 0 (no cap) or more", *s.MaxParallel))
 	}
 	if r := s.Review; r != nil {
 		if r.CLI != "" && !r.CLI.Known() {
