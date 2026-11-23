@@ -6,8 +6,9 @@ package gitx
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/MaryannGitonga/agent-orc/internal/bounded"
 )
 
 // Repo is a git repository agent-orc dispatches work from.
@@ -138,7 +139,7 @@ func (r *Repo) RemoveWorktree(dir string, force bool) error {
 
 // run executes git in dir and returns its trimmed stdout.
 func run(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := bounded.Command("git", args...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

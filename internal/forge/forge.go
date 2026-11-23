@@ -9,8 +9,9 @@ package forge
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/MaryannGitonga/agent-orc/internal/bounded"
 )
 
 // Kind is the hosting platform a repository's remote points at.
@@ -64,7 +65,7 @@ type ExecRunner struct{}
 
 // Run executes argv in dir and returns its combined output.
 func (ExecRunner) Run(dir string, argv ...string) (string, error) {
-	cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- argv is built here, not from user input
+	cmd := bounded.Command(argv[0], argv[1:]...)
 	cmd.Dir = dir
 	var buf bytes.Buffer
 	cmd.Stdout = &buf

@@ -330,6 +330,11 @@ That is also how to retry a task whose push landed but whose draft-open did not:
 it recognises a branch it pushed itself, so the retry finishes the job rather
 than mistaking it for one the agent pushed.
 
+The `git` and `gh` commands agent-orc runs itself, the push and the signing
+rebase included, are stopped after 10 minutes, so a stalled network or a
+pinentry nobody sees ends as `publish_failed` instead of a task that never
+finishes. The agent CLIs have no such limit; `agent-orc stop` ends one.
+
 A repository with no `origin` is a legitimate way to work: commits are still
 sanitized and the task ends `done` on its branch. An agent that committed
 nothing ends `done` too, with the log saying the branch is empty, unless there

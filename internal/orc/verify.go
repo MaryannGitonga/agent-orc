@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
+	"github.com/MaryannGitonga/agent-orc/internal/bounded"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 )
 
@@ -111,7 +112,7 @@ func (s *Supervisor) verify(record state.Task) error {
 // reads as no progress, so the loop stops rather than running on with nothing
 // to compare against.
 func headSHA(worktree string) string {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd := bounded.Command("git", "rev-parse", "HEAD")
 	cmd.Dir = worktree
 	out, err := cmd.Output()
 	if err != nil {

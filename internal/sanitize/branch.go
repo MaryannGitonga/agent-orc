@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
+
+	"github.com/MaryannGitonga/agent-orc/internal/bounded"
 )
 
 // Environment variables carrying the policy to the per-commit pass. The rebase
@@ -61,8 +62,10 @@ func (r Rewriter) Run() (int, error) {
 	// --rebase-merges because this pass rewrites commit messages, not history
 	// shape: a plain rebase would flatten any merge the branch contains and
 	// silently change the topology it was asked only to clean up.
-	cmd := exec.Command("git", "rebase", "--force-rebase", "--rebase-merges",
-		"--exec", quoteForExec(r.Self)+" sanitize-commit", r.Base)
+	// In a group of its own, so a timeout also ends the sanitize-commit and the
+	// amend it runs, before the rollback below.
+	cmd := bounded.Command("git", "rebase", "--force-rebase", "--rebase-merges",
+		"--exec", quoteForExec(r.Self)+" sanitize-commit", r.Base).InGroup()
 	cmd.Dir = r.Worktree
 	cmd.Env = append(os.Environ(),
 		EnvPatterns+"="+strings.Join(r.Patterns, "\n"),
@@ -76,9 +79,12 @@ func (r Rewriter) Run() (int, error) {
 	cmd.Stdout = &stderr
 
 	if err := cmd.Run(); err != nil {
-		abort := exec.Command("git", "rebase", "--abort")
+		abort := bounded.Command("git", "rebase", "--abort")
 		abort.Dir = r.Worktree
-		_ = abort.Run()
+		if aerr := abort.Run(); aerr != nil {
+			return 0, fmt.Errorf("rewriting commit messages on the task branch: %w: %s; rolling it back also failed, so %s is mid-rebase: %w",
+				err, strings.TrimSpace(stderr.String()), r.Worktree, aerr)
+		}
 		return 0, fmt.Errorf("rewriting commit messages on the task branch: %w: %s",
 			err, strings.TrimSpace(stderr.String()))
 	}
@@ -100,7 +106,7 @@ func (r Rewriter) messages() ([]string, error) {
 	// pre-check skipped merges, a trailer living only on a merge message would
 	// leave needed at zero, skip the rewrite entirely, and reach the remote
 	// unsanitized.
-	cmd := exec.Command("git", "log", "--reverse", "--format=%B%x00", r.Base+"..HEAD")
+	cmd := bounded.Command("git", "log", "--reverse", "--format=%B%x00", r.Base+"..HEAD")
 	cmd.Dir = r.Worktree
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -142,7 +148,7 @@ func AmendHead(worktree string) error {
 		return nil
 	}
 
-	cmd := exec.Command("git", "commit", "--amend", "--file=-", "--no-edit", "--allow-empty")
+	cmd := bounded.Command("git", "commit", "--amend", "--file=-", "--no-edit", "--allow-empty")
 	cmd.Dir = worktree
 	cmd.Stdin = strings.NewReader(cleaned)
 	var stderr bytes.Buffer
@@ -189,7 +195,7 @@ func ParseSignature(raw string) (Signature, error) {
 
 // headMessage returns the full message of the commit at HEAD.
 func headMessage(worktree string) (string, error) {
-	cmd := exec.Command("git", "log", "-1", "--format=%B")
+	cmd := bounded.Command("git", "log", "-1", "--format=%B")
 	cmd.Dir = worktree
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
