@@ -207,7 +207,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 		status = state.StatusPublishing
 	}
 
-	usage := s.readUsage(record)
+	usage := taskSpend(s.layout, record)
 	sessionID := s.readSessionID(record)
 
 	// What the record ends up saying, which is not always what was computed:
@@ -454,23 +454,6 @@ func (s *Supervisor) mark(id string, status state.Status, message string) {
 	}); err != nil {
 		s.logf("warning: could not record status %s: %v", status, err)
 	}
-}
-
-// readUsage asks the adapter what the run cost. A CLI that reports nothing is
-// normal, not an error; the number is simply left unset.
-func (s *Supervisor) readUsage(record state.Task) *adapter.Usage {
-	a, err := adapter.For(record.CLI)
-	if err != nil {
-		return nil
-	}
-	usage, err := a.ParseUsage(record.LogPath)
-	if err != nil {
-		if !errors.Is(err, adapter.ErrNoUsage) {
-			s.logf("warning: could not read usage: %v", err)
-		}
-		return nil
-	}
-	return usage
 }
 
 // readSessionID falls back to whatever the CLI wrote about its own session,

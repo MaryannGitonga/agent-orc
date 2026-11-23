@@ -149,7 +149,11 @@ func (r *Reviewer) round(record *state.Task) (bool, error) {
 	round := record.ReviewRound + 1
 	fmt.Fprintf(r.out, "%s  review round %d\n", record.ID, round)
 
-	output, err := r.runReviewer(*record)
+	budget, err := nextBudget(r.scope, r.layout, *record)
+	if err != nil {
+		return false, fmt.Errorf("task %q: %w; no further review rounds", record.ID, err)
+	}
+	output, err := r.runReviewer(*record, budget)
 	if err != nil {
 		return false, err
 	}
@@ -182,7 +186,13 @@ func (r *Reviewer) round(record *state.Task) (bool, error) {
 		fmt.Fprintf(r.out, "    - %s\n", c)
 	}
 
-	if err := r.resumeWorker(*record, verdict.Comments); err != nil {
+	budget, err = nextBudget(r.scope, r.layout, *record)
+	if err != nil {
+		return false, fmt.Errorf("task %q: %w; the comments were not handed back", record.ID, err)
+	}
+	err = r.resumeWorker(*record, verdict.Comments, budget)
+	recordSpend(r.scope, r.layout, *record)
+	if err != nil {
 		return false, err
 	}
 	if err := r.bump(record, round); err != nil {
@@ -200,7 +210,7 @@ func (r *Reviewer) bump(record *state.Task, round int) error {
 
 // runReviewer checks the branch out into a fresh worktree, runs the reviewing
 // CLI there in a clean session, and returns its output.
-func (r *Reviewer) runReviewer(record state.Task) (string, error) {
+func (r *Reviewer) runReviewer(record state.Task, budget task.Budget) (string, error) {
 	repo, err := gitx.Open(record.Repo)
 	if err != nil {
 		return "", err
@@ -241,9 +251,9 @@ func (r *Reviewer) runReviewer(record state.Task) (string, error) {
 		Raw:   true,
 		Model: record.Review.Model,
 		CLI:   cli,
-		// The reviewer draws on the same per-task budget as the worker, so
-		// there is one number to watch, not two.
-		Budget: record.Budget,
+		// The reviewer draws on what is left of the task's budget, so there is
+		// one number to watch, not two.
+		Budget: budget,
 	}
 	argv := a.BuildCommand(reviewTask)
 
@@ -257,12 +267,12 @@ func (r *Reviewer) runReviewer(record state.Task) (string, error) {
 }
 
 // resumeWorker hands the reviewer's comments back to the worker's own session.
-func (r *Reviewer) resumeWorker(record state.Task, comments []string) error {
+func (r *Reviewer) resumeWorker(record state.Task, comments []string, budget task.Budget) error {
 	a, err := adapter.For(record.CLI)
 	if err != nil {
 		return err
 	}
-	argv, err := a.ResumeCommand(record.SessionID, review.FeedbackPrompt(comments), record.Model)
+	argv, err := a.ResumeCommand(record.SessionID, review.FeedbackPrompt(comments), record.Model, budget)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", record.ID, err)
 	}

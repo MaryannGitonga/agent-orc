@@ -43,6 +43,30 @@ func lastJSONObject(logPath string) (map[string]any, error) {
 // nil if there is none.
 func scanJSONObjects(r io.Reader) (map[string]any, error) {
 	var found map[string]any
+	err := eachJSONObject(r, func(obj map[string]any) { found = obj })
+	return found, err
+}
+
+// allJSONObjects returns every line of the log at logPath that parses as a
+// JSON object, oldest first. A missing log has none.
+func allJSONObjects(logPath string) ([]map[string]any, error) {
+	f, err := os.Open(logPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", logPath, err)
+	}
+	defer f.Close()
+	var all []map[string]any
+	if err := eachJSONObject(f, func(obj map[string]any) { all = append(all, obj) }); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", logPath, err)
+	}
+	return all, nil
+}
+
+// eachJSONObject calls fn with every line of r that parses as a JSON object.
+func eachJSONObject(r io.Reader, fn func(map[string]any)) error {
 	scanner := bufio.NewScanner(r)
 	// Agent logs hold whole JSON results on one line, which can be long.
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -53,10 +77,10 @@ func scanJSONObjects(r io.Reader) (map[string]any, error) {
 		}
 		var obj map[string]any
 		if err := json.Unmarshal([]byte(line), &obj); err == nil {
-			found = obj
+			fn(obj)
 		}
 	}
-	return found, scanner.Err()
+	return scanner.Err()
 }
 
 // jsonResultField returns the "result" string of the last JSON object in

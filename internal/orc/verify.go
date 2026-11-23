@@ -12,6 +12,7 @@ import (
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
 	"github.com/MaryannGitonga/agent-orc/internal/bounded"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
+	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
 // ErrTestsFailed means the task's own test command never passed.
@@ -43,7 +44,7 @@ func (s *Supervisor) verify(record state.Task) error {
 		return err
 	}
 	resumable := true
-	if _, err := a.ResumeCommand(record.SessionID, "probe", ""); err != nil {
+	if _, err := a.ResumeCommand(record.SessionID, "probe", "", task.Budget{}); err != nil {
 		s.logf("%s cannot be resumed, so a failing suite cannot be handed back; checking once", record.CLI)
 		resumable = false
 	}
@@ -128,7 +129,12 @@ func (s *Supervisor) handBackFailure(record state.Task, command, output string) 
 	if err != nil {
 		return err
 	}
-	argv, err := a.ResumeCommand(record.SessionID, testFailurePrompt(command, output), record.Model)
+	budget, err := nextBudget(s.scope, s.layout, record)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrTestsFailed, err)
+	}
+	defer recordSpend(s.scope, s.layout, record)
+	argv, err := a.ResumeCommand(record.SessionID, testFailurePrompt(command, output), record.Model, budget)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", record.ID, err)
 	}

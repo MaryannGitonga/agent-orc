@@ -46,6 +46,9 @@ func (Codex) SubagentDir() string { return "" }
 // output.
 func (Codex) ParseUsage(string) (*Usage, error) { return nil, ErrNoUsage }
 
+// ParseUsages reports nothing, for the same reason.
+func (Codex) ParseUsages(string) ([]Usage, error) { return nil, ErrNoUsage }
+
 // WritesJSONResult is false: the codex CLI writes prose, so whatever it prints
 // is the record of the run and nothing should be reinterpreted.
 func (Codex) WritesJSONResult() bool { return false }
@@ -64,6 +67,6 @@ func (Codex) ParseSessionID(string) (string, error) { return "", nil }
 // ResumeCommand reports that Codex cannot be resumed by agent-orc. Saying so
 // is the point: the review loop needs to hand feedback back to the original
 // session, and a task run under Codex simply cannot do that.
-func (Codex) ResumeCommand(string, string, string) ([]string, error) {
+func (Codex) ResumeCommand(string, string, string, task.Budget) ([]string, error) {
 	return nil, fmt.Errorf("codex sessions cannot be resumed by agent-orc, so review feedback cannot be looped back")
 }

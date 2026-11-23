@@ -130,6 +130,7 @@ func stubInto(t *testing.T, dir, name, receipt, body string) {
 		"case \"${1:-} ${2:-}\" in\n" +
 		"  'auth status') echo '{\"loggedIn\": true}'; exit 0 ;;\n" +
 		"  'login status') echo 'Logged in'; exit 0 ;;\n" +
+		"  '--version ') echo '9.9.9 (stub)'; exit 0 ;;\n" +
 		"esac\n" +
 		"{ printf 'cwd=%s\\n' \"$PWD\"; for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; } >> '" + receipt + "'\n" +
 		body + "\n"

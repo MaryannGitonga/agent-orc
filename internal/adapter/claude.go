@@ -60,6 +60,30 @@ func (Claude) ParseUsage(logPath string) (*Usage, error) {
 	if err != nil {
 		return nil, err
 	}
+	u := claudeUsage(obj)
+	if u.CostUSD == nil && u.Tokens == nil {
+		return nil, fmt.Errorf("%s: %w", logPath, ErrNoUsage)
+	}
+	return &u, nil
+}
+
+// ParseUsages reads every result in a log several separate runs appended to.
+func (Claude) ParseUsages(logPath string) ([]Usage, error) {
+	objs, err := allJSONObjects(logPath)
+	if err != nil {
+		return nil, err
+	}
+	var all []Usage
+	for _, obj := range objs {
+		if u := claudeUsage(obj); u.CostUSD != nil || u.Tokens != nil {
+			all = append(all, u)
+		}
+	}
+	return all, nil
+}
+
+// claudeUsage reads the cost and tokens out of one Claude Code result.
+func claudeUsage(obj map[string]any) Usage {
 	u := Usage{CostUSD: floatField(obj, "total_cost_usd")}
 	if usage, ok := obj["usage"].(map[string]any); ok {
 		var total int
@@ -77,10 +101,7 @@ func (Claude) ParseUsage(logPath string) (*Usage, error) {
 			u.Tokens = &total
 		}
 	}
-	if u.CostUSD == nil && u.Tokens == nil {
-		return nil, fmt.Errorf("%s: %w", logPath, ErrNoUsage)
-	}
-	return &u, nil
+	return u
 }
 
 // WritesJSONResult is true: agent-orc runs Claude Code with --output-format
@@ -117,7 +138,7 @@ func (Claude) ParseSessionID(logPath string) (string, error) {
 }
 
 // ResumeCommand continues an existing Claude Code session.
-func (Claude) ResumeCommand(sessionID, prompt, model string) ([]string, error) {
+func (c Claude) ResumeCommand(sessionID, prompt, model string, budget task.Budget) ([]string, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("no session id recorded for this task; it cannot be resumed")
 	}
@@ -125,5 +146,7 @@ func (Claude) ResumeCommand(sessionID, prompt, model string) ([]string, error) {
 	if model != "" {
 		argv = append(argv, "--model", model)
 	}
-	return argv, nil
+	// The cap counts only this run's new spend, so callers pass what is left.
+	caps, _ := c.BudgetArgs(budget)
+	return append(argv, caps...), nil
 }

@@ -294,3 +294,45 @@ func TestStopKillsTheAgentsChildren(t *testing.T) {
 	}
 	t.Errorf("child %d survived the stop; only the agent was signalled", child)
 }
+
+// TestTheBudgetCoversTheWholeTask covers fix rounds drawing on one budget:
+// each resumed run is capped at what is left, and the loop stops once the
+// task's total, read from the session's latest result, reaches the budget.
+func TestTheBudgetCoversTheWholeTask(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	receipt := filepath.Join(t.TempDir(), "receipt")
+	count := filepath.Join(t.TempDir(), "runs")
+	// Like Claude on resume: each run reports the session's running total.
+	stub := stubAgent(t, "claude", receipt,
+		"n=$(( $(cat '"+count+"' 2>/dev/null || echo 0) + 1 )); echo $n > '"+count+"'\n"+
+			"printf '%s\\n' $n > run-$n.txt; git add . && git commit --no-gpg-sign -qm \"fix: round $n\"\n"+
+			"case $n in 1) c=0.25 ;; 2) c=0.5 ;; 3) c=0.75 ;; *) c=1 ;; esac\n"+
+			"printf '{\"type\":\"result\",\"total_cost_usd\":%s}\\n' $c")
+	write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_command: exit 1\n")
+
+	if out, err := orcRun(t, home, stub, "run", "--id", "SPEND-1", "--repo", repo,
+		"--cli", "claude", "--prompt", "do it", "--no-auto-pr", "--budget-usd", "1"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	got := waitForStatus(t, home, "SPEND-1", "failed", "done")
+	if got.Status != "failed" || !strings.Contains(got.Error, "budget is spent") {
+		t.Fatalf("record = %s %q, want failed with the budget spent", got.Status, got.Error)
+	}
+	var caps []string
+	args := strings.Split(readFile(t, receipt), "\n")
+	for i, a := range args {
+		if a == "arg=--max-budget-usd" && i+1 < len(args) {
+			caps = append(caps, strings.TrimPrefix(args[i+1], "arg="))
+		}
+	}
+	if strings.Join(caps, " ") != "1 0.75 0.5 0.25" {
+		t.Errorf("caps passed = %v, want each run given what was left: 1 0.75 0.5 0.25", caps)
+	}
+	var spent struct {
+		SpentUSD float64 `json:"spent_usd"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(home, "state", "SPEND-1.json"))), &spent); err != nil || spent.SpentUSD != 1 {
+		t.Errorf("spent_usd = %v (%v), want 1, the session's latest total", spent.SpentUSD, err)
+	}
+}
