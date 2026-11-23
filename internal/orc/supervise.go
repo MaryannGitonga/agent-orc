@@ -99,11 +99,15 @@ func (s *Supervisor) Supervise(id string, run state.Run) error {
 	// Only a definite answer counts. A store that cannot be read says nothing
 	// about who owns the id, and killing a healthy agent over a transient read
 	// failure would be the worse mistake.
-	owned, err := s.scope.updateOwned(id, func(k *state.Task) {
-		k.Status = state.StatusRunning
-		k.PID = cmd.Process.Pid
-	})
+	stopped, owned, err := s.markRunning(id, cmd.Process.Pid)
 	switch {
+	case stopped:
+		s.logf("the task was stopped as its agent started; stopping the agent")
+		if killErr := signalGroup(cmd.Process.Pid); killErr != nil {
+			s.logf("warning: could not stop it: %v", killErr)
+		}
+		_ = cmd.Wait()
+		return fmt.Errorf("task %q was stopped before its agent could run", id)
 	case (err == nil && !owned) || errors.Is(err, state.ErrNotFound):
 		s.logf("this task's id no longer belongs to this run; stopping the agent that just started")
 		if killErr := signalGroup(cmd.Process.Pid); killErr != nil {
@@ -120,6 +124,20 @@ func (s *Supervisor) Supervise(id string, run state.Run) error {
 	return s.finish(id, record, cmd, runErr)
 }
 
+// markRunning records the agent's pid, unless a stop landed since the last
+// check. It decides under the lock stop writes under, so one always sees the other.
+func (s *Supervisor) markRunning(id string, pid int) (stopped, owned bool, err error) {
+	owned, err = s.scope.updateOwned(id, func(k *state.Task) {
+		if k.Status == state.StatusStopped {
+			stopped = true
+			return
+		}
+		k.Status = state.StatusRunning
+		k.PID = pid
+	})
+	return stopped, owned, err
+}
+
 // waitForSlot holds the task, still pending, until the machine has room for
 // it, taking slots in dispatch order. A stop or a newer run ends the wait.
 func (s *Supervisor) waitForSlot(id string, record state.Task) (func(), error) {
@@ -132,20 +150,27 @@ func (s *Supervisor) waitForSlot(id string, record state.Task) (func(), error) {
 	if unique == "" {
 		unique = id
 	}
-	release, err := pool.Acquire(slots.Ticket(record.StartedAt, unique),
-		func() error { return s.scope.halted(id) },
+	var haltedBy error
+	halted := func() error { haltedBy = s.scope.halted(id); return haltedBy }
+	release, err := pool.Acquire(slots.Ticket(record.StartedAt, unique), halted,
 		func() { s.logf("waiting for a slot; all %d are in use", pool.Size) })
 	if err == nil {
 		// Stopped or replaced in the moment the slot was taken.
-		if err = s.scope.halted(id); err != nil {
+		if err = halted(); err != nil {
 			release()
 		}
 	}
-	if err != nil {
+	switch {
+	case err == nil:
+		return release, nil
+	case haltedBy != nil:
 		s.logf("not starting: %v", err)
-		return nil, err
+	default:
+		// A queue that cannot be used is a failure to record, not a wait.
+		s.logf("not starting: %v", err)
+		s.failUnlessStopped(id, err)
 	}
-	return release, nil
+	return nil, err
 }
 
 // finish records the outcome of a completed agent process, including what the

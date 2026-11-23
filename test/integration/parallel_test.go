@@ -86,3 +86,18 @@ func TestStopEndsATaskWaitingForASlot(t *testing.T) {
 		t.Error("the stopped task's agent ran anyway")
 	}
 }
+
+// TestAnUnusableQueueFailsTheTask covers a slots directory that cannot be used:
+// the task is recorded as failed with the cause, not left pending.
+func TestAnUnusableQueueFailsTheTask(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stubs, _, _ := oneSlot(t, home)
+	write(t, filepath.Join(home, "slots"), "not a directory")
+
+	dispatch(t, home, stubs, repo, "NOQ-1", "codex")
+	got := waitForStatus(t, home, "NOQ-1", "failed", "done")
+	if got.Status != "failed" || !strings.Contains(got.Error, "slots") {
+		t.Errorf("record = %s %q, want failed, naming the slots directory", got.Status, got.Error)
+	}
+}

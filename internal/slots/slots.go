@@ -42,9 +42,14 @@ func (p Pool) Acquire(ticket string, halted func() error, onWait func()) (func()
 		if err := halted(); err != nil {
 			return nil, err
 		}
-		if first(queue, mine) {
-			if release := p.take(); release != nil {
-				return release, nil
+		isFirst, err := first(queue, mine)
+		if err != nil {
+			return nil, err
+		}
+		if isFirst {
+			release, err := p.take()
+			if err != nil || release != nil {
+				return release, err
 			}
 		}
 		if !waited {
@@ -78,10 +83,10 @@ func join(queue, ticket string) (name string, leave func(), err error) {
 
 // first reports whether mine is the oldest ticket whose waiter is alive,
 // removing any dead waiter's ticket it passes on the way.
-func first(queue, mine string) bool {
+func first(queue, mine string) (bool, error) {
 	entries, err := os.ReadDir(queue)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("reading the slot queue: %w", err)
 	}
 	var names []string
 	for _, e := range entries {
@@ -92,15 +97,15 @@ func first(queue, mine string) bool {
 	sort.Strings(names)
 	for _, name := range names {
 		if name == mine {
-			return true
+			return true, nil
 		}
 		path := filepath.Join(queue, name)
 		if held(path) {
-			return false
+			return false, nil
 		}
 		_ = os.Remove(path)
 	}
-	return false
+	return false, fmt.Errorf("this run's ticket %s left the slot queue", mine)
 }
 
 // held reports whether some process holds the lock on path.
@@ -120,19 +125,25 @@ func held(path string) bool {
 	return false
 }
 
-// take holds the first free slot, or returns nil when all are in use.
-func (p Pool) take() func() {
+// take holds the first free slot, or returns nil when all are in use. A slot
+// that cannot be used is an error, not a busy slot nobody will ever free.
+func (p Pool) take() (func(), error) {
 	for k := 0; k < p.Size; k++ {
-		f, err := os.OpenFile(filepath.Join(p.Dir, fmt.Sprintf("slot-%d.lock", k)), os.O_CREATE|os.O_RDWR, 0o644)
+		path := filepath.Join(p.Dir, fmt.Sprintf("slot-%d.lock", k))
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("opening slot %s: %w", path, err)
 		}
-		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
-			return func() { f.Close() }
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() { f.Close() }, nil
 		}
 		f.Close()
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("locking slot %s: %w", path, err)
+		}
 	}
-	return nil
+	return nil, nil
 }
 
 // Ticket names a run's place in the queue: its dispatch time first, so the

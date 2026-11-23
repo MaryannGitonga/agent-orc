@@ -538,8 +538,9 @@ fact about the project, so it is set in a file or discovered, never per run.
 
 `max_parallel` is the one machine-only key: how many tasks may run at once,
 one per CPU core by default, `0` for no cap. A repository or batch file cannot
-set it. Extra tasks wait as `pending` and start in the order they were
-dispatched as slots free; `agent-orc stop` ends one that is still waiting.
+set it. Extra tasks wait as `pending` and the oldest take slots first, so a task
+that is waiting is never overtaken by one dispatched after it; `agent-orc stop`
+ends one that is still waiting.
 
 What is inherently per-task cannot be defaulted: the id, the prompt or source,
 the branch, and the repository. A repository's file is read from the top of its

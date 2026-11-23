@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -136,5 +137,27 @@ func TestTicketsSortInDispatchOrder(t *testing.T) {
 	late := Ticket(time.Unix(10, 0), "a")
 	if !(early < late) {
 		t.Errorf("Ticket order: %q sorts after %q", early, late)
+	}
+}
+
+// TestAnUnusableSlotIsAnErrorNotAWait covers a damaged slots directory: a
+// slot that cannot be locked must fail the run, not stall the whole queue.
+func TestAnUnusableSlotIsAnErrorNotAWait(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "slot-0.lock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Pool{Dir: dir, Size: 1}.Acquire("t", never, func() {})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "slot-0.lock") {
+			t.Errorf("Acquire() = %v, want an error naming the slot", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Acquire() is still waiting on a slot that can never be taken")
 	}
 }
