@@ -63,9 +63,10 @@ func (c *checker) once(key string, probe func() Check) Check {
 // t.Repo must already be the repository's root.
 func (c *checker) environment(t task.Task) []Check {
 	checks := c.cli(t.CLI)
-	// An automatic review spends money unattended, so its CLI is checked too.
-	if r := t.Review; r.Enabled && r.Auto && r.CLI != "" && r.CLI != t.CLI {
-		checks = append(checks, c.cli(r.CLI)...)
+	// An automatic review spends money unattended, so the CLI that will run it,
+	// named or chosen by default, is checked too.
+	if reviewer := t.ReviewerCLI(); t.Review.Enabled && t.Review.Auto && reviewer != t.CLI {
+		checks = append(checks, c.cli(reviewer)...)
 	}
 	return append(checks, c.repo(t)...)
 }
@@ -89,7 +90,7 @@ func (c *checker) repo(t task.Task) []Check {
 		checks = append(checks, c.once("identity:"+t.Repo, func() Check { return checkIdentity(t.Repo) }))
 	}
 	if t.TestCommand != "" {
-		checks = append(checks, checkTestCommand(t.TestCommand))
+		checks = append(checks, checkTestCommand(t.Repo, t.TestCommand))
 	}
 	return checks
 }
@@ -191,18 +192,23 @@ func checkIdentity(repo string) Check {
 
 // checkTestCommand checks the test command's first program exists, without
 // running it: a missing one would fail every fix round the agent is paid for.
-// It asks the shell the command runs in, so builtins such as cd count.
-func checkTestCommand(command string) Check {
+// It asks the shell, in the repository the command runs in, so builtins such
+// as cd and relative paths such as ./test.sh count.
+func checkTestCommand(repo, command string) Check {
 	name := "test command"
 	fields := strings.Fields(command)
-	// Leading VAR=value assignments are not the program.
+	// Leading VAR=value assignments are not the program, but one setting PATH
+	// changes where it is found, which this lookup would not see.
 	for len(fields) > 0 && strings.Contains(fields[0], "=") {
+		if strings.HasPrefix(fields[0], "PATH=") {
+			return Check{name, LevelOK, command + " (not checked: sets its own PATH)"}
+		}
 		fields = fields[1:]
 	}
 	if len(fields) == 0 || strings.ContainsAny(fields[0], "()$`{};&|<>'\"\\") {
 		return Check{name, LevelOK, command + " (not checked: starts with shell syntax)"}
 	}
-	if _, err := probe("sh", "-c", `command -v -- "$1"`, "sh", fields[0]); err != nil {
+	if _, err := probeIn(repo, "sh", "-c", `command -v -- "$1"`, "sh", fields[0]); err != nil {
 		return Check{name, LevelFail, fmt.Sprintf("%q needs %q, which this shell cannot find", command, fields[0])}
 	}
 	return Check{name, LevelOK, command}
@@ -285,12 +291,17 @@ func Doctor(out io.Writer, repo string, s config.Settings, cli task.CLI) error {
 	if t.CLI != "" {
 		checks = c.environment(t)
 	} else {
-		// No CLI chosen yet: report on each installed one.
+		// No CLI chosen yet: report on each installed one. A named automatic
+		// reviewer is required, so it alone stays a failure when missing.
+		required := t.Review.Enabled && t.Review.Auto && t.Review.CLI != ""
 		installed := 0
 		for _, known := range task.KnownCLIs {
 			got := c.cli(known)
 			if got[0].Level == LevelFail {
-				checks = append(checks, Check{got[0].Name, LevelWarn, "not installed"})
+				if !required || known != t.Review.CLI {
+					got[0] = Check{got[0].Name, LevelWarn, "not installed"}
+				}
+				checks = append(checks, got[0])
 				continue
 			}
 			installed++

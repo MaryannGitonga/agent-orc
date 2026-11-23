@@ -3,10 +3,12 @@ package orc
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/MaryannGitonga/agent-orc/internal/config"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
 
@@ -77,15 +79,24 @@ func TestCopilotLoginNeverRunsCopilot(t *testing.T) {
 }
 
 func TestTestCommandIsCheckedByTheShell(t *testing.T) {
+	// The repository holds its own script, and the check runs from elsewhere.
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "test.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
 	for command, want := range map[string]Level{
-		"exit 1":                        LevelOK,
-		"cd sub && make test":           LevelOK,
-		"FOO=1 true":                    LevelOK,
-		"(cd sub; make test)":           LevelOK,
-		"no-such-program-xyz --run":     LevelFail,
-		"FOO=1 no-such-program-xyz run": LevelFail,
+		"exit 1":                           LevelOK,
+		"cd sub && make test":              LevelOK,
+		"FOO=1 true":                       LevelOK,
+		"(cd sub; make test)":              LevelOK,
+		"./test.sh --quick":                LevelOK,
+		"PATH=/opt/tools:$PATH runner-xyz": LevelOK,
+		"./missing.sh":                     LevelFail,
+		"no-such-program-xyz --run":        LevelFail,
+		"FOO=1 no-such-program-xyz run":    LevelFail,
 	} {
-		if got := checkTestCommand(command); got.Level != want {
+		if got := checkTestCommand(repo, command); got.Level != want {
 			t.Errorf("checkTestCommand(%q) = %+v, want %s", command, got, want)
 		}
 	}
@@ -121,5 +132,35 @@ func TestPrintChecksMarksEachLevel(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output is missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// TestTheDefaultReviewerIsChecked covers automatic review with no review CLI
+// named: the CLI chosen by default is the one that will run, so it is checked.
+func TestTheDefaultReviewerIsChecked(t *testing.T) {
+	fakeCLI(t, "claude", `echo '{"loggedIn": true}'`)
+	tk := task.Task{CLI: task.CLIClaude, Review: task.Review{Enabled: true, Auto: true}}
+	var c checker
+	var names []string
+	for _, ch := range c.environment(tk) {
+		names = append(names, ch.Name)
+	}
+	if want := string(tk.ReviewerCLI()) + " installed"; !strings.Contains(strings.Join(names, ","), want) {
+		t.Errorf("checks = %v, want %q for the default reviewer", names, want)
+	}
+}
+
+// TestDoctorFailsOnAMissingRequiredReviewer covers doctor with no worker CLI
+// set but a named automatic reviewer that is not installed.
+func TestDoctorFailsOnAMissingRequiredReviewer(t *testing.T) {
+	fakeCLI(t, "claude", `echo '{"loggedIn": true}'`)
+	if _, err := exec.LookPath("codex"); err == nil {
+		t.Skip("codex is installed here")
+	}
+	enabled, auto := true, true
+	s := config.Settings{AutoPR: new(bool), Review: &config.Review{Enabled: &enabled, Auto: &auto, CLI: task.CLICodex}}
+	var out bytes.Buffer
+	if err := Doctor(&out, t.TempDir(), s, ""); err == nil || !strings.Contains(out.String(), "FAIL  codex installed") {
+		t.Errorf("Doctor() = %v, want a failure for the missing reviewer:\n%s", err, out.String())
 	}
 }
