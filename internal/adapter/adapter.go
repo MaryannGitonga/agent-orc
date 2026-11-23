@@ -35,6 +35,9 @@ type Adapter interface {
 	// ParseUsage reads what the run cost out of its log, or nil when the CLI
 	// reports nothing usable. An invented number would be worse than none.
 	ParseUsage(logPath string) (*Usage, error)
+	// ParseUsages reads every run's cost in a log, oldest first, for a log
+	// several separate runs append to.
+	ParseUsages(logPath string) ([]Usage, error)
 	// SessionArgs pins the run to a session ID agent-orc chose, so the session
 	// can be resumed later. It returns nil for a CLI that cannot be told.
 	SessionArgs(sessionID string) []string
@@ -52,9 +55,9 @@ type Adapter interface {
 	// the fallback for CLIs that will not accept one; "" means unavailable.
 	ParseSessionID(logPath string) (string, error)
 	// ResumeCommand returns the argv that continues an existing session with
-	// a further prompt. An error means this CLI cannot be resumed, which is
-	// what makes the review feedback loop unavailable for it.
-	ResumeCommand(sessionID, prompt, model string) ([]string, error)
+	// a further prompt, capped by budget. An error means this CLI cannot be
+	// resumed, which is what makes the review feedback loop unavailable for it.
+	ResumeCommand(sessionID, prompt, model string, budget task.Budget) ([]string, error)
 }
 
 // Usage is what a run actually consumed, in whichever units the CLI reports.

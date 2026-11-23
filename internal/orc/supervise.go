@@ -207,7 +207,7 @@ func (s *Supervisor) finish(id string, record state.Task, cmd *exec.Cmd, runErr 
 		status = state.StatusPublishing
 	}
 
-	usage := s.readUsage(record)
+	usage, _ := taskSpend(s.layout, record)
 	sessionID := s.readSessionID(record)
 
 	// What the record ends up saying, which is not always what was computed:
@@ -292,9 +292,13 @@ func (s *Supervisor) afterAgent(id string, record state.Task) {
 		s.mark(id, state.StatusReviewing, "")
 		if err := s.autoReview(&record); err != nil {
 			s.logf("not publishing: %v", err)
-			if reason := s.scope.halted(id); reason != nil {
+			switch reason := s.scope.halted(id); {
+			case reason != nil:
 				s.logf("%v, so its review failure is not being recorded: %v", reason, err)
-			} else {
+			case errors.Is(err, ErrBudgetSpent):
+				// Not a review that could be retried: any retry is refused too.
+				s.mark(id, state.StatusFailed, err.Error())
+			default:
 				s.mark(id, state.StatusReviewFailed, err.Error())
 			}
 			return
@@ -454,23 +458,6 @@ func (s *Supervisor) mark(id string, status state.Status, message string) {
 	}); err != nil {
 		s.logf("warning: could not record status %s: %v", status, err)
 	}
-}
-
-// readUsage asks the adapter what the run cost. A CLI that reports nothing is
-// normal, not an error; the number is simply left unset.
-func (s *Supervisor) readUsage(record state.Task) *adapter.Usage {
-	a, err := adapter.For(record.CLI)
-	if err != nil {
-		return nil
-	}
-	usage, err := a.ParseUsage(record.LogPath)
-	if err != nil {
-		if !errors.Is(err, adapter.ErrNoUsage) {
-			s.logf("warning: could not read usage: %v", err)
-		}
-		return nil
-	}
-	return usage
 }
 
 // readSessionID falls back to whatever the CLI wrote about its own session,

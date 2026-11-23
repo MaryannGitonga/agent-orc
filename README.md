@@ -330,6 +330,16 @@ A budget the CLI cannot enforce is not silently dropped: it is warned about at
 launch and noted under `agent-orc status`. Actual spend is read back out of the
 CLI's own output afterwards, where it reports one.
 
+The budget covers the whole task, not each run. After every run (the agent,
+each fix round, each review round) agent-orc adds up what the task has spent,
+and the next run is capped at what is left. A fix or review round that would
+start once a dollar budget is used up is refused, and the task ends `failed`
+with the work so far on its branch; so does one whose spend cannot be read. Claude reports a resumed session's running total, so the
+worker's spend is its latest result, plus each review run; Claude Code older
+than 2.1.277 reports each resumed run alone, and `doctor` warns about it.
+Copilot's credits are not reported back, so each of its runs is capped at the
+whole credit budget.
+
 ## Publishing
 
 When the agent exits, the same per-task process sanitizes its commits, pushes

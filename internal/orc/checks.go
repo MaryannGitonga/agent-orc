@@ -77,7 +77,41 @@ func (c *checker) cli(cli task.CLI) []Check {
 	if bin.Level == LevelFail {
 		return []Check{bin}
 	}
-	return []Check{bin, c.once("login:"+string(cli), func() Check { return checkLogin(cli) })}
+	checks := []Check{bin, c.once("login:"+string(cli), func() Check { return checkLogin(cli) })}
+	if cli == task.CLIClaude {
+		if v := c.once("version:claude", checkClaudeVersion); v.Level != LevelOK {
+			checks = append(checks, v)
+		}
+	}
+	return checks
+}
+
+// claudeCumulative is the first Claude Code whose resumed runs report the whole
+// session's cost, which is how a task's spend is added up.
+var claudeCumulative = [3]int{2, 1, 277}
+
+// checkClaudeVersion warns about a Claude Code whose resumed runs report only
+// their own cost, so a task's spend would be under-counted. A version that
+// cannot be read is not judged.
+func checkClaudeVersion() Check {
+	name := "claude version"
+	out, err := probe("claude", "--version")
+	var got [3]int
+	if err != nil {
+		return Check{name, LevelOK, "unknown"}
+	}
+	if _, err := fmt.Sscanf(firstLine(out), "%d.%d.%d", &got[0], &got[1], &got[2]); err != nil {
+		return Check{name, LevelOK, "unknown"}
+	}
+	for i := range got {
+		if got[i] != claudeCumulative[i] {
+			if got[i] < claudeCumulative[i] {
+				return Check{name, LevelWarn, fmt.Sprintf("%d.%d.%d reports each resumed run alone, so spend is under-counted; upgrade to 2.1.277 or later", got[0], got[1], got[2])}
+			}
+			break
+		}
+	}
+	return Check{name, LevelOK, firstLine(out)}
 }
 
 // repo checks what t needs from its repository: a forge, an identity, tests.

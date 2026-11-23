@@ -83,3 +83,22 @@ func TestCLIsWithoutUsageReportingSaySo(t *testing.T) {
 		})
 	}
 }
+
+// TestClaudeReadsEveryRunInALog covers a log several separate runs append to,
+// as review rounds do: each run's cost is read, oldest first.
+func TestClaudeReadsEveryRunInALog(t *testing.T) {
+	path := logWith(t, "reviewing\n"+
+		`{"type":"result","total_cost_usd":0.25,"usage":{"input_tokens":10,"output_tokens":5}}`+"\n"+
+		"more output\n"+
+		`{"type":"result","total_cost_usd":0.5}`+"\n")
+	runs, err := Claude{}.ParseUsages(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || *runs[0].CostUSD != 0.25 || *runs[1].CostUSD != 0.5 || *runs[0].Tokens != 15 {
+		t.Errorf("ParseUsages() = %+v, want both runs in order", runs)
+	}
+	if runs, err := (Claude{}).ParseUsages(filepath.Join(t.TempDir(), "missing.log")); err != nil || len(runs) != 0 {
+		t.Errorf("ParseUsages(missing) = %v, %v, want nothing", runs, err)
+	}
+}

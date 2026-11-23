@@ -246,7 +246,7 @@ func TestSessionArgsWhereTheCLIAcceptsOne(t *testing.T) {
 func TestResumeCommandCarriesTheFeedback(t *testing.T) {
 	for name, a := range map[string]Adapter{"claude": Claude{}, "copilot": Copilot{}} {
 		t.Run(name, func(t *testing.T) {
-			argv, err := a.ResumeCommand("sess-1", "please fix the backoff", "some-model")
+			argv, err := a.ResumeCommand("sess-1", "please fix the backoff", "some-model", task.Budget{})
 			if err != nil {
 				t.Fatalf("ResumeCommand() = %v", err)
 			}
@@ -265,13 +265,13 @@ func TestResumeCommandCarriesTheFeedback(t *testing.T) {
 }
 
 func TestResumeCommandNeedsASessionID(t *testing.T) {
-	if _, err := (Claude{}).ResumeCommand("", "x", ""); err == nil {
+	if _, err := (Claude{}).ResumeCommand("", "x", "", task.Budget{}); err == nil {
 		t.Error("ResumeCommand() without a session id = nil, want an error")
 	}
 }
 
 func TestCodexCannotBeResumed(t *testing.T) {
-	_, err := (Codex{}).ResumeCommand("sess-1", "x", "")
+	_, err := (Codex{}).ResumeCommand("sess-1", "x", "", task.Budget{})
 	if err == nil {
 		t.Fatal("ResumeCommand() = nil, want an error")
 	}
@@ -379,5 +379,19 @@ func TestCopilotParseSessionIDReportsNothing(t *testing.T) {
 	got, err := Copilot{}.ParseSessionID("/nonexistent/copilot.log")
 	if err != nil || got != "" {
 		t.Errorf("ParseSessionID() = %q, %v; want an empty id and no error", got, err)
+	}
+}
+
+// TestAResumedRunIsCapped covers resumed runs: each is given what is left of
+// the budget, since a CLI's cap counts only that run's own spend.
+func TestAResumedRunIsCapped(t *testing.T) {
+	usd, credits := 0.75, 30.0
+	argv, err := Claude{}.ResumeCommand("s", "fix", "", task.Budget{USD: &usd})
+	if err != nil || argAfter(argv, "--max-budget-usd") != "0.75" {
+		t.Errorf("claude resume = %v, %v, want --max-budget-usd 0.75", argv, err)
+	}
+	argv, err = Copilot{}.ResumeCommand("s", "fix", "", task.Budget{Credits: &credits})
+	if err != nil || argAfter(argv, "--max-ai-credits") != "30" {
+		t.Errorf("copilot resume = %v, %v, want --max-ai-credits 30", argv, err)
 	}
 }

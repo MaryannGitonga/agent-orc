@@ -57,6 +57,9 @@ func (Copilot) SubagentDir() string { return ".github/agents" }
 // cost to its output, and a made-up number would be worse than none.
 func (Copilot) ParseUsage(string) (*Usage, error) { return nil, ErrNoUsage }
 
+// ParseUsages reports nothing, for the same reason.
+func (Copilot) ParseUsages(string) ([]Usage, error) { return nil, ErrNoUsage }
+
 // WritesJSONResult is false: the copilot CLI writes prose, so whatever it prints
 // is the record of the run and nothing should be reinterpreted.
 func (Copilot) WritesJSONResult() bool { return false }
@@ -78,7 +81,7 @@ func (Copilot) SessionArgs(sessionID string) []string {
 func (Copilot) ParseSessionID(string) (string, error) { return "", nil }
 
 // ResumeCommand continues an existing Copilot session.
-func (Copilot) ResumeCommand(sessionID, prompt, model string) ([]string, error) {
+func (c Copilot) ResumeCommand(sessionID, prompt, model string, budget task.Budget) ([]string, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("no session id recorded for this task; it cannot be resumed")
 	}
@@ -86,5 +89,6 @@ func (Copilot) ResumeCommand(sessionID, prompt, model string) ([]string, error) 
 	if model != "" {
 		argv = append(argv, "--model", model)
 	}
-	return argv, nil
+	caps, _ := c.BudgetArgs(budget)
+	return append(argv, caps...), nil
 }
