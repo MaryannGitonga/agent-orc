@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/MaryannGitonga/agent-orc/internal/adapter"
+	"github.com/MaryannGitonga/agent-orc/internal/config"
 	"github.com/MaryannGitonga/agent-orc/internal/paths"
+	"github.com/MaryannGitonga/agent-orc/internal/slots"
 	"github.com/MaryannGitonga/agent-orc/internal/state"
 	"github.com/MaryannGitonga/agent-orc/internal/task"
 )
@@ -54,6 +56,12 @@ func (s *Supervisor) Supervise(id string, run state.Run) error {
 		return s.fail(id, err)
 	}
 	defer release()
+
+	releaseSlot, err := s.waitForSlot(id, record)
+	if err != nil {
+		return err
+	}
+	defer releaseSlot()
 
 	logFile, err := os.OpenFile(record.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -110,6 +118,34 @@ func (s *Supervisor) Supervise(id string, run state.Run) error {
 
 	runErr := cmd.Wait()
 	return s.finish(id, record, cmd, runErr)
+}
+
+// waitForSlot holds the task, still pending, until the machine has room for
+// it, taking slots in dispatch order. A stop or a newer run ends the wait.
+func (s *Supervisor) waitForSlot(id string, record state.Task) (func(), error) {
+	settings, err := config.LoadSettings(s.layout.DefaultsFile())
+	if err != nil {
+		return nil, s.fail(id, err)
+	}
+	pool := slots.Pool{Dir: s.layout.SlotsDir(), Size: settings.Parallel()}
+	unique := record.RunID
+	if unique == "" {
+		unique = id
+	}
+	release, err := pool.Acquire(slots.Ticket(record.StartedAt, unique),
+		func() error { return s.scope.halted(id) },
+		func() { s.logf("waiting for a slot; all %d are in use", pool.Size) })
+	if err == nil {
+		// Stopped or replaced in the moment the slot was taken.
+		if err = s.scope.halted(id); err != nil {
+			release()
+		}
+	}
+	if err != nil {
+		s.logf("not starting: %v", err)
+		return nil, err
+	}
+	return release, nil
 }
 
 // finish records the outcome of a completed agent process, including what the

@@ -30,7 +30,11 @@ func (r *Reporter) Stop(id string) error {
 	// since both loops check for one before starting anything else.
 	betweenCommands := t.PID == 0 &&
 		(t.Status == state.StatusVerifying || t.Status == state.StatusReviewing)
-	if t.PID == 0 && !betweenCommands {
+	// Pending behind a live supervisor: waiting for a slot. It checks for a
+	// stop between tries, so recording one ends the wait.
+	alive, known := r.store.SupervisorAlive(t)
+	queued := t.PID == 0 && t.Status == state.StatusPending && known && alive
+	if t.PID == 0 && !betweenCommands && !queued {
 		return fmt.Errorf("task %q has no recorded process; it may not have started yet", id)
 	}
 	// Record the stop before signalling, not after. The supervisor sits in
@@ -45,6 +49,10 @@ func (r *Reporter) Stop(id string) error {
 		k.Error = "stopped by agent-orc stop"
 	}); err != nil {
 		return err
+	}
+	if queued {
+		fmt.Fprintf(r.out, "%s  stopped before it started; it was waiting for a slot\n", id)
+		return nil
 	}
 	if betweenCommands {
 		fmt.Fprintf(r.out, "%s  stopped between commands; nothing was running to signal\n", id)

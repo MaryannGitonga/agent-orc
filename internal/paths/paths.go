@@ -86,6 +86,9 @@ func (l Layout) InstructionsFile() string {
 	return filepath.Join(l.Root, "instructions.md")
 }
 
+// SlotsDir holds the machine's task slots and the queue for them.
+func (l Layout) SlotsDir() string { return filepath.Join(l.Root, "slots") }
+
 // DefaultsFile is where a user may put machine-wide task defaults, so the same
 // flags are not retyped on every run. A repository can carry its own file
 // alongside its code; see config.RepoFile. Absent is the normal case.

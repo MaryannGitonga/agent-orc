@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -355,4 +356,31 @@ func TestParsersRejectASecondDocument(t *testing.T) {
 			t.Errorf("ParseSettings(nil) = %v, want no error", err)
 		}
 	})
+}
+
+func TestMaxParallel(t *testing.T) {
+	for in, want := range map[string]int{"": runtime.NumCPU(), "max_parallel: 3\n": 3, "max_parallel: 0\n": 0} {
+		s, err := ParseSettings([]byte(in))
+		if err != nil {
+			t.Fatalf("ParseSettings(%q) = %v", in, err)
+		}
+		if got := s.Parallel(); got != want {
+			t.Errorf("Parallel() for %q = %d, want %d", in, got, want)
+		}
+	}
+	if _, err := ParseSettings([]byte("max_parallel: -1\n")); err == nil {
+		t.Error("ParseSettings(max_parallel: -1) = nil, want an error")
+	}
+}
+
+// TestARepositoryCannotSetMaxParallel covers the cap being the machine's: a
+// repository's own file must not decide how many tasks this machine runs.
+func TestARepositoryCannotSetMaxParallel(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, RepoFile), []byte("max_parallel: 50\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRepoSettings(repo); err == nil || !strings.Contains(err.Error(), "machine-wide") {
+		t.Errorf("LoadRepoSettings() = %v, want a refusal saying it is machine-wide", err)
+	}
 }
