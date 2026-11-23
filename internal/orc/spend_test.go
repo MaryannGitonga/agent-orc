@@ -26,8 +26,8 @@ func TestTaskSpendAddsSessionsNotResumes(t *testing.T) {
 	writeFile(t, layout.ReviewLogFile("S-1"),
 		`{"type":"result","total_cost_usd":0.25}`+"\n"+`{"type":"result","total_cost_usd":0.5}`+"\n")
 
-	got := taskSpend(layout, record)
-	if got == nil || got.CostUSD == nil || *got.CostUSD != 2.0 {
+	got, err := taskSpend(layout, record)
+	if err != nil || got == nil || got.CostUSD == nil || *got.CostUSD != 2.0 {
 		t.Errorf("taskSpend() = %+v, want $1.25 from the worker plus $0.75 of reviews", got)
 	}
 }
@@ -72,5 +72,23 @@ func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAnUnreadableSpendStopsABudgetedTask covers failing closed: a total that
+// could not be read is not one under the cap.
+func TestAnUnreadableSpendStopsABudgetedTask(t *testing.T) {
+	layout := testLayout(t)
+	logDir := t.TempDir() // a directory where the log should be: it cannot be read
+	limit := 5.0
+	record := state.Task{Task: task.Task{ID: "U-1", CLI: task.CLIClaude, Budget: task.Budget{USD: &limit}}, LogPath: logDir}
+	s := scopeTo(state.NewStore(layout.State), state.Run{})
+
+	if _, err := nextBudget(s, layout, record); !errors.Is(err, ErrBudgetSpent) || !strings.Contains(err.Error(), "cannot read") {
+		t.Errorf("nextBudget() = %v, want a refusal saying the spend cannot be read", err)
+	}
+	record.Budget = task.Budget{}
+	if _, err := nextBudget(s, layout, record); err != nil {
+		t.Errorf("nextBudget() without a budget = %v, want nothing refused", err)
 	}
 }

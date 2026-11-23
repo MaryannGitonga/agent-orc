@@ -154,6 +154,8 @@ func (r *Reviewer) round(record *state.Task) (bool, error) {
 		return false, fmt.Errorf("task %q: %w; no further review rounds", record.ID, err)
 	}
 	output, err := r.runReviewer(*record, budget)
+	// Whatever the reviewer concluded, its run cost something.
+	_, _ = recordSpend(r.scope, r.layout, *record)
 	if err != nil {
 		return false, err
 	}
@@ -191,7 +193,7 @@ func (r *Reviewer) round(record *state.Task) (bool, error) {
 		return false, fmt.Errorf("task %q: %w; the comments were not handed back", record.ID, err)
 	}
 	err = r.resumeWorker(*record, verdict.Comments, budget)
-	recordSpend(r.scope, r.layout, *record)
+	_, _ = recordSpend(r.scope, r.layout, *record)
 	if err != nil {
 		return false, err
 	}

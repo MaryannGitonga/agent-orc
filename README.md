@@ -332,9 +332,9 @@ CLI's own output afterwards, where it reports one.
 
 The budget covers the whole task, not each run. After every run (the agent,
 each fix round, each review round) agent-orc adds up what the task has spent,
-and the next run is capped at what is left. Once a dollar budget is used up,
-no further fix or review round starts, and the task ends `failed` with the work
-so far on its branch. Claude reports a resumed session's running total, so the
+and the next run is capped at what is left. A fix or review round that would
+start once a dollar budget is used up is refused, and the task ends `failed`
+with the work so far on its branch; so does one whose spend cannot be read. Claude reports a resumed session's running total, so the
 worker's spend is its latest result, plus each review run; Claude Code older
 than 2.1.277 reports each resumed run alone, and `doctor` warns about it.
 Copilot's credits are not reported back, so each of its runs is capped at the

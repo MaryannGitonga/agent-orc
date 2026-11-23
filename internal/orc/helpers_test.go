@@ -103,7 +103,7 @@ func TestAnUnknownCLIIsAnErrorNotAPanic(t *testing.T) {
 	if got := s.readSessionID(record); got != "" {
 		t.Errorf("readSessionID() = %q, want nothing for a cli with no adapter", got)
 	}
-	if got := taskSpend(paths.Layout{}, record); got != nil {
+	if got, _ := taskSpend(paths.Layout{}, record); got != nil {
 		t.Errorf("taskSpend() = %v, want nothing for a cli with no adapter", got)
 	}
 }

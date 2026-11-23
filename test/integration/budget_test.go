@@ -336,3 +336,49 @@ func TestTheBudgetCoversTheWholeTask(t *testing.T) {
 		t.Errorf("spent_usd = %v (%v), want 1, the session's latest total", spent.SpentUSD, err)
 	}
 }
+
+// TestAnApprovingReviewersCostIsRecorded covers spend recorded after every
+// reviewer run, not only one that hands comments back.
+func TestAnApprovingReviewersCostIsRecorded(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	stub := stubAgent(t, "codex", filepath.Join(t.TempDir(), "worker"), workerCommit)
+	stubInto(t, stub, "claude", filepath.Join(t.TempDir(), "reviewer"),
+		`printf '{"type":"result","result":"LGTM","total_cost_usd":0.25}\n'`)
+
+	if out, err := orcRun(t, home, stub, "run", "--id", "REVSPEND-1", "--repo", repo, "--cli", "codex",
+		"--prompt", "do it", "--no-auto-pr", "--auto-review", "--review-cli", "claude"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	waitForStatus(t, home, "REVSPEND-1", "done", "reviewed", "failed", "review_failed")
+	var rec struct {
+		SpentUSD *float64 `json:"spent_usd"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(home, "state", "REVSPEND-1.json"))), &rec); err != nil ||
+		rec.SpentUSD == nil || *rec.SpentUSD != 0.25 {
+		t.Errorf("spent_usd = %v (%v), want the approving reviewer's $0.25", rec.SpentUSD, err)
+	}
+}
+
+// TestABudgetSpentBeforeReviewFailsTheTask covers the automatic review being
+// refused for budget: the task fails, since retrying the review would be too.
+func TestABudgetSpentBeforeReviewFailsTheTask(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	reviewer := filepath.Join(t.TempDir(), "reviewer")
+	stub := stubAgent(t, "claude", filepath.Join(t.TempDir(), "worker"),
+		workerCommit+"\nprintf '{\"type\":\"result\",\"total_cost_usd\":0.5}\\n'")
+	stubInto(t, stub, "copilot", reviewer, `printf 'LGTM\n'`)
+
+	if out, err := orcRun(t, home, stub, "run", "--id", "REVBUDGET-1", "--repo", repo, "--cli", "claude",
+		"--prompt", "do it", "--no-auto-pr", "--budget-usd", "0.5", "--auto-review", "--review-cli", "copilot"); err != nil {
+		t.Fatalf("agent-orc run = %v\n%s", err, out)
+	}
+	got := waitForStatus(t, home, "REVBUDGET-1", "failed", "review_failed", "done", "reviewed")
+	if got.Status != "failed" || !strings.Contains(got.Error, "budget is spent") {
+		t.Errorf("record = %s %q, want failed with the budget spent", got.Status, got.Error)
+	}
+	if _, err := os.Stat(reviewer); !os.IsNotExist(err) {
+		t.Error("the reviewer ran although the budget was spent")
+	}
+}

@@ -133,7 +133,7 @@ func (s *Supervisor) handBackFailure(record state.Task, command, output string) 
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrTestsFailed, err)
 	}
-	defer recordSpend(s.scope, s.layout, record)
+	defer func() { _, _ = recordSpend(s.scope, s.layout, record) }()
 	argv, err := a.ResumeCommand(record.SessionID, testFailurePrompt(command, output), record.Model, budget)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", record.ID, err)
