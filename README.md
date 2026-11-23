@@ -203,7 +203,17 @@ actually have, and checks the binary is on PATH before creating anything.
 | `pr <id>` | run the publish chain by hand, or retry one that failed |
 | `review <id>` | run an agentic review round |
 | `cleanup <id\|--all> [--force] [--delete-branch]` | remove the worktree and state; keep the branch unless told otherwise |
+| `doctor [--repo <dir>] [--cli <name>]` | check this machine can run tasks against that repository |
 | `version` | print the version |
+
+Before a task is created, `run` checks what it needs: the CLI installed and
+logged in, `gh` or `glab` logged in and `origin` reachable when a PR will be
+opened, and the test command's program present. A failure refuses the task
+before any worktree or branch exists; a warning is printed and the task runs.
+A batch asks each question once. `doctor` runs the same checks without
+dispatching anything and reports all of them. Copilot has no documented way to
+check its login without starting a session, so for it this is a warning unless
+a token is set in `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`.
 
 `logs` summarizes as it prints. A CLI that reports its result as JSON writes
 one very long line holding the answer buried in token accounting, so that line

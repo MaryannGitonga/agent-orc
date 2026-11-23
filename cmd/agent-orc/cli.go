@@ -36,6 +36,8 @@ Usage:
   agent-orc review <task-id>    run an independent review round, if enabled
   agent-orc cleanup <task-id|--all>
                                 remove a task's worktree and local state
+  agent-orc doctor [--repo DIR] [--cli NAME]
+                                check this machine can run tasks there
   agent-orc version             print the version
 
 Run 'agent-orc run -h' for the run flags.`
@@ -61,6 +63,8 @@ func dispatch(argv []string, out io.Writer) error {
 		return reviewCmd(argv[1:], out)
 	case "cleanup":
 		return cleanupCmd(argv[1:], out)
+	case "doctor":
+		return doctorCmd(argv[1:], out)
 	case "sanitize-commit":
 		return sanitizeCommitCmd(argv[1:])
 	case "supervise":
@@ -468,6 +472,35 @@ func sanitizeCommitCmd(argv []string) error {
 		return err
 	}
 	return sanitize.AmendHead(wd)
+}
+
+// doctorCmd runs the checks a dispatch would, and reports every one.
+func doctorCmd(argv []string, out io.Writer) error {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(out)
+	repo := fs.String("repo", ".", "repository to check against")
+	cliName := fs.String("cli", "", "CLI to check (default: the configured one, or every installed one)")
+	if err := fs.Parse(argv); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return errors.New("usage: agent-orc doctor [--repo DIR] [--cli NAME]")
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: agent-orc doctor [--repo DIR] [--cli NAME]")
+	}
+	if *cliName != "" && !task.CLI(*cliName).Known() {
+		return fmt.Errorf("unsupported cli %q, want one of %v", *cliName, task.KnownCLIs)
+	}
+	layout, err := paths.Resolve()
+	if err != nil {
+		return err
+	}
+	settings, err := loadSettings(layout, *repo)
+	if err != nil {
+		return err
+	}
+	return orc.Doctor(out, *repo, settings, task.CLI(*cliName))
 }
 
 // statusCmd prints the task table.

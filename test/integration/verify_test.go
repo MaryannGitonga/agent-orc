@@ -22,6 +22,8 @@ func TestVerifyBlocksAPublishOnRedTests(t *testing.T) {
 	stub := stubAgent(t, "codex", filepath.Join(t.TempDir(), "receipt"),
 		"printf 'broken\\n' > out.txt\ngit add . && git commit --no-gpg-sign -m 'feat: work' >/dev/null")
 	write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_command: exit 1\n")
+	// Logged in, so preflight's forge check passes; the red tests stop it first.
+	stubInto(t, stub, "gh", filepath.Join(t.TempDir(), "gh"), "true")
 
 	out, err := orcRun(t, home, stub, "run",
 		"--id", "VER-1", "--repo", repo, "--cli", "codex", "--prompt", "do it")
@@ -531,6 +533,8 @@ func TestVerifyTellsTheAgentTheCommand(t *testing.T) {
 	home := t.TempDir()
 	receipt := filepath.Join(t.TempDir(), "receipt")
 	stub := stubAgent(t, "claude", receipt, "true")
+	// Its own pytest, so the test does not depend on the machine having one.
+	stubInto(t, stub, "pytest", filepath.Join(t.TempDir(), "pytest"), "true")
 
 	write(t, filepath.Join(repo, ".agent-orc.yaml"), "test_command: pytest -q\n")
 
